@@ -75,7 +75,7 @@ class ExpressionSemanticAnalyzer(
     fun analyzeInitializer(initializer: Initializer, expected: CType): Boolean = when (initializer) {
         is Initializer.ExpressionValue -> {
             val actual = analyze(initializer.expression)
-            requireCompatible(expected, decay(actual), initializer.expression.span.start, "initializer")
+            requireCompatible(expected, decay(actual), initializer.expression.span.start, "initializer", initializer.expression)
         }
         is Initializer.ListValue -> {
             when (val type = canonical(expected)) {
@@ -261,7 +261,7 @@ class ExpressionSemanticAnalyzer(
         if (!isModifiableLvalue(target)) return invalid(expression, "assignment target is not an lvalue or is not modifiable")
         val actual = decay(value)
         val valid = if (expression.operator == AssignmentOperator.ASSIGN) {
-            requireCompatible(target.type, actual, expression.value.span.start, "assignment")
+            requireCompatible(target.type, actual, expression.value.span.start, "assignment", expression.value)
         } else {
             val targetType = canonical(decay(target))
             val valueType = canonical(actual)
@@ -301,7 +301,7 @@ class ExpressionSemanticAnalyzer(
         }
         expression.arguments.forEachIndexed { index, argument ->
             val actual = analyze(argument)
-            function.parameters.getOrNull(index)?.let { requireCompatible(it.type, decay(actual), argument.span.start, "argument") }
+            function.parameters.getOrNull(index)?.let { requireCompatible(it.type, decay(actual), argument.span.start, "argument", argument) }
         }
         return typed(expression, function.returnType)
     }
@@ -408,7 +408,7 @@ class ExpressionSemanticAnalyzer(
         when (signature.kind) {
             AtomicBuiltinKind.LOAD, AtomicBuiltinKind.EXCHANGE, AtomicBuiltinKind.STORE -> {
                 if (signature.valueIndex != null) {
-                    requireCompatible(valueType, decay(arguments[signature.valueIndex]), expression.arguments[signature.valueIndex].span.start, "$name value")
+                    requireCompatible(valueType, decay(arguments[signature.valueIndex]), expression.arguments[signature.valueIndex].span.start, "$name value", expression.arguments[signature.valueIndex])
                 }
                 if (signature.orderIndex != null) validateAtomicOrder(expression, signature.orderIndex, arguments)
             }
@@ -417,7 +417,7 @@ class ExpressionSemanticAnalyzer(
                 if (expectedPointer == null || !CTypes.compatible(valueType, expectedPointer.pointee)) {
                     error(expression.arguments[1], "$name expected-value argument must point to the atomic value type")
                 }
-                requireCompatible(valueType, decay(arguments[2]), expression.arguments[2].span.start, "$name desired value")
+                requireCompatible(valueType, decay(arguments[2]), expression.arguments[2].span.start, "$name desired value", expression.arguments[2])
                 if (!isInteger(canonical(decay(arguments[3])))) error(expression.arguments[3], "$name weak flag must be an integer")
                 validateAtomicOrder(expression, 4, arguments)
                 validateAtomicOrder(expression, 5, arguments)
@@ -731,8 +731,29 @@ class ExpressionSemanticAnalyzer(
         else -> type
     }
 
-    private fun requireCompatible(expected: CType, actual: CType, location: SourceLocation, context: String): Boolean {
+    private fun requireCompatible(
+        expected: CType,
+        actual: CType,
+        location: SourceLocation,
+        context: String,
+        sourceExpression: Expression? = null,
+    ): Boolean {
         if (assignable(expected, actual)) return true
+        val expectedType = canonical(expected)
+        val actualType = canonical(actual)
+        if (expectedType is CType.Pointer && actualType is CType.Pointer) {
+            diagnostics.warning(location, "assignment from incompatible pointer type")
+            return true
+        }
+        if (expectedType is CType.Pointer && isInteger(actualType)) {
+            if (sourceExpression != null && isNullPointerConstant(sourceExpression)) return true
+            diagnostics.warning(location, "assignment makes pointer from integer without a cast")
+            return true
+        }
+        if (isInteger(expectedType) && actualType is CType.Pointer) {
+            diagnostics.warning(location, "assignment makes integer from pointer without a cast")
+            return true
+        }
         diagnostics.error(location, "incompatible $context: expected $expected, got $actual")
         return false
     }

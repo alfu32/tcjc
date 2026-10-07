@@ -112,6 +112,31 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun appliesTinyCcAssignmentPointerConversionsAndWarnings() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("integerPointer", CTypes.pointer(CTypes.int)))
+        symbols.declare(ObjectDeclaration("characterPointer", CTypes.pointer(CTypes.char)))
+        symbols.declare(ObjectDeclaration("integer", CTypes.int))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val intToPointer = analyzer.analyze(ExpressionParser(Lexer("integerPointer = 3").tokenize()).parse())
+        val nullToPointer = analyzer.analyze(ExpressionParser(Lexer("integerPointer = 0").tokenize()).parse())
+        val mismatchedPointer = analyzer.analyze(ExpressionParser(Lexer("integerPointer = characterPointer").tokenize()).parse())
+        val pointerToInt = analyzer.analyze(ExpressionParser(Lexer("integer = integerPointer").tokenize()).parse())
+
+        assertEquals(CTypes.pointer(CTypes.int), intToPointer.type)
+        assertEquals(CTypes.pointer(CTypes.int), nullToPointer.type)
+        assertEquals(CTypes.pointer(CTypes.int), mismatchedPointer.type)
+        assertEquals(CTypes.int, pointerToInt.type)
+        assertEquals(0, diagnostics.errorCount)
+        assertEquals(3, diagnostics.diagnostics().count { it.severity == org.tinycc.core.diagnostics.DiagnosticSeverity.WARNING })
+        assertTrue(diagnostics.render().contains("assignment makes pointer from integer without a cast"))
+        assertTrue(diagnostics.render().contains("assignment from incompatible pointer type"))
+        assertTrue(diagnostics.render().contains("assignment makes integer from pointer without a cast"))
+    }
+
+    @Test
     fun diagnosesInvalidAssignmentsAndUnknownMembers() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)
