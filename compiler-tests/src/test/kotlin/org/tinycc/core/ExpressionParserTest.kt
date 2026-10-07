@@ -129,4 +129,18 @@ class ExpressionParserTest {
         )
         assertEquals(record, assertIs<SizeOperand.Type>(size.operand).value)
     }
+
+    @Test
+    fun acceptsCTypeSpecifierPermutationsAndAtomicTypeNames() {
+        val longComplex = assertIs<Expression.SizeOf>(
+            ExpressionParser(Lexer("sizeof(long double _Complex)").tokenize()).parse(),
+        )
+        assertEquals(CTypes.longDoubleComplex, assertIs<SizeOperand.Type>(longComplex.operand).value)
+
+        val atomic = assertIs<Expression.SizeOf>(
+            ExpressionParser(Lexer("sizeof(_Atomic(unsigned long))").tokenize()).parse(),
+        )
+        val atomicType = assertIs<SizeOperand.Type>(atomic.operand).value
+        assertTrue(atomicType is CType.Qualified && atomicType.qualifiers.isAtomic)
+    }
 }

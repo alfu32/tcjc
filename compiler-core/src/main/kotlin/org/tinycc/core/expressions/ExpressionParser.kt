@@ -323,68 +323,138 @@ class ExpressionParser(
     }
 
     private fun parseTypeName(): CType {
-        val qualifiers = parseQualifiers()
-        val base = parseTypeSpecifier()
+        val specifiers = parseTypeSpecifiers()
+        val base = specifiers.base
+        val qualifiers = specifiers.qualifiers
         val qualifiedBase = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
         return parseAbstractDeclarator()(qualifiedBase)
     }
 
-    private fun parseTypeSpecifier(): CType {
-        val token = take()
-        return when (token.kind) {
-            TokenKind.VOID -> CTypes.void
-            TokenKind.CHAR -> CTypes.char
-            TokenKind.BOOL -> CTypes.bool
-            TokenKind.FLOAT -> CTypes.float
-            TokenKind.DOUBLE -> CTypes.double
-            TokenKind.COMPLEX -> when {
-                match(TokenKind.FLOAT) != null -> CTypes.floatComplex
-                match(TokenKind.LONG) != null -> {
-                    expect(TokenKind.DOUBLE, "'double'")
-                    CTypes.longDoubleComplex
+    private fun parseTypeSpecifiers(): ParsedTypeSpecifiers {
+        var qualifiers = TypeQualifiers()
+        var signed = false
+        var unsigned = false
+        var short = false
+        var longCount = 0
+        var complex = false
+        var scalar: TokenKind? = null
+        while (true) {
+            when (current().kind) {
+                TokenKind.CONST -> {
+                    take()
+                    qualifiers = qualifiers.copy(isConst = true)
                 }
+                TokenKind.VOLATILE -> {
+                    take()
+                    qualifiers = qualifiers.copy(isVolatile = true)
+                }
+                TokenKind.RESTRICT -> {
+                    take()
+                    qualifiers = qualifiers.copy(isRestrict = true)
+                }
+                TokenKind.ATOMIC -> {
+                    take()
+                    if (match(TokenKind.LEFT_PAREN) != null) {
+                        val atomicType = parseTypeName()
+                        expect(TokenKind.RIGHT_PAREN, "')'")
+                        return ParsedTypeSpecifiers(atomicType, qualifiers.copy(isAtomic = true))
+                    }
+                    qualifiers = qualifiers.copy(isAtomic = true)
+                }
+                TokenKind.SIGNED -> {
+                    take()
+                    signed = true
+                }
+                TokenKind.UNSIGNED -> {
+                    take()
+                    unsigned = true
+                }
+                TokenKind.SHORT -> {
+                    take()
+                    short = true
+                }
+                TokenKind.LONG -> {
+                    take()
+                    longCount++
+                }
+                TokenKind.COMPLEX -> {
+                    take()
+                    complex = true
+                }
+                TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT,
+                TokenKind.FLOAT, TokenKind.DOUBLE,
+                -> {
+                    scalar = take().kind
+                }
+                TokenKind.STRUCT -> {
+                    take()
+                    val type = parseTaggedType("struct", org.tinycc.core.types.RecordKind.STRUCT)
+                    return ParsedTypeSpecifiers(type, qualifiers)
+                }
+                TokenKind.UNION -> {
+                    take()
+                    val type = parseTaggedType("union", org.tinycc.core.types.RecordKind.UNION)
+                    return ParsedTypeSpecifiers(type, qualifiers)
+                }
+                TokenKind.ENUM -> {
+                    take()
+                    val tag = expect(TokenKind.IDENTIFIER, "enum tag")
+                    val type = typeNames["enum ${tag.lexeme}"] ?: typeNames[tag.lexeme]
+                        ?: org.tinycc.core.types.CType.Enumeration(tag.lexeme)
+                    return ParsedTypeSpecifiers(type, qualifiers)
+                }
+                TokenKind.TYPEOF -> {
+                    val keyword = take()
+                    expect(TokenKind.LEFT_PAREN, "'('")
+                    val operand = parseTypeOrExpressionOperand()
+                    expect(TokenKind.RIGHT_PAREN, "')'")
+                    val type = (operand as? SizeOperand.Type)?.value ?: run {
+                        error(keyword, "typeof expression type is unavailable during parsing")
+                        CType.Error
+                    }
+                    return ParsedTypeSpecifiers(type, qualifiers)
+                }
+                TokenKind.IDENTIFIER -> {
+                    val token = take()
+                    val type = typeNames[token.lexeme] ?: run {
+                        error(token, "unknown type name '${token.lexeme}'")
+                        CType.Error
+                    }
+                    return ParsedTypeSpecifiers(type, qualifiers)
+                }
+                else -> break
+            }
+        }
+        val base = when {
+            complex -> when {
+                scalar == TokenKind.FLOAT -> CTypes.floatComplex
+                longCount > 0 -> CTypes.longDoubleComplex
                 else -> CTypes.doubleComplex
             }
-            TokenKind.SHORT -> CType.Primitive(PrimitiveKind.SHORT)
-            TokenKind.LONG -> when {
-                match(TokenKind.LONG) != null -> CType.Primitive(PrimitiveKind.LONG_LONG)
-                match(TokenKind.DOUBLE) != null -> CType.Primitive(PrimitiveKind.LONG_DOUBLE)
-                else -> CType.Primitive(PrimitiveKind.LONG)
-            }
-            TokenKind.UNSIGNED -> when {
-                match(TokenKind.CHAR) != null -> CTypes.unsignedChar
-                match(TokenKind.SHORT) != null -> CType.Primitive(PrimitiveKind.UNSIGNED_SHORT)
-                match(TokenKind.LONG) != null -> if (match(TokenKind.LONG) != null) CTypes.unsignedLongLong else CTypes.unsignedLong
-                else -> CTypes.unsignedInt
-            }
-            TokenKind.SIGNED -> when {
-                match(TokenKind.CHAR) != null -> CTypes.signedChar
-                match(TokenKind.SHORT) != null -> CType.Primitive(PrimitiveKind.SHORT)
-                match(TokenKind.LONG) != null -> if (match(TokenKind.LONG) != null) CTypes.longLong else CTypes.long
-                else -> CTypes.int
-            }
-            TokenKind.INT -> CTypes.int
-            TokenKind.STRUCT -> parseTaggedType(token, "struct", org.tinycc.core.types.RecordKind.STRUCT)
-            TokenKind.UNION -> parseTaggedType(token, "union", org.tinycc.core.types.RecordKind.UNION)
-            TokenKind.ENUM -> {
-                val tag = expect(TokenKind.IDENTIFIER, "enum tag")
-                typeNames["enum ${tag.lexeme}"] ?: typeNames[tag.lexeme]
-                    ?: org.tinycc.core.types.CType.Enumeration(tag.lexeme)
-            }
-            TokenKind.IDENTIFIER -> typeNames[token.lexeme] ?: run {
-                error(token, "unknown type name '${token.lexeme}'")
-                CType.Error
-            }
-            else -> CType.Error
+            scalar == TokenKind.VOID -> CTypes.void
+            scalar == TokenKind.BOOL -> CTypes.bool
+            scalar == TokenKind.CHAR && unsigned -> CTypes.unsignedChar
+            scalar == TokenKind.CHAR && signed -> CTypes.signedChar
+            scalar == TokenKind.CHAR -> CTypes.char
+            scalar == TokenKind.FLOAT -> CTypes.float
+            scalar == TokenKind.DOUBLE && longCount > 0 -> CTypes.longDouble
+            scalar == TokenKind.DOUBLE -> CTypes.double
+            short && unsigned -> CType.Primitive(PrimitiveKind.UNSIGNED_SHORT)
+            short -> CType.Primitive(PrimitiveKind.SHORT)
+            longCount >= 2 && unsigned -> CTypes.unsignedLongLong
+            longCount >= 2 -> CTypes.longLong
+            longCount == 1 && unsigned -> CTypes.unsignedLong
+            longCount == 1 -> CTypes.long
+            unsigned -> CTypes.unsignedInt
+            else -> CTypes.int
         }
+        return ParsedTypeSpecifiers(base, qualifiers)
     }
 
-    private fun parseTaggedType(keyword: Token, prefix: String, kind: org.tinycc.core.types.RecordKind): CType {
+    private fun parseTaggedType(prefix: String, kind: org.tinycc.core.types.RecordKind): CType {
         val tag = expect(TokenKind.IDENTIFIER, "$prefix tag")
         return typeNames["$prefix ${tag.lexeme}"] ?: typeNames[tag.lexeme]
-            ?: org.tinycc.core.types.CType.Record(kind, tag.lexeme).also {
-                diagnostics.warning(keyword.span.start, "using incomplete $prefix ${tag.lexeme}")
-            }
+            ?: org.tinycc.core.types.CType.Record(kind, tag.lexeme)
     }
 
     /** Parses C's abstract-declarator grammar, retaining pointer/function/array binding. */
@@ -486,6 +556,7 @@ class ExpressionParser(
         TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT, TokenKind.FLOAT, TokenKind.DOUBLE,
         TokenKind.SHORT, TokenKind.LONG, TokenKind.SIGNED, TokenKind.UNSIGNED, TokenKind.COMPLEX, TokenKind.CONST,
         TokenKind.VOLATILE, TokenKind.RESTRICT, TokenKind.ATOMIC, TokenKind.STRUCT, TokenKind.UNION, TokenKind.ENUM,
+        TokenKind.TYPEOF,
     ) || current().kind == TokenKind.IDENTIFIER && current().lexeme in typeNames
 
     private fun assignmentOperator(kind: TokenKind): AssignmentOperator? = when (kind) {
@@ -550,6 +621,8 @@ class ExpressionParser(
     private fun error(token: Token, message: String) = diagnostics.error(token.span.start, message)
 
     private data class BinaryOperatorInfo(val value: BinaryOperator, val precedence: Int)
+
+    private data class ParsedTypeSpecifiers(val base: CType, val qualifiers: TypeQualifiers)
 }
 
 private fun SourceSpan.merge(other: SourceSpan): SourceSpan = SourceSpan(start, other.end)

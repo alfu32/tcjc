@@ -127,7 +127,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   adjacent string concatenation, and complex scalar type parsing, promotion,
   and layout are also covered; abstract array/function-pointer declarators and
   calls through function-pointer expressions are now covered; parser-provided
-  typedef and tagged-record/enum type names are now accepted in type names)
+  typedef and tagged-record/enum type names are now accepted in type names;
+  specifier permutations, `_Atomic(type)`, and GNU `typeof(type)` type forms
+  are now parsed)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`
