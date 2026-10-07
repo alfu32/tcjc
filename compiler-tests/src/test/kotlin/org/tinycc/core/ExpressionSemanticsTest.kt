@@ -235,6 +235,39 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun rejectsArithmeticAndIndexingThroughIncompleteObjectPointers() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        val incomplete = CType.Record(RecordKind.STRUCT, "Forward")
+        symbols.declare(ObjectDeclaration("pointer", CTypes.pointer(incomplete)))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val addition = analyzer.analyze(ExpressionParser(Lexer("pointer + 1").tokenize()).parse())
+        val index = analyzer.analyze(ExpressionParser(Lexer("pointer[0]").tokenize()).parse())
+
+        assertTrue(addition.type is CType.Error)
+        assertTrue(index.type is CType.Error)
+        assertTrue(diagnostics.render().contains("invalid pointer arithmetic"))
+        assertTrue(diagnostics.render().contains("complete element type"))
+    }
+
+    @Test
+    fun preservesTinyCcByteStrideForVoidAndFunctionPointers() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("opaque", CTypes.pointer(CTypes.void)))
+        symbols.declare(ObjectDeclaration("function", CTypes.pointer(CTypes.function(CTypes.int, emptyList()))))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val voidStep = analyzer.analyze(ExpressionParser(Lexer("opaque + 1").tokenize()).parse())
+        val functionStep = analyzer.analyze(ExpressionParser(Lexer("function + 1").tokenize()).parse())
+
+        assertEquals(CTypes.pointer(CTypes.void), voidStep.type)
+        assertEquals(CTypes.pointer(CTypes.function(CTypes.int, emptyList())), functionStep.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
     fun callsThroughFunctionPointerTypeNames() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)

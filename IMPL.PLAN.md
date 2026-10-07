@@ -140,7 +140,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   type constraints are now checked; duplicate and incompatible type specifiers
   now diagnose instead of silently selecting a fallback type; frame and return
   address builtins require nonnegative integer constant levels; parser-local
-  struct/union/enum tag references preserve shared tag identity)
+  struct/union/enum tag references preserve shared tag identity; incomplete
+  object pointers reject arithmetic/indexing while TinyCC byte-stride behavior
+  for void/function pointers is preserved)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

@@ -166,7 +166,7 @@ class ExpressionSemanticAnalyzer(
             org.tinycc.core.expressions.UnaryOperator.PRE_DECREMENT,
             org.tinycc.core.expressions.UnaryOperator.POST_INCREMENT,
             org.tinycc.core.expressions.UnaryOperator.POST_DECREMENT,
-            -> if (isModifiableLvalue(operand) && (isArithmetic(canonical) || canonical is CType.Pointer)) typed(expression, operand.type)
+            -> if (isModifiableLvalue(operand) && (isArithmetic(canonical) || canonical is CType.Pointer && pointerStride(canonical.pointee) != null)) typed(expression, operand.type)
             else invalid(expression, "increment/decrement requires a modifiable arithmetic or pointer lvalue")
         }
     }
@@ -202,9 +202,10 @@ class ExpressionSemanticAnalyzer(
         val rightInteger = isInteger(right)
         return when {
             isArithmetic(left) && isArithmetic(right) -> typed(expression, commonArithmetic(left, right))
-            leftPointer != null && rightInteger -> typed(expression, left)
-            !subtract && leftInteger && rightPointer != null -> typed(expression, right)
-            subtract && leftPointer != null && rightPointer != null && CTypes.compatible(leftPointer.pointee, rightPointer.pointee) -> typed(expression, CTypes.long)
+            leftPointer != null && rightInteger && pointerStride(leftPointer.pointee) != null -> typed(expression, left)
+            !subtract && leftInteger && rightPointer != null && pointerStride(rightPointer.pointee) != null -> typed(expression, right)
+            subtract && leftPointer != null && rightPointer != null &&
+                CTypes.compatible(leftPointer.pointee, rightPointer.pointee) && pointerStride(leftPointer.pointee) != null -> typed(expression, CTypes.long)
             else -> invalid(expression, "invalid pointer arithmetic")
         }
     }
@@ -238,7 +239,8 @@ class ExpressionSemanticAnalyzer(
             val valueType = canonical(actual)
             val validOperator = when (expression.operator) {
                 AssignmentOperator.ADD, AssignmentOperator.SUBTRACT ->
-                    (isArithmetic(targetType) && isArithmetic(valueType)) || targetType is CType.Pointer && isInteger(valueType)
+                    (isArithmetic(targetType) && isArithmetic(valueType)) ||
+                        targetType is CType.Pointer && isInteger(valueType) && pointerStride(targetType.pointee) != null
                 AssignmentOperator.MULTIPLY, AssignmentOperator.DIVIDE -> isArithmetic(targetType) && isArithmetic(valueType)
                 AssignmentOperator.REMAINDER, AssignmentOperator.AND, AssignmentOperator.OR,
                 AssignmentOperator.XOR, AssignmentOperator.SHIFT_LEFT, AssignmentOperator.SHIFT_RIGHT ->
@@ -468,7 +470,14 @@ class ExpressionSemanticAnalyzer(
             else -> null
         }
         if (element == null || !isInteger(index)) return invalid(expression, "indexing requires a pointer or array and integer index")
+        if (pointerStride(element) == null) return invalid(expression, "indexing requires a complete element type")
         return typed(expression, element, ValueCategory.LVALUE)
+    }
+
+    private fun pointerStride(type: CType): Long? = when (val pointee = canonical(type)) {
+        is CType.Function -> 1L
+        is CType.Primitive -> if (pointee.kind == PrimitiveKind.VOID) 1L else layout.sizeOf(pointee)?.takeIf { it > 0 }
+        else -> layout.sizeOf(pointee)?.takeIf { it > 0 }
     }
 
     private fun analyzeMember(expression: Expression.Member): TypedExpression {
