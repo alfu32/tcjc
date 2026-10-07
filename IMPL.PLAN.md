@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 30/48
+Overall: 31/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
-[IN_PROGRESS] [6/12] 4. Lowering and native target backends
+[IN_PROGRESS] [7/12] 4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-11.1 RISC-V instruction selection, register conventions, relocations, and assembler support
+11.2 C67 code generation, COFF integration, and target-specific restrictions currently encoded in TCC
 
 Current milestone:
 M4 — Lowering and native target backends
@@ -96,9 +96,9 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 10.2 Port ARM64 instruction generation, calling convention, floating-point, atomics, and platform ABI details. — `DONE` (see `compiler-backends/.../arm64/Arm64Backend.kt` and `Arm64BackendTest`)
 - [x] 10.3 Validate ARM/ARM64 cross builds and execution where available, including Windows and Apple variants. — `DONE` (see `compiler-backends/.../arm/ArmPlatform.kt` and `ArmPlatformTest`)
 
-### 11. RISC-V and C67 backends — `TODO` (0/3)
+### 11. RISC-V and C67 backends — `IN_PROGRESS` (1/3)
 
-- [ ] 11.1 Port RISC-V instruction selection, register conventions, relocations, and assembler support. — `TODO`
+- [x] 11.1 Port RISC-V instruction selection, register conventions, relocations, and assembler support. — `DONE` (see `compiler-backends/.../riscv/RiscVBackend.kt` and `RiscVBackendTest`)
 - [ ] 11.2 Port C67 code generation, COFF integration, and the target-specific restrictions currently encoded in TCC. — `TODO`
 - [ ] 11.3 Add cross-target compile/link fixtures and document toolchain/emulator requirements for unavailable hosts. — `TODO`
 
