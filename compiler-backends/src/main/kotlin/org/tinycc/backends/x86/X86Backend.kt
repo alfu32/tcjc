@@ -26,10 +26,10 @@ object X86Registers {
         X86Mode.I386 -> IrRegisterBank(
             IrArchitecture.I386,
             listOf(
-                register("eax", 0, 32, callerSaved = true), register("ebx", 1, 32, callerSaved = false),
-                register("ecx", 2, 32, callerSaved = true), register("edx", 3, 32, callerSaved = true),
-                register("esi", 4, 32, callerSaved = false), register("edi", 5, 32, callerSaved = false),
-                register("ebp", 6, 32, callerSaved = false), register("esp", 7, 32, callerSaved = false),
+                register("eax", 0, 32, callerSaved = true), register("ecx", 1, 32, callerSaved = true),
+                register("edx", 2, 32, callerSaved = true), register("ebx", 3, 32, callerSaved = false),
+                register("esp", 4, 32, callerSaved = false), register("ebp", 5, 32, callerSaved = false),
+                register("esi", 6, 32, callerSaved = false), register("edi", 7, 32, callerSaved = false),
                 floatRegister("xmm0", 8, callerSaved = true), floatRegister("xmm1", 9, callerSaved = true),
                 floatRegister("xmm2", 10, callerSaved = true), floatRegister("xmm3", 11, callerSaved = true),
             ),
@@ -37,10 +37,10 @@ object X86Registers {
         X86Mode.X86_64 -> IrRegisterBank(
             IrArchitecture.X86_64,
             listOf(
-                register("rax", 0, 64, callerSaved = true), register("rbx", 1, 64, callerSaved = false),
-                register("rcx", 2, 64, callerSaved = true), register("rdx", 3, 64, callerSaved = true),
-                register("rsi", 4, 64, callerSaved = true), register("rdi", 5, 64, callerSaved = true),
-                register("rbp", 6, 64, callerSaved = false), register("rsp", 7, 64, callerSaved = false),
+                register("rax", 0, 64, callerSaved = true), register("rcx", 1, 64, callerSaved = true),
+                register("rdx", 2, 64, callerSaved = true), register("rbx", 3, 64, callerSaved = false),
+                register("rsp", 4, 64, callerSaved = false), register("rbp", 5, 64, callerSaved = false),
+                register("rsi", 6, 64, callerSaved = true), register("rdi", 7, 64, callerSaved = true),
                 register("r8", 8, 64, callerSaved = true), register("r9", 9, 64, callerSaved = true),
                 register("r10", 10, 64, callerSaved = true), register("r11", 11, 64, callerSaved = true),
                 register("r12", 12, 64, callerSaved = false), register("r13", 13, 64, callerSaved = false),
@@ -143,7 +143,7 @@ enum class X86Opcode {
     MOVSS, MOVSD, ADDSS, ADDSD, SUBSS, SUBSD, MULSS, MULSD, DIVSS, DIVSD,
     CMP, UCOMISS, UCOMISD, SETCC, CALL, JMP, JNE, PUSH, POP, SUB_STACK, ADD_STACK,
     XCHG, LOCK_XADD, LOCK_ADD, LOCK_SUB, LOCK_AND, LOCK_OR, LOCK_XOR, CMPXCHG, MFENCE,
-    ALLOCA, UD2, RET,
+    ALLOCA, UD2, SYSCALL, RET,
 }
 
 data class X86Instruction(
