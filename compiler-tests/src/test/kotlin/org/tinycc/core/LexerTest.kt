@@ -3,6 +3,7 @@ package org.tinycc.core
 import java.nio.charset.StandardCharsets
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.tinycc.core.diagnostics.DiagnosticEngine
@@ -116,6 +117,48 @@ class LexerTest {
 
         assertEquals(listOf(411, 428, 453, 454), x64.dropLast(1).map { it.tccId })
         assertEquals(listOf(427, 453, 454, 455), i386.dropLast(1).map { it.tccId })
+    }
+
+    @Test
+    fun preservesArmRiscVAndC67ConditionalTokenOrders() {
+        fun ids(source: String, target: TccTokenIds.TargetProfile) =
+            Lexer(source, options = LexerOptions(tokenTarget = target)).tokenize().dropLast(1).map { it.tccId }
+
+        assertEquals(
+            listOf(411, 427, 428, 434, 456),
+            ids("__atomic_store pack comment __aeabi_memcpy alloca", TccTokenIds.TargetProfile.ARM_EABI),
+        )
+        assertEquals(
+            listOf(411, 427, 434, 450, 463),
+            ids("__atomic_store pack memcpy __modsi3 alloca", TccTokenIds.TargetProfile.ARM_SOFT),
+        )
+        assertEquals(
+            listOf(427, 434, 445, 452, 454, 455, 456),
+            ids("pack memcpy __floatundidf __floatdisf __fixsfdi __fixdfdi alloca", TccTokenIds.TargetProfile.ARM_VFP),
+        )
+        assertEquals(
+            listOf(413, 429, 436, 452, 453, 454),
+            ids("__atomic_store pack memcpy alloca __arm64_clear_cache __addtf3", TccTokenIds.TargetProfile.ARM64),
+        )
+        assertEquals(
+            listOf(412, 428, 435, 451, 452, 453),
+            ids("__atomic_store pack memcpy alloca __riscv64_clear_cache __addtf3", TccTokenIds.TargetProfile.RISCV64),
+        )
+        assertEquals(
+            listOf(411, 427, 428, 429, 430, 452, 458),
+            ids("__atomic_store pack push pop comment _divi alloca", TccTokenIds.TargetProfile.C67),
+        )
+        assertEquals(
+            listOf(429, 430, 436, 452, 453, 454, 455, 456),
+            ids("pack comment memcpy alloca __chkstk __tls_index __arm64_clear_cache __addtf3", TccTokenIds.TargetProfile.ARM64_PE),
+        )
+        assertEquals(
+            listOf(427, 434, 456, 457, 458),
+            ids("pack __aeabi_memcpy alloca __chkstk __tls_index", TccTokenIds.TargetProfile.ARM_EABI_PE),
+        )
+        assertEquals(TccTokenIds.TargetProfile.ARM64, TccTokenIds.targetProfile("arm64-apple-darwin"))
+        assertEquals(TccTokenIds.TargetProfile.ARM_VFP, TccTokenIds.targetProfile("arm-vfp"))
+        assertFailsWith<IllegalArgumentException> { TccTokenIds.targetProfile("unknown-arch-os") }
     }
 
     @Test

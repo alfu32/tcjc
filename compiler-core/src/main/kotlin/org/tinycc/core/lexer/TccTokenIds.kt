@@ -62,7 +62,10 @@ object TccTokenIds {
     const val PREPROCESSOR_STRING = 0xCE
     const val LINE_NUMBER = 0xCF
 
-    enum class TargetProfile { I386, I386_PE, X86_64_LINUX, X86_64_PE }
+    enum class TargetProfile {
+        I386, I386_PE, X86_64_LINUX, X86_64_PE, ARM_SOFT, ARM_VFP, ARM_EABI, ARM_EABI_PE,
+        ARM64, ARM64_PE, RISCV64, C67,
+    }
 
     data class KeywordSpec(val kind: TokenKind, val tccId: Int)
 
@@ -159,13 +162,6 @@ object TccTokenIds {
         "__nan__" to KeywordSpec(TokenKind.NAN, 344),
         "__snan__" to KeywordSpec(TokenKind.SNAN, 345),
         "__inf__" to KeywordSpec(TokenKind.INF, 346),
-        "pack" to KeywordSpec(TokenKind.PACK, 428),
-        "comment" to KeywordSpec(TokenKind.COMMENT, 429),
-        "lib" to KeywordSpec(TokenKind.LIB, 430),
-        "push_macro" to KeywordSpec(TokenKind.PUSH_MACRO, 431),
-        "pop_macro" to KeywordSpec(TokenKind.POP_MACRO, 432),
-        "once" to KeywordSpec(TokenKind.ONCE, 433),
-        "option" to KeywordSpec(TokenKind.OPTION, 434),
     )
 
     private val extensionSpellings = listOf(
@@ -186,57 +182,118 @@ object TccTokenIds {
         "__atomic_or_fetch", "__atomic_xor_fetch", "__atomic_and_fetch", "__atomic_nand_fetch",
     )
 
-    // In tcctok.h, runtime helper identifiers follow the pragma token block.
-    // The x86_64 token configuration has no intervening target-specific entries.
-    private val runtimeSpellings = listOf(
-        "memcpy", "memmove", "memset", "__divdi3", "__moddi3", "__udivdi3", "__umoddi3",
-        "__ashrdi3", "__lshrdi3", "__ashldi3", "__floatundisf", "__floatundidf", "__floatundixf",
-        "__fixunsxfdi", "__fixunssfdi", "__fixunsdfdi", "__fixxfdi",
+    private val earlyExtensions = extensionSpellings.takeWhile { it != "__builtin_va_arg_types" }
+    private val atomicSpellings = extensionSpellings.dropWhile { it != "__atomic_store" }
+    private val pragmaKinds = listOf(
+        "comment" to TokenKind.COMMENT, "lib" to TokenKind.LIB,
+        "push_macro" to TokenKind.PUSH_MACRO, "pop_macro" to TokenKind.POP_MACRO,
+        "once" to TokenKind.ONCE, "option" to TokenKind.OPTION,
     )
 
-    private val allSpecs: Map<String, KeywordSpec> = buildMap {
-        putAll(keywordSpecs)
-        extensionSpellings.forEachIndexed { index, spelling ->
-            putIfAbsent(spelling, KeywordSpec(TokenKind.IDENTIFIER, 347 + index))
-        }
-        runtimeSpellings.forEachIndexed { index, spelling ->
-            putIfAbsent(spelling, KeywordSpec(TokenKind.IDENTIFIER, 435 + index))
-        }
-        putIfAbsent("alloca", KeywordSpec(TokenKind.IDENTIFIER, 452))
-    }
-
-    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? {
-        if (target == TargetProfile.I386 || target == TargetProfile.I386_PE) {
-            when (text) {
-                "__builtin_va_arg_types", "__builtin_va_start", "__builtin_va_arg" -> return null
-                "__fixsfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 450)
-                "__fixdfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 451)
-                "__fixxfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 452)
-                "alloca" -> return KeywordSpec(TokenKind.IDENTIFIER, 453)
-                "__chkstk" -> if (target == TargetProfile.I386_PE) return KeywordSpec(TokenKind.IDENTIFIER, 454)
-                "__tls_index" -> if (target == TargetProfile.I386_PE) return KeywordSpec(TokenKind.IDENTIFIER, 455)
-            }
-        }
-        if (target == TargetProfile.X86_64_PE && text == "__builtin_va_arg_types") return null
-        if (target == TargetProfile.X86_64_PE) {
-            when (text) {
-                "__builtin_va_start" -> return KeywordSpec(TokenKind.IDENTIFIER, 411)
-                "__chkstk" -> return KeywordSpec(TokenKind.IDENTIFIER, 453)
-                "__tls_index" -> return KeywordSpec(TokenKind.IDENTIFIER, 454)
-            }
-        }
-        val spec = allSpecs[text] ?: return null
-        if (target == TargetProfile.I386 || target == TargetProfile.I386_PE) {
-            return if (spec.tccId >= 412) spec.copy(tccId = spec.tccId - 1) else spec
-        }
-        return spec
-    }
+    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? =
+        tokenSpecsByTarget.getValue(target)[text]
 
     fun targetProfile(targetTriple: String): TargetProfile = when {
-        targetTriple.startsWith("i386", ignoreCase = true) && targetTriple.contains("windows", ignoreCase = true) -> TargetProfile.I386_PE
+        targetTriple.startsWith("i386", ignoreCase = true) && isWindows(targetTriple) -> TargetProfile.I386_PE
         targetTriple.startsWith("i386", ignoreCase = true) -> TargetProfile.I386
-        targetTriple.startsWith("x86_64", ignoreCase = true) && targetTriple.contains("windows", ignoreCase = true) -> TargetProfile.X86_64_PE
-        else -> TargetProfile.X86_64_LINUX
+        targetTriple.startsWith("x86_64", ignoreCase = true) && isWindows(targetTriple) -> TargetProfile.X86_64_PE
+        targetTriple.startsWith("x86_64", ignoreCase = true) -> TargetProfile.X86_64_LINUX
+        targetTriple.startsWith("aarch64", ignoreCase = true) && isWindows(targetTriple) -> TargetProfile.ARM64_PE
+        targetTriple.startsWith("arm64", ignoreCase = true) && isWindows(targetTriple) -> TargetProfile.ARM64_PE
+        targetTriple.startsWith("aarch64", ignoreCase = true) || targetTriple.startsWith("arm64", ignoreCase = true) -> TargetProfile.ARM64
+        targetTriple.startsWith("armv7-windows", ignoreCase = true) -> TargetProfile.ARM_EABI_PE
+        targetTriple.startsWith("arm", ignoreCase = true) && targetTriple.contains("vfp", ignoreCase = true) -> TargetProfile.ARM_VFP
+        targetTriple.startsWith("arm", ignoreCase = true) && targetTriple.contains("soft", ignoreCase = true) -> TargetProfile.ARM_SOFT
+        targetTriple.startsWith("arm", ignoreCase = true) -> if (isWindows(targetTriple)) TargetProfile.ARM_EABI_PE else TargetProfile.ARM_EABI
+        targetTriple.startsWith("riscv64", ignoreCase = true) -> TargetProfile.RISCV64
+        targetTriple.startsWith("c67", ignoreCase = true) -> TargetProfile.C67
+        else -> throw IllegalArgumentException("unsupported TinyCC token target '$targetTriple'")
+    }
+
+    private fun isWindows(targetTriple: String): Boolean =
+        targetTriple.contains("windows", ignoreCase = true) ||
+            targetTriple.contains("win32", ignoreCase = true) ||
+            targetTriple.contains("mingw", ignoreCase = true)
+
+    private fun buildTargetSpecs(target: TargetProfile): Map<String, KeywordSpec> = buildMap {
+        putAll(keywordSpecs)
+        var token = 347
+        fun define(spelling: String, kind: TokenKind = TokenKind.IDENTIFIER) {
+            put(spelling, KeywordSpec(kind, token++))
+        }
+
+        earlyExtensions.forEach(::define)
+        variadicBuiltins(target).forEach(::define)
+        atomicSpellings.forEach(::define)
+        define("pack", TokenKind.PACK)
+        if (target == TargetProfile.C67) {
+            define("push")
+            define("pop")
+        }
+        pragmaKinds.forEach { (spelling, kind) -> define(spelling, kind) }
+        runtimeBeforeAlloca(target).forEach(::define)
+        define("alloca")
+        runtimeAfterAlloca(target).forEach(::define)
+    }
+
+    private fun variadicBuiltins(target: TargetProfile): List<String> = when (target) {
+        TargetProfile.X86_64_LINUX -> listOf("__builtin_va_arg_types")
+        TargetProfile.X86_64_PE -> listOf("__builtin_va_start")
+        TargetProfile.ARM64, TargetProfile.ARM64_PE -> listOf("__builtin_va_start", "__builtin_va_arg")
+        TargetProfile.RISCV64 -> listOf("__builtin_va_start")
+        else -> emptyList()
+    }
+
+    private val genericRuntime = listOf(
+        "memcpy", "memmove", "memset", "__divdi3", "__moddi3", "__udivdi3", "__umoddi3",
+        "__ashrdi3", "__lshrdi3", "__ashldi3", "__floatundisf", "__floatundidf", "__floatundixf",
+        "__fixunsxfdi", "__fixunssfdi", "__fixunsdfdi",
+    )
+
+    private val armEabiRuntime = listOf(
+        "__aeabi_memcpy", "__aeabi_memmove", "__aeabi_memmove4", "__aeabi_memmove8", "__aeabi_memset",
+        "__aeabi_ldivmod", "__aeabi_uldivmod", "__aeabi_idivmod", "__aeabi_uidivmod", "__aeabi_idiv",
+        "__aeabi_uidiv", "__aeabi_l2f", "__aeabi_l2d", "__aeabi_f2lz", "__aeabi_d2lz", "__aeabi_lasr",
+        "__aeabi_llsr", "__aeabi_llsl", "__aeabi_ul2f", "__aeabi_ul2d", "__aeabi_f2ulz", "__aeabi_d2ulz",
+    )
+
+    private val armSoftRuntime = listOf(
+        "__modsi3", "__umodsi3", "__divsi3", "__udivsi3", "__floatdisf", "__floatdidf", "__floatdixf",
+        "__fixunssfsi", "__fixunsdfsi", "__fixunsxfsi", "__fixxfdi", "__fixsfdi", "__fixdfdi",
+    )
+
+    private val armVfpRuntime = listOf(
+        "__modsi3", "__umodsi3", "__divsi3", "__udivsi3", "__floatdisf", "__floatdidf", "__fixsfdi", "__fixdfdi",
+    )
+
+    private val quadRuntime = listOf(
+        "__addtf3", "__subtf3", "__multf3", "__divtf3", "__extendsftf2", "__extenddftf2", "__trunctfsf2",
+        "__trunctfdf2", "__negtf2", "__fixtfsi", "__fixtfdi", "__fixunstfsi", "__fixunstfdi", "__floatsitf",
+        "__floatditf", "__floatunsitf", "__floatunditf", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__gttf2", "__getf2",
+    )
+
+    private val tokenSpecsByTarget = TargetProfile.entries.associateWith(::buildTargetSpecs)
+
+    private fun runtimeBeforeAlloca(target: TargetProfile): List<String> = when (target) {
+        TargetProfile.I386, TargetProfile.I386_PE -> genericRuntime + listOf("__fixsfdi", "__fixdfdi", "__fixxfdi")
+        TargetProfile.X86_64_LINUX, TargetProfile.X86_64_PE -> genericRuntime + "__fixxfdi"
+        TargetProfile.ARM_EABI, TargetProfile.ARM_EABI_PE -> armEabiRuntime
+        TargetProfile.ARM_SOFT -> genericRuntime + armSoftRuntime
+        TargetProfile.ARM_VFP -> genericRuntime.filterNot { it == "__floatundixf" || it == "__fixunsxfdi" } + armVfpRuntime
+        TargetProfile.ARM64, TargetProfile.ARM64_PE -> genericRuntime
+        TargetProfile.RISCV64 -> genericRuntime
+        TargetProfile.C67 -> genericRuntime + listOf("_divi", "_divu", "_divf", "_divd", "_remi", "_remu")
+    }
+
+    private fun runtimeAfterAlloca(target: TargetProfile): List<String> = buildList {
+        if (target in setOf(TargetProfile.I386_PE, TargetProfile.X86_64_PE, TargetProfile.ARM_EABI_PE, TargetProfile.ARM64_PE)) {
+            addAll(listOf("__chkstk", "__tls_index"))
+        }
+        when (target) {
+            TargetProfile.ARM64, TargetProfile.ARM64_PE -> addAll(listOf("__arm64_clear_cache") + quadRuntime)
+            TargetProfile.RISCV64 -> addAll(listOf("__riscv64_clear_cache") + quadRuntime)
+            else -> Unit
+        }
     }
 
     fun literalId(literal: LiteralValue): Int = when (literal) {

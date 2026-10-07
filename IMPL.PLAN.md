@@ -80,9 +80,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   (base historical token IDs, literal classes, raw token IDs, hex floats,
   digraphs, line splicing, GNU escapes, and UCN checks exist; full token-table,
   character-set, and malformed-input parity is not yet demonstrated; x86
-  Linux/Windows VA-builtin, atomic, pragma, runtime-helper, and alloca token
-  order is verified against `tcctok.h`; other architecture token layouts remain
-  unverified)
+  Linux/Windows, ARM EABI/VFP/soft-float, ARM64, RISC-V, and C67 conditional
+  builtin/atomic/pragma/runtime token orders are covered by profile tests against
+  `tcctok.h`; assembler token tables and build-option variants remain open)
 - [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
   includes, pragmas, predefined macros, and line control. — `IN_PROGRESS`
   (many GNU macro and conditional forms are covered, but all platform
