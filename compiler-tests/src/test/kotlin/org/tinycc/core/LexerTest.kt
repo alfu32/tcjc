@@ -80,9 +80,12 @@ class LexerTest {
 
     @Test
     fun preservesHistoricalPragmaAndRuntimeTokenOrder() {
-        val tokens = Lexer("pack comment option memcpy __divdi3 __fixunsdfdi __fixxfdi alloca").tokenize()
+        val tokens = Lexer(
+            "__builtin_va_arg_types __atomic_store __atomic_nand_fetch pack comment option " +
+                "memcpy __divdi3 __fixunsdfdi __fixxfdi alloca",
+        ).tokenize()
 
-        assertEquals(listOf(428, 429, 434, 435, 438, 450, 451, 452), tokens.dropLast(1).map { it.tccId })
+        assertEquals(listOf(411, 412, 427, 428, 429, 434, 435, 438, 450, 451, 452), tokens.dropLast(1).map { it.tccId })
     }
 
     @Test

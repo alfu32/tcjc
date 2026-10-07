@@ -177,7 +177,7 @@ object TccTokenIds {
         "dllexport", "dllimport", "nodecorate", "noreturn", "__noreturn__", "_Noreturn",
         "visibility", "__visibility__", "__builtin_types_compatible_p", "__builtin_choose_expr",
         "__builtin_constant_p", "__builtin_frame_address", "__builtin_return_address", "__builtin_expect",
-        "__builtin_unreachable", "__builtin_va_arg_types", "__builtin_va_start", "__builtin_va_arg",
+        "__builtin_unreachable", "__builtin_va_arg_types",
         "__atomic_store", "__atomic_load", "__atomic_exchange", "__atomic_compare_exchange",
         "__atomic_fetch_add", "__atomic_fetch_sub", "__atomic_fetch_or", "__atomic_fetch_xor",
         "__atomic_fetch_and", "__atomic_fetch_nand", "__atomic_add_fetch", "__atomic_sub_fetch",

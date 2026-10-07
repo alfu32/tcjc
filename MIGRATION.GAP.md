@@ -9,7 +9,7 @@ test merely exists. Current entries are deliberately conservative.
 | Area | Historical implementation | Current Kotlin evidence | Status | Required closure evidence |
 |---|---|---|---|---|
 | Core state and utilities | `tcc.h`, `libtcc.c`, allocators, arenas, hash tables | `compiler-core/.../collections`, API session | PARTIAL | Reentrant lifetime, allocation, error, and callback parity |
-| Tokens and lexer | `tcctok.h`, `tccpp.c` token tables and character tables | `core/lexer/Lexer.kt`, `Token.kt`; default x86_64 pragma/runtime token order has focused raw-ID coverage | PARTIAL | Target-conditional token IDs, full keyword/assembler tables, extensions, literals, escapes, character sets, malformed-input parity |
+| Tokens and lexer | `tcctok.h`, `tccpp.c` token tables and character tables | `core/lexer/Lexer.kt`, `Token.kt`; default x86_64 Linux builtin/atomic/pragma/runtime IDs have focused raw-ID coverage | PARTIAL | Other target-conditional token IDs, full keyword/assembler tables, extensions, literals, escapes, character sets, malformed-input parity |
 | Preprocessor | `tccpp.c`, `include/tccdefs.h`, include search and pragma logic | `core/preprocessor` | PARTIAL | All `tests/pp`, macro edge cases, predefined/platform macros |
 | Types and declarations | `tcc.h`, `tccgen.c` type/declaration machinery | `core/types`, `symbols` | PARTIAL | Full C/GNU types, attributes, VLA, bit-fields, linkage, ABI |
 | Expressions/constants | `tccgen.c` expression parser and constant folding | `core/expressions`, `constants`, `semantics` | PARTIAL | All operators, conversions, relocatable constants, diagnostics |

@@ -80,8 +80,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   (base historical token IDs, literal classes, raw token IDs, hex floats,
   digraphs, line splicing, GNU escapes, and UCN checks exist; full token-table,
   character-set, and malformed-input parity is not yet demonstrated; corrected
-  default x86_64 pragma/runtime-helper token order, with other target-conditional
-  token layouts still unverified)
+  default x86_64 Linux VA-builtin/atomic/pragma/runtime-helper order, verified
+  against `tcctok.h`; other target-conditional token layouts remain unverified)
 - [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
   includes, pragmas, predefined macros, and line control. — `IN_PROGRESS`
   (many GNU macro and conditional forms are covered, but all platform
