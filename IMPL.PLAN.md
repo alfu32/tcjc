@@ -3,27 +3,27 @@
 ## Dashboard
 
 ```text
-Overall: 23/48
+Overall: 24/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
-[IN_PROGRESS] [1/3] 3. Compile-time and IR system
+[DONE]       [3/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-8.3 Deterministic assembly/object emission interfaces and differential tests against captured C implementation output
+9.1 i386 and x86_64 instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support
 
 Current milestone:
-M3 — Compile-time and IR system
+M4 — Lowering and native target backends
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (7/16 implementation tasks; 21/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (8/16 implementation tasks; 24/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -78,11 +78,11 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 7.2 Port function definitions, parameters, calling metadata, variadic functions, nested/local functions, and returns. — `DONE` (see `compiler-core/.../functions` and `FunctionParserTest`)
 - [x] 7.3 Add parser/semantic regression coverage for scope, unreachable code, VLA behavior, and control-flow errors. — `DONE` (see `compiler-core/.../semantics/ControlFlowValidator.kt` and `ControlFlowValidatorTest`)
 
-### 8. Generic IR and code-emission layer — `IN_PROGRESS` (2/3)
+### 8. Generic IR and code-emission layer — `DONE` (3/3)
 
 - [x] 8.1 Define a typed intermediate representation for values, memory, calls, branches, symbols, relocations, and debug locations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `IrVerifier.kt`, and `IrModelTest`)
 - [x] 8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts. — `DONE` (see `compiler-core/.../ir/IrBackendContracts.kt` and `BackendContractsTest`)
-- [ ] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `TODO`
+- [x] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `DONE` (see `compiler-core/.../ir/IrEmitters.kt` and `EmissionTest`)
 
 ### 9. i386 and x86_64 backends — `TODO` (0/3)
 
