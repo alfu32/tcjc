@@ -87,6 +87,31 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun combinesTinyCcConditionalPointerTypesAndWarnings() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("integerPointer", CTypes.pointer(CTypes.int)))
+        symbols.declare(ObjectDeclaration("constIntegerPointer", CTypes.pointer(CTypes.qualified(CTypes.int, TypeQualifiers(isConst = true)))))
+        symbols.declare(ObjectDeclaration("characterPointer", CTypes.pointer(CTypes.char)))
+        symbols.declare(ObjectDeclaration("voidPointer", CTypes.pointer(CTypes.void)))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val mismatched = analyzer.analyze(ExpressionParser(Lexer("1 ? integerPointer : characterPointer").tokenize()).parse())
+        val voidPreferred = analyzer.analyze(ExpressionParser(Lexer("1 ? voidPointer : integerPointer").tokenize()).parse())
+        val integerArm = analyzer.analyze(ExpressionParser(Lexer("1 ? integerPointer : 7").tokenize()).parse())
+        val qualified = analyzer.analyze(ExpressionParser(Lexer("1 ? integerPointer : constIntegerPointer").tokenize()).parse())
+
+        assertEquals(CTypes.pointer(CTypes.char), mismatched.type)
+        assertEquals(CTypes.pointer(CTypes.void), voidPreferred.type)
+        assertEquals(CTypes.pointer(CTypes.int), integerArm.type)
+        assertEquals(CTypes.pointer(CTypes.qualified(CTypes.int, TypeQualifiers(isConst = true))), qualified.type)
+        assertEquals(0, diagnostics.errorCount)
+        assertEquals(2, diagnostics.diagnostics().count { it.severity == org.tinycc.core.diagnostics.DiagnosticSeverity.WARNING })
+        assertTrue(diagnostics.render().contains("pointer type mismatch in conditional expression"))
+        assertTrue(diagnostics.render().contains("pointer/integer mismatch in conditional expression"))
+    }
+
+    @Test
     fun diagnosesInvalidAssignmentsAndUnknownMembers() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)

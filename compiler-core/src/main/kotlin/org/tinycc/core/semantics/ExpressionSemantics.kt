@@ -218,13 +218,41 @@ class ExpressionSemanticAnalyzer(
         val trueType = canonical(decay(whenTrue))
         val falseType = canonical(decay(whenFalse))
         return when {
+            trueType is CType.Pointer && falseType is CType.Pointer -> typed(expression, conditionalPointerType(expression, trueType, falseType))
             CTypes.compatible(trueType, falseType) -> typed(expression, trueType)
             isArithmetic(trueType) && isArithmetic(falseType) -> typed(expression, commonArithmetic(trueType, falseType))
-            trueType is CType.Pointer && falseType is CType.Pointer && comparable(trueType, falseType) -> typed(expression, trueType)
             trueType is CType.Pointer && isNullPointerConstant(expression.whenFalse) -> typed(expression, trueType)
             falseType is CType.Pointer && isNullPointerConstant(expression.whenTrue) -> typed(expression, falseType)
+            trueType is CType.Pointer && isInteger(falseType) -> {
+                diagnostics.warning(expression.span.start, "pointer/integer mismatch in conditional expression")
+                typed(expression, trueType)
+            }
+            isInteger(trueType) && falseType is CType.Pointer -> {
+                diagnostics.warning(expression.span.start, "pointer/integer mismatch in conditional expression")
+                typed(expression, falseType)
+            }
             else -> invalid(expression, "conditional operands have incompatible types")
         }
+    }
+
+    private fun conditionalPointerType(expression: Expression.Conditional, left: CType.Pointer, right: CType.Pointer): CType.Pointer {
+        if (!pointerCompatible(left, right)) {
+            diagnostics.warning(expression.span.start, "pointer type mismatch in conditional expression")
+        }
+        val selected = if (canonical(left.pointee) == CTypes.void) left else right
+        val mergedQualifiers = typeQualifiers(left.pointee).plus(typeQualifiers(right.pointee))
+        val pointee = if (mergedQualifiers == org.tinycc.core.types.TypeQualifiers()) {
+            selected.pointee
+        } else {
+            CTypes.qualified(selected.pointee, mergedQualifiers)
+        }
+        return selected.copy(pointee = pointee)
+    }
+
+    private fun typeQualifiers(type: CType): org.tinycc.core.types.TypeQualifiers = when (type) {
+        is CType.Typedef -> typeQualifiers(type.target)
+        is CType.Qualified -> type.qualifiers.plus(typeQualifiers(type.base))
+        else -> org.tinycc.core.types.TypeQualifiers()
     }
 
     private fun analyzeAssignment(expression: Expression.Assignment): TypedExpression {
@@ -620,10 +648,6 @@ class ExpressionSemanticAnalyzer(
         }
         return false
     }
-
-    private fun comparable(left: CType, right: CType): Boolean =
-        CTypes.compatible(left, right) || isArithmetic(left) && isArithmetic(right) ||
-            left is CType.Pointer && right is CType.Pointer && pointerCompatible(left, right)
 
     private fun isArithmetic(type: CType): Boolean = when (val value = canonical(type)) {
         is CType.Primitive -> value.kind != PrimitiveKind.VOID

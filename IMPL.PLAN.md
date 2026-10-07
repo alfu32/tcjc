@@ -145,7 +145,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   for void/function pointers is preserved; pointer subtraction now selects
   target ptrdiff_t semantics for i386, x86_64 SysV, and x86_64 Win64; pointer
   comparisons accept TinyCC's integer/pointer and mismatched-pointer cases with
-  warnings, while null-pointer comparisons remain warning-free)
+  warnings, while null-pointer comparisons remain warning-free; conditional
+  pointer arms now follow TinyCC void-pointer preference, qualifier union, and
+  warning behavior for incompatible pointer or integer arms)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`
