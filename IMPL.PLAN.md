@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 24/48
+Overall: 25/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
-[TODO]       [0/12]  4. Lowering and native target backends
+[IN_PROGRESS] [1/12] 4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-9.1 i386 and x86_64 instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support
+9.2 x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations
 
 Current milestone:
 M4 — Lowering and native target backends
@@ -84,9 +84,9 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts. — `DONE` (see `compiler-core/.../ir/IrBackendContracts.kt` and `BackendContractsTest`)
 - [x] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `DONE` (see `compiler-core/.../ir/IrEmitters.kt` and `EmissionTest`)
 
-### 9. i386 and x86_64 backends — `TODO` (0/3)
+### 9. i386 and x86_64 backends — `IN_PROGRESS` (1/3)
 
-- [ ] 9.1 Port instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support. — `TODO`
+- [x] 9.1 Port instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support. — `DONE` (see `compiler-backends/.../x86/X86Backend.kt` and `X86BackendTest`)
 - [ ] 9.2 Port x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations. — `TODO`
 - [ ] 9.3 Pass native i386/x86_64 compile, link, run, ABI, assembler, and self-hosting parity tests. — `TODO`
 
