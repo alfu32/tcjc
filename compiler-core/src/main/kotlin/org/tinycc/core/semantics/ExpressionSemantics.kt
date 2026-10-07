@@ -52,6 +52,8 @@ class ExpressionSemanticAnalyzer(
         is Expression.TypeOf -> typed(expression, operandType(expression.operand))
         is Expression.GenericSelection -> analyzeGeneric(expression)
         is Expression.StatementExpression -> analyzeStatementExpression(expression)
+        is Expression.TypeOperand -> typed(expression, expression.type)
+        is Expression.LabelAddress -> typed(expression, CTypes.pointer(CTypes.void))
         is Expression.CompoundLiteral -> if (analyzeInitializer(expression.initializer, expression.type)) {
             typed(expression, expression.type, ValueCategory.LVALUE)
         } else {
@@ -270,6 +272,20 @@ class ExpressionSemanticAnalyzer(
             requireArgumentCount(expression, 0, name)
             typed(expression, CTypes.void)
         }
+        "__builtin_types_compatible_p" -> {
+            requireArgumentCount(expression, 2, name)
+            val left = expression.arguments.getOrNull(0) as? Expression.TypeOperand
+            val right = expression.arguments.getOrNull(1) as? Expression.TypeOperand
+            if (left == null || right == null) invalid(expression, "$name requires two type names")
+            else typed(expression, CTypes.int)
+        }
+        "__builtin_va_arg" -> {
+            requireArgumentCount(expression, 2, name)
+            expression.arguments.firstOrNull()?.let(::analyze)
+            val result = expression.arguments.getOrNull(1) as? Expression.TypeOperand
+            if (result == null) invalid(expression, "$name requires a type name") else typed(expression, result.type)
+        }
+        "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy" -> typed(expression, CTypes.void)
         "__builtin_frame_address", "__builtin_return_address" -> {
             requireArgumentCount(expression, 1, name)
             expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name level must be an integer") }
@@ -280,7 +296,20 @@ class ExpressionSemanticAnalyzer(
             expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name size must be an integer") }
             typed(expression, CTypes.pointer(CTypes.void))
         }
+        else if (name.startsWith("__atomic_")) -> analyzeAtomicBuiltin(expression, name)
         else -> null
+    }
+
+    private fun analyzeAtomicBuiltin(expression: Expression.Call, name: String): TypedExpression {
+        expression.arguments.forEach { analyze(it) }
+        val pointee = expression.arguments.firstOrNull()?.let(::analyze)?.type?.let(::canonical)
+            .let { it as? CType.Pointer }?.pointee
+        return when {
+            name.contains("compare_exchange") -> typed(expression, CTypes.int)
+            name.contains("_store") || name.endsWith("_fence") || name.endsWith("_thread_fence") -> typed(expression, CTypes.void)
+            pointee != null -> typed(expression, pointee)
+            else -> invalid(expression, "$name requires a pointer operand")
+        }
     }
 
     private fun requireArgumentCount(expression: Expression.Call, expected: Int, name: String) {

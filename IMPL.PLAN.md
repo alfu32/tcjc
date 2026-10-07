@@ -117,9 +117,11 @@ run the relevant checks, commit using Conventional Commits, and push to
   conversions, pointer arithmetic, compound-literal validation, `_Generic`,
   `typeof`, `_Alignof`, GNU statement expressions, and core builtins including
   `__builtin_choose_expr`, `__builtin_constant_p`, `__builtin_expect`, frame/
-  return-address, `alloca`, and `unreachable`; remaining type-aware builtins,
-  label addresses, inline asm expressions, atomics, variadics, and full
-  declarator-aware expression coverage remain open)
+  return-address, `alloca`, `unreachable`, type-compatible and variadic type
+  queries, label addresses, and atomic builtin families; remaining
+  `__builtin_offsetof`, inline-asm expressions/statements, target-specific
+  atomic and variadic lowering, and full declarator-aware expression coverage
+  remain open)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

@@ -91,6 +91,10 @@ class ExpressionParser(
             take()
             return Expression.Unary(operator, parseUnary(), token.span.merge(previous().span))
         }
+        if (match(TokenKind.AND_AND) != null) {
+            val label = expect(TokenKind.IDENTIFIER, "label")
+            return Expression.LabelAddress(label.lexeme, token.span.merge(label.span))
+        }
         if (match(TokenKind.SIZEOF) != null) return parseSizeOf(token)
         if (match(TokenKind.EXTENSION) != null) return parseUnary()
         return parsePostfix()
@@ -114,14 +118,7 @@ class ExpressionParser(
         var expression = parsePrimary()
         while (true) {
             expression = when {
-                match(TokenKind.LEFT_PAREN) != null -> {
-                    val arguments = ArrayList<Expression>()
-                    if (!at(TokenKind.RIGHT_PAREN)) {
-                        do arguments += parseAssignment() while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_PAREN))
-                    }
-                    val close = expect(TokenKind.RIGHT_PAREN, "')'")
-                    Expression.Call(expression, arguments, expression.span.merge(close.span))
-                }
+                match(TokenKind.LEFT_PAREN) != null -> parseCall(expression)
                 match(TokenKind.LEFT_BRACKET) != null -> {
                     val index = parseExpression()
                     val close = expect(TokenKind.RIGHT_BRACKET, "']'")
@@ -143,6 +140,29 @@ class ExpressionParser(
             }
         }
         return expression
+    }
+
+    private fun parseCall(callee: Expression): Expression {
+        val typeArguments = callee is Expression.Name && callee.identifier in setOf(
+            "__builtin_types_compatible_p",
+            "__builtin_va_arg",
+        )
+        val arguments = ArrayList<Expression>()
+        if (!at(TokenKind.RIGHT_PAREN)) {
+            do {
+                if (typeArguments && (callee as Expression.Name).identifier == "__builtin_va_arg" && arguments.isNotEmpty()) {
+                    val start = current()
+                    arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))
+                } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_types_compatible_p") {
+                    val start = current()
+                    arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))
+                } else {
+                    arguments += parseAssignment()
+                }
+            } while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_PAREN))
+        }
+        val close = expect(TokenKind.RIGHT_PAREN, "')'")
+        return Expression.Call(callee, arguments, callee.span.merge(close.span))
     }
 
     private fun parsePrimary(): Expression {

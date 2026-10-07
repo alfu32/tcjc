@@ -43,6 +43,8 @@ sealed interface Expression {
         override val span: SourceSpan,
     ) : Expression
     data class StatementExpression(val body: Statement, override val span: SourceSpan) : Expression
+    data class TypeOperand(val type: CType, override val span: SourceSpan) : Expression
+    data class LabelAddress(val label: String, override val span: SourceSpan) : Expression
     data class CompoundLiteral(val type: CType, val initializer: Initializer, override val span: SourceSpan) : Expression
     data class Invalid(override val span: SourceSpan) : Expression
 }

@@ -88,12 +88,20 @@ class ExpressionSemanticsTest {
         val chosen = analyzer.analyze(ExpressionParser(Lexer("__builtin_choose_expr(1, value, 0)").tokenize()).parse())
         val address = analyzer.analyze(ExpressionParser(Lexer("__builtin_return_address(0)").tokenize()).parse())
         val unreachable = analyzer.analyze(ExpressionParser(Lexer("__builtin_unreachable()").tokenize()).parse())
+        val typeCompatible = analyzer.analyze(ExpressionParser(Lexer("__builtin_types_compatible_p(int, int)").tokenize()).parse())
+        val vaArg = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_arg(value, long)").tokenize()).parse())
+        val atomic = analyzer.analyze(ExpressionParser(Lexer("__atomic_fetch_add(&value, 1, 0)").tokenize()).parse())
+        val labelAddress = analyzer.analyze(ExpressionParser(Lexer("&&done").tokenize()).parse())
 
         assertEquals(CTypes.int, constant.type)
         assertEquals(CTypes.int, expected.type)
         assertEquals(CTypes.int, chosen.type)
         assertEquals(CTypes.pointer(CTypes.void), address.type)
         assertEquals(CTypes.void, unreachable.type)
+        assertEquals(CTypes.int, typeCompatible.type)
+        assertEquals(CTypes.long, vaArg.type)
+        assertEquals(CTypes.int, atomic.type)
+        assertEquals(CTypes.pointer(CTypes.void), labelAddress.type)
         assertEquals(0, diagnostics.errorCount)
     }
 }

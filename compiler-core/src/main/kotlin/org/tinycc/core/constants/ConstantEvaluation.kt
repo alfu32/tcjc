@@ -52,6 +52,8 @@ class ConstantEvaluator(
         is Expression.TypeOf -> notConstant(expression, "typeof does not produce a runtime value")
         is Expression.GenericSelection -> evaluateGeneric(expression)
         is Expression.StatementExpression -> notConstant(expression, "statement expression is not a constant expression")
+        is Expression.TypeOperand -> notConstant(expression, "type operand is not a constant expression")
+        is Expression.LabelAddress -> notConstant(expression, "label address is not a link-time constant")
         is Expression.Unary -> evaluateUnary(expression)
         is Expression.Binary -> evaluateBinary(expression)
         is Expression.Conditional -> {

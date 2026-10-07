@@ -53,6 +53,9 @@ class ExpressionParserTest {
         assertEquals(2, generic.associations.size)
         assertTrue(generic.associations.any { it.type == null })
 
+        val labelAddress = assertIs<Expression.LabelAddress>(ExpressionParser(Lexer("&&done").tokenize()).parse())
+        assertEquals("done", labelAddress.label)
+
         val statementExpression = assertIs<Expression.StatementExpression>(
             ExpressionParser(Lexer("({ value + 1; })").tokenize()).parse(),
         )
