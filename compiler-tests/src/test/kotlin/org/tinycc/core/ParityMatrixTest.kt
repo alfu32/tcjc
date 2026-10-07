@@ -27,7 +27,8 @@ class ParityMatrixTest {
     @Test
     fun capturedParityEvidenceRemainsAvailableUntilCutover() {
         val missingEvidence = parityAreas.flatMap { area ->
-            area.baselineEvidence.filterNot { Files.exists(Path.of(it)) }.map { "${area.name}: $it" }
+            area.baselineEvidence.filterNot { TestPaths.repositoryPath(*it.split('/').toTypedArray()).let(Files::exists) }
+                .map { "${area.name}: $it" }
         }
         assertTrue(missingEvidence.isEmpty(), "missing captured parity evidence: $missingEvidence")
     }

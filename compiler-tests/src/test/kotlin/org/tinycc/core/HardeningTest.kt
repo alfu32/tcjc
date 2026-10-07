@@ -48,7 +48,7 @@ class HardeningTest {
     fun releaseSourcesDoNotInvokeNativeLoaders() {
         val forbidden = listOf("System.load(", "System.loadLibrary(", "JNI_OnLoad")
         val roots = listOf("compiler-core", "compiler-backends", "compiler-runtime", "compiler-api", "compiler-cli")
-            .map { Path.of(it, "src", "main") }
+            .map { TestPaths.repositoryPath(it, "src", "main") }
         val sourceFiles = roots.flatMap { root ->
             Files.walk(root).use { paths ->
                 paths.filter { Files.isRegularFile(it) && it.toString().endsWith(".kt") }.toList()

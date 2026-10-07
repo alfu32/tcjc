@@ -12,7 +12,7 @@
 
 The port must preserve the CLI contract, diagnostics, C language and GNU/TinyCC extensions currently exercised by the repository, `libtcc` capabilities, include/library search behavior, in-memory execution, and native output formats/targets recorded in `MIGRATION.BASELINE.md`. Kotlin APIs may be idiomatic, but a Java-friendly facade must expose equivalent lifecycle, compilation, output, relocation, execution, symbol, and callback operations. Differences are allowed only when documented with a migration note and a regression test.
 
-The migration is a pure Kotlin/JVM implementation, not a facade over TinyCC. The final build may retain the C implementation only as a temporary parity oracle during differential testing, but the default Gradle build, published artifacts, CLI, and runtime must not compile, package, load, invoke, or require C sources, Make targets, shell configuration, native TinyCC binaries, or TinyCC DLL/SO files. Task 16 removes the oracle and verifies the clean Kotlin-only artifact.
+The migration is a pure Kotlin/JVM implementation, not a facade over TinyCC. The default Gradle build, published artifacts, CLI, and runtime do not compile, package, load, invoke, or require C sources, Make targets, shell configuration, native TinyCC binaries, or TinyCC DLL/SO files. Task 16.3 removes the temporary parity oracle and verifies the clean Kotlin-only artifact.
 
 ## Parity gates
 

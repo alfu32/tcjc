@@ -1,6 +1,6 @@
-# C Implementation Baseline Goldens
+# Historical C Implementation Baseline Goldens
 
-Captured on 2026-10-07 from commit `25b4ddda` on Linux x86_64 with GCC 13.3 and TinyCC `0.9.28rc`.
+Captured on 2026-10-07 from commit `25b4ddda` on Linux x86_64 with GCC 13.3 and TinyCC `0.9.28rc`. The C implementation has since been removed; these files are inert differential evidence.
 
 ## Build gates
 

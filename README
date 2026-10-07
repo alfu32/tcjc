@@ -1,6 +1,6 @@
 # tinycc-jvm
 
-This repository is a pure Kotlin/JVM implementation of the TinyCC-compatible compiler surface. The JVM hosts the compiler; native target writers are implemented in Kotlin and do not require a C compiler, JNI bridge, or packaged DLL/SO/DYLIB. The original C tree is retained only as a temporary parity oracle until the final cutover task is complete.
+This repository is a pure Kotlin/JVM implementation of the TinyCC-compatible compiler surface. The JVM hosts the compiler; native target writers are implemented in Kotlin and do not require a C compiler, JNI bridge, or packaged DLL/SO/DYLIB. Historical compatibility evidence is retained under `baseline/`; no C implementation is part of the repository build.
 
 ## Requirements
 

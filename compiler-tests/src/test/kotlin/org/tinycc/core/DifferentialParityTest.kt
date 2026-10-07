@@ -11,7 +11,7 @@ import org.tinycc.core.preprocessor.Preprocessor
 class DifferentialParityTest {
     @Test
     fun matchesCapturedPreprocessorGoldenWithKotlinImplementation() {
-        val expected = Path.of("baseline/pp/01.output").toFile().readText().trim()
+        val expected = TestPaths.repositoryPath("baseline", "pp", "01.output").toFile().readText().trim()
         val actual = Preprocessor(
             "#define STR(x) #x\nchar p[] = STR(x ## y);\n",
         ).process().text.trim()

@@ -6,6 +6,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":compiler-core"))
     implementation(project(":compiler-api"))
 }
 

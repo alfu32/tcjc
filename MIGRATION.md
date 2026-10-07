@@ -6,4 +6,4 @@ The Kotlin implementation preserves the front-end, diagnostics, typed IR, target
 
 The deliberate purity boundary is important: no C source, native bridge, DLL/SO/DYLIB, system library loader, Make target, or shell configuration is part of the Kotlin/JVM artifact. JVM JAR providers are supported through `KotlinJvmLibrary`; native dynamic-library requests fail with an explicit diagnostic. Native executable execution is isolated behind `KotlinProcessRunner` and does not load native libraries into the JVM.
 
-Known staged work remains in `IMPL.PLAN.md`, especially final backend artifact integration, full release packaging validation, and removal of the legacy C parity oracle. Do not treat the retained C tree as a build dependency.
+The staged migration is tracked in `IMPL.PLAN.md`. The former C parity oracle has been removed after the final audit; `baseline/` contains only inert captured evidence and is not a build dependency.

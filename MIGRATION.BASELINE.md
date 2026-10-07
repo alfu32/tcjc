@@ -1,10 +1,10 @@
 # TinyCC Compatibility Baseline
 
-This inventory records the current C implementation that the Kotlin/JVM port must replace. Primary references are the current `work` branch, `Makefile`, `configure`, `tcc.h`, `libtcc.h`, and `tests/Makefile`.
+This inventory records the historical C implementation that the Kotlin/JVM port replaced. Its source tree was removed at final cutover; the document and `baseline/` outputs are retained as compatibility evidence only.
 
 ## Public surfaces
 
-- CLI driver: `tcc.c`; option parsing and linker options: `libtcc.c`. The compatibility surface includes preprocessing (`-E`, `-M*`), compilation (`-c`, `-run`, `-shared`, `-static`, `-r`), diagnostics (`-W*`, `-w`, `-g`, `-bt`), search/configuration (`-I`, `-isystem`, `-L`, `-l`, `-B`, `-D`, `-U`, `-include`), target flags (`-m*`, `-f*`), output (`-o`, `-soname`), and `-Wl,`/`-Wp,` forwarding.
+- CLI driver: historical `tcc.c`; option parsing and linker options: historical `libtcc.c`. The compatibility surface includes preprocessing (`-E`, `-M*`), compilation (`-c`, `-run`, `-shared`, `-static`, `-r`), diagnostics (`-W*`, `-w`, `-g`, `-bt`), search/configuration (`-I`, `-isystem`, `-L`, `-l`, `-B`, `-D`, `-U`, `-include`), target flags (`-m*`, `-f*`), output (`-o`, `-soname`), and `-Wl,`/`-Wp,` forwarding.
 - Embedding API: `libtcc.h` exposes lifecycle, allocator, error callback, options, include/define configuration, source/file compilation, output selection, library/symbol registration, file output, in-memory relocation, execution, symbol lookup, symbol enumeration, setjmp, and backtrace callbacks.
 
 ## Implementation modules

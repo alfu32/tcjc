@@ -50,7 +50,7 @@ class EmissionTest {
 
     @Test
     fun comparesObjectTargetMetadataWithCapturedTinyCcHeader() {
-        val captured = Path.of("baseline/object/ex1.headers").toFile().readText()
+        val captured = TestPaths.repositoryPath("baseline", "object", "ex1.headers").toFile().readText()
         val target = ObjectTarget(
             format = if (captured.contains("ELF 64-bit")) IrObjectFormat.ELF else IrObjectFormat.RAW,
             architecture = if (captured.contains("x86-64")) IrArchitecture.X86_64 else IrArchitecture.I386,

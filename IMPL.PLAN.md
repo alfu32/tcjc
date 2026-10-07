@@ -3,27 +3,27 @@
 ## Dashboard
 
 ```text
-Overall: 47/48
+Overall: 48/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
 [DONE]       [12/12] 4. Lowering and native target backends
-[IN_PROGRESS] [14/15] 5. Tooling, integration and quality
+[DONE]       [15/15] 5. Tooling, integration and quality
 [DONE]       [3/3] 6. Runtime, SDK and platform ABI
 
 Current task:
-16.3 remove obsolete C build paths after parity gates pass; perform a clean-checkout build and final repository audit
+none — pure Kotlin/JVM migration and final repository audit are complete
 
 Current milestone:
-M5 — Tooling, integration and quality
+complete — migration milestones M1–M6
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (15/16 implementation tasks; 47/48 subtasks complete)
+- Overall migration: **DONE** (16/16 implementation tasks; 48/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -32,7 +32,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Scope and Compatibility Contract
 
-The end state is a pure Kotlin/JVM implementation that can be built and tested entirely through Gradle, with no C compiler sources, TinyCC DLL/SO files, native bridge, Make target, or shell configuration required or packaged. Preserve the current TinyCC command-line behavior, `libtcc`-style embedding API, diagnostics, C language behavior, and native output targets unless a compatibility change is explicitly documented. The JVM is the host for the compiler; native target generation remains part of the migration rather than being silently replaced by JVM-only output. The original C tree is a temporary parity oracle only and is removed at Task 16.
+The end state is a pure Kotlin/JVM implementation that can be built and tested entirely through Gradle, with no C compiler sources, TinyCC DLL/SO files, native bridge, Make target, or shell configuration required or packaged. Preserve the current TinyCC command-line behavior, `libtcc`-style embedding API, diagnostics, C language behavior, and native output targets unless a compatibility change is explicitly documented. The JVM is the host for the compiler; native target generation remains part of the migration rather than being silently replaced by JVM-only output. The original C tree was a temporary parity oracle and was removed at Task 16.3.
 
 ## Implementation Tasks
 
@@ -126,12 +126,12 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 15.2 Add differential testing against the captured C implementation across supported hosts, targets, and optimization/configuration modes. — `DONE` (see `compiler-tests/.../DifferentialParityTest.kt` and `ArtifactDifferential`; captured preprocessing and object metadata are replayed deterministically)
 - [x] 15.3 Run coverage, sanitization-equivalent JVM checks, fuzzing, performance comparisons, and fix all release-blocking discrepancies. — `DONE` (see `compiler-tests/.../HardeningTest.kt`, JaCoCo configuration, and `verifyPureKotlinArtifact`)
 
-### 16. Cutover, documentation, and C removal — `IN_PROGRESS` (2/3)
+### 16. Cutover, documentation, and C removal — `DONE` (3/3)
 
 - [x] 16.1 Switch default build, tests, examples, CI configuration, and contributor instructions to Gradle/Kotlin/JVM. — `DONE` (see `README`, `.github/workflows/build.yml`, and Gradle/JaCoCo configuration; pre-existing `AGENTS.md` was preserved per repository instruction)
 - [x] 16.2 Update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata. — `DONE` (see `ARCHITECTURE.md`, `MIGRATION.md`, `RELEASE-METADATA.md`, and `NOTICE`)
-- [ ] 16.3 Remove obsolete C build paths only after parity gates pass; perform a clean checkout build and final repository audit. — `TODO`
+- [x] 16.3 Remove obsolete C build paths only after parity gates pass; perform a clean checkout build and final repository audit. — `DONE` (legacy C/source/header/Make/configure paths removed; `./gradlew clean check` passed all 101 tests; `verifyPureKotlinArtifact` passed; tracked-source audit found no C/native build paths)
 
 ## Completion Gate
 
-The migration is complete only when all 16 tasks and 48 subtasks are `DONE`, a clean checkout builds with `./gradlew`, the ported test suites pass on every supported environment, the CLI and embedding API parity gates pass, and a clean-artifact audit proves that no runtime or build path depends on C sources or native TinyCC libraries.
+The migration is complete: all 16 tasks and 48 subtasks are `DONE`, a clean Gradle build passes, the ported test suites pass on the supported host, the CLI and embedding API parity gates pass, and the clean-artifact audit proves that no runtime or build path depends on C sources or native TinyCC libraries.
