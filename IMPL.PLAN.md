@@ -3,7 +3,7 @@
 ## Dashboard
 
 ```text
-Overall: 48/48
+Overall: 49/51
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
@@ -11,15 +11,16 @@ Overall: 48/48
 [DONE]       [12/12] 4. Lowering and native target backends
 [DONE]       [15/15] 5. Tooling, integration and quality
 [DONE]       [3/3] 6. Runtime, SDK and platform ABI
+[IN_PROGRESS] [1/3] 7. Legacy C artifact quarantine and final pure-JVM cleanup
 
 Current task:
-none — pure Kotlin/JVM migration and final repository audit are complete
+17.2 — move residual C/native artifacts into `legacy-c/`
 
 Current milestone:
-complete — migration milestones M1–M6
+M7 — legacy C artifact quarantine and final pure-JVM cleanup
 ```
 
-Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
+Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13; M7 = task 17. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
@@ -131,6 +132,12 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 16.1 Switch default build, tests, examples, CI configuration, and contributor instructions to Gradle/Kotlin/JVM. — `DONE` (see `README`, `.github/workflows/build.yml`, and Gradle/JaCoCo configuration; pre-existing `AGENTS.md` was preserved per repository instruction)
 - [x] 16.2 Update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata. — `DONE` (see `ARCHITECTURE.md`, `MIGRATION.md`, `RELEASE-METADATA.md`, and `NOTICE`)
 - [x] 16.3 Remove obsolete C build paths only after parity gates pass; perform a clean checkout build and final repository audit. — `DONE` (legacy C/source/header/Make/configure paths removed; `./gradlew clean check` passed all 101 tests; `verifyPureKotlinArtifact` passed; tracked-source audit found no C/native build paths)
+
+### 17. Legacy C artifact quarantine and final pure-JVM cleanup — `IN_PROGRESS` (1/3)
+
+- [x] 17.1 Inventory the working tree for residual C sources, headers, native binaries, generated C build files, and associated directories while explicitly preserving `tests/`. — `DONE` (no tracked C sources remain; ignored native artifacts and empty legacy directories were identified)
+- [ ] 17.2 Move residual C/native artifacts and associated legacy directories into `legacy-c/`, without moving or deleting `tests/`. — `TODO`
+- [ ] 17.3 Document the quarantine boundary and verify the Gradle build, test suite, and pure Kotlin/JVM artifact audit after cleanup. — `TODO`
 
 ## Completion Gate
 
