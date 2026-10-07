@@ -519,12 +519,42 @@ class ExpressionSemanticAnalyzer(
             }
             val floatingRank = maxOf(leftRealRank, rightRealRank)
             if (floatingRank > 0) return realType(floatingRank)
-            val rank = maxOf(rank(left.kind), rank(right.kind))
-            val unsigned = isUnsigned(left.kind) || isUnsigned(right.kind)
-            return CType.Primitive(if (unsigned) unsignedKind(rank) else signedKind(rank))
+            return usualIntegerType(left.kind, right.kind)
         }
         return CTypes.int
     }
+
+    private fun usualIntegerType(left: PrimitiveKind, right: PrimitiveKind): CType {
+        val leftPromoted = integerPromotion(left)
+        val rightPromoted = integerPromotion(right)
+        val leftRank = rank(leftPromoted)
+        val rightRank = rank(rightPromoted)
+        val leftUnsigned = isUnsigned(leftPromoted)
+        val rightUnsigned = isUnsigned(rightPromoted)
+        val result = when {
+            leftUnsigned == rightUnsigned -> if (leftRank >= rightRank) leftPromoted else rightPromoted
+            leftUnsigned && leftRank >= rightRank -> leftPromoted
+            rightUnsigned && rightRank >= leftRank -> rightPromoted
+            leftUnsigned -> signedOrUnsignedForMixed(leftPromoted, rightPromoted)
+            else -> signedOrUnsignedForMixed(rightPromoted, leftPromoted)
+        }
+        return CType.Primitive(result)
+    }
+
+    /** Selects the result for (unsigned lower rank, signed higher rank). */
+    private fun signedOrUnsignedForMixed(unsignedType: PrimitiveKind, signedType: PrimitiveKind): PrimitiveKind =
+        if (integerBitWidth(signedType) > integerBitWidth(unsignedType)) signedType
+        else unsignedKind(rank(signedType))
+
+    private fun integerPromotion(kind: PrimitiveKind): PrimitiveKind {
+        if (rank(kind) >= rank(PrimitiveKind.INT)) return kind
+        val sourceBits = integerBitWidth(kind)
+        val intBits = integerBitWidth(PrimitiveKind.INT)
+        return if (isUnsigned(kind) && sourceBits >= intBits) PrimitiveKind.UNSIGNED_INT else PrimitiveKind.INT
+    }
+
+    private fun integerBitWidth(kind: PrimitiveKind): Long =
+        (layout.sizeOf(CType.Primitive(kind)) ?: 4L) * 8
 
     private fun complexRank(kind: PrimitiveKind): Int = when (kind) {
         PrimitiveKind.FLOAT_COMPLEX -> 1

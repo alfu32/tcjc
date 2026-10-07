@@ -174,6 +174,28 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun appliesIntegerPromotionsAndSignedUnsignedRankRules() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("wideSigned", CTypes.long))
+        symbols.declare(ObjectDeclaration("smallUnsigned", CTypes.unsignedInt))
+        symbols.declare(ObjectDeclaration("longLongSigned", CTypes.longLong))
+        symbols.declare(ObjectDeclaration("longUnsigned", CTypes.unsignedLong))
+        symbols.declare(ObjectDeclaration("small", CTypes.unsignedShort))
+        symbols.declare(ObjectDeclaration("signedInt", CTypes.int))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val representable = analyzer.analyze(ExpressionParser(Lexer("wideSigned + smallUnsigned").tokenize()).parse())
+        val sameWidthUnsigned = analyzer.analyze(ExpressionParser(Lexer("longLongSigned + longUnsigned").tokenize()).parse())
+        val promoted = analyzer.analyze(ExpressionParser(Lexer("small + signedInt").tokenize()).parse())
+
+        assertEquals(CTypes.long, representable.type)
+        assertEquals(CTypes.unsignedLongLong, sameWidthUnsigned.type)
+        assertEquals(CTypes.int, promoted.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
     fun callsThroughFunctionPointerTypeNames() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)
