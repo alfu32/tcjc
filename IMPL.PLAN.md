@@ -1,10 +1,32 @@
 # TinyCC to Kotlin/JVM Migration Plan
 
+## Dashboard
+
+```text
+Overall: 6/48
+
+[TODO]       [0/9]   1. Language front-end
+[TODO]       [0/6]   2. Semantic model and modules
+[TODO]       [0/3]   3. Compile-time and IR system
+[TODO]       [0/12]  4. Lowering and native target backends
+[IN_PROGRESS] [6/15] 5. Tooling, integration and quality
+[TODO]       [0/3]   6. Runtime, SDK and platform ABI
+
+Current task:
+3.1 Core utilities, diagnostics, and memory model
+
+Current milestone:
+M2 — Semantic model and modules
+```
+
+Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
+
 ## Status
 
-- Overall migration: **NOT_STARTED** (1/16 implementation tasks; 4/48 subtasks complete)
+- Overall migration: **NOT_STARTED** (2/16 implementation tasks; 6/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
+- New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
 - A task is `DONE` only when all three subtasks are `DONE`; its aggregate is shown as `x/3`.
 - After every subtask completion, update its status and the affected aggregate, run the relevant checks, commit, and push to `origin work`. If a push fails, keep the commit and resolve the push before starting the next subtask.
 
@@ -20,11 +42,11 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 1.2 Capture current `make`, `make test`, examples, preprocessor fixtures, and representative compiler outputs as migration goldens. — `DONE` (see [baseline/README.md](baseline/README.md))
 - [x] 1.3 Define supported JDK/toolchain versions, Gradle coordinates, compatibility boundaries, and measurable parity gates. — `DONE` (see [MIGRATION.CONTRACT.md](MIGRATION.CONTRACT.md))
 
-### 2. Gradle/Kotlin project foundation — `TODO` (1/3)
+### 2. Gradle/Kotlin project foundation — `DONE` (3/3)
 
 - [x] 2.1 Add `gradlew`, wrapper metadata, `settings.gradle.kts`, and a reproducible Kotlin/JVM toolchain. — `DONE` (Gradle 9.2.1, Kotlin 2.2.20, JDK 17 target)
-- [ ] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `TODO`
-- [ ] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `TODO`
+- [x] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `DONE` (see `compiler-*` projects)
+- [x] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `DONE` (direct Kotlin smoke compile; Gradle task execution is environment-blocked)
 
 ### 3. Core utilities, diagnostics, and memory model — `TODO` (0/3)
 

@@ -15,3 +15,12 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "tinycc-jvm"
+
+include(
+    ":compiler-core",
+    ":compiler-backends",
+    ":compiler-runtime",
+    ":compiler-api",
+    ":compiler-cli",
+    ":compiler-tests",
+)
