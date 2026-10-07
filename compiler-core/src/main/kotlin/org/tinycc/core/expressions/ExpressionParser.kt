@@ -9,6 +9,7 @@ import org.tinycc.core.lexer.TokenKind
 import org.tinycc.core.statements.StatementParser
 import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
+import org.tinycc.core.types.ArrayBound
 import org.tinycc.core.types.PrimitiveKind
 import org.tinycc.core.types.TypeQualifiers
 
@@ -39,11 +40,30 @@ class ExpressionParser(
         val values = ArrayList<Initializer>()
         if (!at(TokenKind.RIGHT_BRACE)) {
             do {
-                values += parseInitializer()
+                values += parseDesignatedOrInitializer()
             } while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_BRACE))
         }
         expect(TokenKind.RIGHT_BRACE, "'}'")
         return Initializer.ListValue(values)
+    }
+
+    private fun parseDesignatedOrInitializer(): Initializer {
+        val designator = when {
+            match(TokenKind.DOT) != null -> {
+                val field = expect(TokenKind.IDENTIFIER, "designated field")
+                Designator.Field(field.lexeme)
+            }
+            match(TokenKind.LEFT_BRACKET) != null -> {
+                val index = parseExpression()
+                expect(TokenKind.RIGHT_BRACKET, "']'")
+                Designator.Index(index)
+            }
+            else -> null
+        }
+        return if (designator == null) parseInitializer() else {
+            expect(TokenKind.ASSIGN, "'='")
+            Initializer.Designated(designator, parseInitializer())
+        }
     }
 
     private fun parseAssignment(): Expression {
@@ -146,11 +166,18 @@ class ExpressionParser(
         val typeArguments = callee is Expression.Name && callee.identifier in setOf(
             "__builtin_types_compatible_p",
             "__builtin_va_arg",
+            "__builtin_offsetof",
         )
         val arguments = ArrayList<Expression>()
         if (!at(TokenKind.RIGHT_PAREN)) {
             do {
-                if (typeArguments && (callee as Expression.Name).identifier == "__builtin_va_arg" && arguments.isNotEmpty()) {
+                if (typeArguments && (callee as Expression.Name).identifier == "__builtin_offsetof" && arguments.isEmpty()) {
+                    val start = current()
+                    arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))
+                } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_offsetof" && arguments.size == 1) {
+                    val field = expect(TokenKind.IDENTIFIER, "field name")
+                    arguments += Expression.Name(field.lexeme, field.span)
+                } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_va_arg" && arguments.isNotEmpty()) {
                     val start = current()
                     arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))
                 } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_types_compatible_p") {
@@ -273,7 +300,7 @@ class ExpressionParser(
     private fun parseInitializerAfterOpenBrace(): Initializer {
         val values = ArrayList<Initializer>()
         if (!at(TokenKind.RIGHT_BRACE)) {
-            do values += parseInitializer() while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_BRACE))
+            do values += parseDesignatedOrInitializer() while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_BRACE))
         }
         expect(TokenKind.RIGHT_BRACE, "'}'")
         return Initializer.ListValue(values)
@@ -311,6 +338,22 @@ class ExpressionParser(
         var result: CType = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
         while (match(TokenKind.STAR) != null) {
             result = CTypes.pointer(result, parseQualifiers())
+        }
+        while (match(TokenKind.LEFT_BRACKET) != null) {
+            val bound = when {
+                match(TokenKind.RIGHT_BRACKET) != null -> ArrayBound.Unspecified
+                current().literal is LiteralValue.Integer -> {
+                    val length = (take().literal as LiteralValue.Integer).value.longValueExact()
+                    expect(TokenKind.RIGHT_BRACKET, "']'")
+                    ArrayBound.Constant(length)
+                }
+                else -> {
+                    val expression = parseExpression()
+                    expect(TokenKind.RIGHT_BRACKET, "']'")
+                    ArrayBound.Variable(expression.toString())
+                }
+            }
+            result = CType.Array(result, bound)
         }
         return result
     }

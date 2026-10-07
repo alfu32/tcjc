@@ -59,6 +59,12 @@ sealed interface SizeOperand {
 sealed interface Initializer {
     data class ExpressionValue(val expression: Expression) : Initializer
     data class ListValue(val values: List<Initializer>) : Initializer
+    data class Designated(val designator: Designator, val value: Initializer) : Initializer
+}
+
+sealed interface Designator {
+    data class Field(val name: String) : Designator
+    data class Index(val expression: Expression) : Designator
 }
 
 enum class UnaryOperator {

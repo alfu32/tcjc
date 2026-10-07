@@ -15,6 +15,8 @@ import org.tinycc.core.types.ArrayBound
 import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.PrimitiveKind
+import org.tinycc.core.types.TargetDataModels
+import org.tinycc.core.types.TypeLayout
 
 enum class ValueCategory { LVALUE, PRVALUE, FUNCTION_DESIGNATOR, INVALID }
 
@@ -28,6 +30,7 @@ data class TypedExpression(
 class ExpressionSemanticAnalyzer(
     private val diagnostics: DiagnosticEngine = DiagnosticEngine(),
     private val symbols: SymbolTable = SymbolTable(diagnostics),
+    private val layout: TypeLayout = TypeLayout(TargetDataModels.X86_64_SYSV),
 ) {
     fun analyze(expression: Expression): TypedExpression = when (expression) {
         is Expression.Name -> analyzeName(expression)
@@ -72,7 +75,7 @@ class ExpressionSemanticAnalyzer(
                     val tooMany = type.bound is ArrayBound.Constant && initializer.values.size > type.bound.length
                     if (tooMany) diagnostics.error(SourceLocation(), "too many initializers for array")
                     initializer.values.take(type.bound.boundAsCount(initializer.values.size)).all {
-                        analyzeInitializer(it, type.element)
+                        analyzeInitializer(it, if (it is Initializer.Designated) expected else type.element)
                     } && !tooMany
                 }
                 is CType.Record -> {
@@ -80,7 +83,7 @@ class ExpressionSemanticAnalyzer(
                         diagnostics.error(SourceLocation(), "too many initializers for record")
                         false
                     } else initializer.values.mapIndexed { index, value ->
-                        analyzeInitializer(value, type.fields[index].type)
+                        analyzeInitializer(value, if (value is Initializer.Designated) expected else type.fields[index].type)
                     }.all { it }
                 }
                 else -> if (initializer.values.size == 1) {
@@ -91,6 +94,29 @@ class ExpressionSemanticAnalyzer(
                 }
             }
         }
+        is Initializer.Designated -> {
+            val target = designatedType(expected, initializer.designator)
+            if (target == null) {
+                diagnostics.error(SourceLocation(), "designator does not match initializer type")
+                false
+            } else {
+                val validIndex = when (val designator = initializer.designator) {
+                    is org.tinycc.core.expressions.Designator.Field -> true
+                    is org.tinycc.core.expressions.Designator.Index -> {
+                        val index = analyze(designator.expression)
+                        isInteger(canonical(decay(index)))
+                    }
+                }
+                validIndex && analyzeInitializer(initializer.value, target)
+            }
+        }
+    }
+
+    private fun designatedType(type: CType, designator: org.tinycc.core.expressions.Designator): CType? = when (designator) {
+        is org.tinycc.core.expressions.Designator.Field ->
+            (canonical(type) as? CType.Record)?.fields?.firstOrNull { it.name == designator.name }?.type
+        is org.tinycc.core.expressions.Designator.Index ->
+            (canonical(type) as? CType.Array)?.element
     }
 
     private fun analyzeName(expression: Expression.Name): TypedExpression {
@@ -286,6 +312,15 @@ class ExpressionSemanticAnalyzer(
             if (result == null) invalid(expression, "$name requires a type name") else typed(expression, result.type)
         }
         "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy" -> typed(expression, CTypes.void)
+        "__builtin_offsetof" -> {
+            requireArgumentCount(expression, 2, name)
+            val record = (expression.arguments.getOrNull(0) as? Expression.TypeOperand)?.type?.let(::canonical)
+            val fieldName = (expression.arguments.getOrNull(1) as? Expression.Name)?.identifier
+            val field = (record as? CType.Record)?.fields?.firstOrNull { it.name == fieldName }
+            val fieldLayout = if (field != null) layout.recordLayout(record)?.fields?.firstOrNull { it.name == fieldName } else null
+            if (field == null || fieldLayout == null) invalid(expression, "$name requires a known record field")
+            else typed(expression, CTypes.unsignedLong)
+        }
         "__builtin_frame_address", "__builtin_return_address" -> {
             requireArgumentCount(expression, 1, name)
             expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name level must be an integer") }

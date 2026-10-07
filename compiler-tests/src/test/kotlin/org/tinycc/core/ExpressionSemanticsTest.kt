@@ -4,6 +4,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.tinycc.core.diagnostics.DiagnosticEngine
+import org.tinycc.core.diagnostics.SourceLocation
+import org.tinycc.core.diagnostics.SourceSpan
+import org.tinycc.core.constants.ConstantEvaluator
+import org.tinycc.core.constants.ConstantValue
+import org.tinycc.core.expressions.Expression
 import org.tinycc.core.expressions.ExpressionParser
 import org.tinycc.core.lexer.Lexer
 import org.tinycc.core.semantics.ExpressionSemanticAnalyzer
@@ -13,6 +18,8 @@ import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.FunctionDeclaration
 import org.tinycc.core.types.ObjectDeclaration
+import org.tinycc.core.types.Field
+import org.tinycc.core.types.RecordKind
 import org.tinycc.core.types.TypeQualifiers
 
 class ExpressionSemanticsTest {
@@ -102,6 +109,46 @@ class ExpressionSemanticsTest {
         assertEquals(CTypes.long, vaArg.type)
         assertEquals(CTypes.int, atomic.type)
         assertEquals(CTypes.pointer(CTypes.void), labelAddress.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
+    fun validatesDesignatedInitializersAndConstantPlacement() {
+        val diagnostics = DiagnosticEngine()
+        val evaluator = org.tinycc.core.constants.ConstantEvaluator(diagnostics)
+        val initializer = ExpressionParser(Lexer("{ [2] = 4, 1 }").tokenize()).parseInitializer()
+        val array = CTypes.arrayOf(CTypes.int, 4)
+        val result = evaluator.evaluateInitializer(initializer, array)
+
+        val values = kotlin.test.assertIs<org.tinycc.core.constants.ConstantValue.Aggregate>(result).values
+        assertEquals(4, values.size)
+        assertTrue(values[0] is org.tinycc.core.constants.ConstantValue.Zero)
+        assertEquals(java.math.BigInteger.valueOf(4), kotlin.test.assertIs<org.tinycc.core.constants.ConstantValue.Integer>(values[2]).value)
+        assertEquals(java.math.BigInteger.ONE, kotlin.test.assertIs<org.tinycc.core.constants.ConstantValue.Integer>(values[3]).value)
+
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, SymbolTable(diagnostics))
+        val compound = analyzer.analyze(ExpressionParser(Lexer("(int[3]){1, [2] = 3}").tokenize()).parse())
+        assertEquals(CTypes.arrayOf(CTypes.int, 3), compound.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
+    fun resolvesBuiltinOffsetofAgainstRecordLayout() {
+        val diagnostics = DiagnosticEngine()
+        val span = SourceSpan(SourceLocation(), SourceLocation())
+        val record = CType.Record(RecordKind.STRUCT, "Pair")
+        record.completeWith(listOf(Field("tag", CTypes.char), Field("value", CTypes.int)))
+        val call = Expression.Call(
+            Expression.Name("__builtin_offsetof", span),
+            listOf(Expression.TypeOperand(record, span), Expression.Name("value", span)),
+            span,
+        )
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, SymbolTable(diagnostics))
+        val result = analyzer.analyze(call)
+        val folded = ConstantEvaluator(diagnostics).evaluate(call)
+
+        assertEquals(CTypes.unsignedLong, result.type)
+        assertEquals(java.math.BigInteger.valueOf(4), kotlin.test.assertIs<ConstantValue.Integer>(folded).value)
         assertEquals(0, diagnostics.errorCount)
     }
 }

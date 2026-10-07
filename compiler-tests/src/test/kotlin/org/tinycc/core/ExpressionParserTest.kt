@@ -38,6 +38,12 @@ class ExpressionParserTest {
         val literal = assertIs<Expression.CompoundLiteral>(compound)
         val values = assertIs<Initializer.ListValue>(literal.initializer).values
         assertEquals(2, values.size)
+
+        val arrayLiteral = assertIs<Expression.CompoundLiteral>(
+            ExpressionParser(Lexer("(int[3]){1, [2] = 3}").tokenize()).parse(),
+        )
+        val designated = assertIs<Initializer.ListValue>(arrayLiteral.initializer).values[1]
+        assertIs<Initializer.Designated>(designated)
     }
 
     @Test

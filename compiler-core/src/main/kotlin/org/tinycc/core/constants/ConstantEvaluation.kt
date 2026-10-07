@@ -43,7 +43,8 @@ class ConstantEvaluator(
         is Expression.Floating -> parseFloating(expression.raw)?.let(ConstantValue::Floating)
             ?: notConstant(expression, "invalid floating constant")
         is Expression.Name, is Expression.StringLiteral -> ConstantValue.NotConstant
-        is Expression.Invalid, is Expression.Call, is Expression.Index, is Expression.Member -> ConstantValue.NotConstant
+        is Expression.Invalid, is Expression.Index, is Expression.Member -> ConstantValue.NotConstant
+        is Expression.Call -> evaluateCall(expression)
         is Expression.CompoundLiteral -> ConstantValue.NotConstant
         is Expression.Assignment -> notConstant(expression, "assignment is not a constant expression")
         is Expression.Cast -> cast(expression.type, evaluate(expression.operand), expression)
@@ -84,14 +85,7 @@ class ConstantEvaluator(
                         diagnostics.error(SourceLocation(), "too many initializers for array")
                         return ConstantValue.NotConstant
                     }
-                    val values = initializer.values.mapIndexed { index, value ->
-                        evaluateInitializer(value, elementTypes!![index])
-                    }.toMutableList()
-                    while ((aggregate !is CType.Array && values.size < elementTypes!!.size) ||
-                        (aggregate is CType.Array && aggregate.bound is ArrayBound.Constant && values.size < aggregate.bound.length)) {
-                        values += ConstantValue.Zero
-                    }
-                    ConstantValue.Aggregate(values)
+                    evaluateAggregateInitializer(initializer.values, expected, elementTypes!!)
                 } else if (initializer.values.size == 1) {
                     evaluateInitializer(initializer.values.single(), expected)
                 } else {
@@ -99,7 +93,54 @@ class ConstantEvaluator(
                     ConstantValue.NotConstant
                 }
             }
+            is org.tinycc.core.expressions.Initializer.Designated -> {
+                val target = designatedType(expected, initializer.designator)
+                if (target == null) {
+                    diagnostics.error(SourceLocation(), "designator does not match initializer type")
+                    ConstantValue.NotConstant
+                } else evaluateInitializer(initializer.value, target)
+            }
         }
+    }
+
+    private fun evaluateAggregateInitializer(
+        initializers: List<org.tinycc.core.expressions.Initializer>,
+        expected: CType,
+        elementTypes: List<CType>,
+    ): ConstantValue {
+        val values = MutableList<ConstantValue>(elementTypes.size) { ConstantValue.Zero }
+        var next = 0
+        for (initializer in initializers) {
+            val designated = initializer as? org.tinycc.core.expressions.Initializer.Designated
+            val candidateIndex = if (designated == null) next else designatedIndex(expected, designated.designator)
+            if (candidateIndex == null || candidateIndex !in values.indices) {
+                diagnostics.error(SourceLocation(), "designator does not match initializer type")
+                return ConstantValue.NotConstant
+            }
+            val index = candidateIndex
+            val targetType = if (designated == null) elementTypes.getOrNull(index) else designatedType(expected, designated.designator)
+            if (targetType == null) {
+                diagnostics.error(SourceLocation(), "designator does not match initializer type")
+                return ConstantValue.NotConstant
+            }
+            val valueInitializer = designated?.value ?: initializer
+            values[index] = evaluateInitializer(valueInitializer, targetType)
+            next = index + 1
+        }
+        return ConstantValue.Aggregate(values)
+    }
+
+    private fun designatedIndex(type: CType, designator: org.tinycc.core.expressions.Designator): Int? = when (designator) {
+        is org.tinycc.core.expressions.Designator.Field -> (canonical(type) as? CType.Record)?.fields?.indexOfFirst { it.name == designator.name }?.takeIf { it >= 0 }
+        is org.tinycc.core.expressions.Designator.Index -> {
+            val value = evaluate(designator.expression) as? ConstantValue.Integer ?: return null
+            value.value.toInt()
+        }
+    }
+
+    private fun designatedType(type: CType, designator: org.tinycc.core.expressions.Designator): CType? = when (designator) {
+        is org.tinycc.core.expressions.Designator.Field -> (canonical(type) as? CType.Record)?.fields?.firstOrNull { it.name == designator.name }?.type
+        is org.tinycc.core.expressions.Designator.Index -> (canonical(type) as? CType.Array)?.element
     }
 
     private fun evaluateUnary(expression: Expression.Unary): ConstantValue {
@@ -231,6 +272,42 @@ class ConstantEvaluator(
             ?: expression.associations.firstOrNull { it.type == null }
         return selected?.let { evaluate(it.expression) }
             ?: notConstant(expression, "_Generic has no matching association")
+    }
+
+    private fun evaluateCall(expression: Expression.Call): ConstantValue {
+        val name = (expression.callee as? Expression.Name)?.identifier ?: return ConstantValue.NotConstant
+        return when (name) {
+            "__builtin_constant_p" -> {
+                if (expression.arguments.size != 1) notConstant(expression, "$name expects one argument")
+                else bool(evaluate(expression.arguments.single()) !is ConstantValue.NotConstant)
+            }
+            "__builtin_choose_expr" -> {
+                if (expression.arguments.size != 3) notConstant(expression, "$name expects three arguments")
+                else when (val condition = evaluate(expression.arguments[0])) {
+                    is ConstantValue.Integer -> evaluate(expression.arguments[if (condition.value.signum() != 0) 1 else 2])
+                    else -> notConstant(expression, "$name requires an integer constant condition")
+                }
+            }
+            "__builtin_types_compatible_p" -> {
+                if (expression.arguments.size != 2) notConstant(expression, "$name expects two type names")
+                else {
+                    val left = expression.arguments[0] as? Expression.TypeOperand
+                    val right = expression.arguments[1] as? Expression.TypeOperand
+                    if (left == null || right == null) notConstant(expression, "$name requires two type names")
+                    else bool(CTypes.compatible(left.type, right.type))
+                }
+            }
+            "__builtin_offsetof" -> {
+                val record = (expression.arguments.getOrNull(0) as? Expression.TypeOperand)?.type?.let(::canonical)
+                val fieldName = (expression.arguments.getOrNull(1) as? Expression.Name)?.identifier
+                val layoutField = (record as? CType.Record)?.let { recordType ->
+                    layout.recordLayout(recordType)?.fields?.firstOrNull { it.name == fieldName }
+                }
+                layoutField?.let { integer(BigInteger.valueOf(it.offset)) }
+                    ?: notConstant(expression, "$name requires a known record field")
+            }
+            else -> ConstantValue.NotConstant
+        }
     }
 
     private fun initializerElementTypes(type: CType, count: Int): List<CType>? = when (val canonical = canonical(type)) {

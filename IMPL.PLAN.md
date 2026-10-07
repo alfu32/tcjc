@@ -91,7 +91,7 @@ run the relevant checks, commit using Conventional Commits, and push to
   C/assembly fixtures and `pp-counter.c`, including diagnostics for macro
   redefinition; the complete focused preprocessor suite passes)
 
-### 3. Types, declarations, symbols, and constants — `IN_PROGRESS` (2/3)
+### 3. Types, declarations, symbols, and constants — `DONE` (3/3)
 
 - [x] 3.1 Implement all scalar, pointer, array, function, record, enum,
   typedef, VLA, qualifier, attribute, and compatible-type rules. — `DONE`
@@ -119,9 +119,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   `__builtin_choose_expr`, `__builtin_constant_p`, `__builtin_expect`, frame/
   return-address, `alloca`, `unreachable`, type-compatible and variadic type
   queries, label addresses, and atomic builtin families; remaining
-  `__builtin_offsetof`, inline-asm expressions/statements, target-specific
-  atomic and variadic lowering, and full declarator-aware expression coverage
-  remain open)
+  designated initializer AST/validation and aggregate placement, abstract
+  array compound literals, and `__builtin_offsetof` are now covered; inline-asm
+  expressions/statements, target-specific atomic and variadic lowering, and
+  full declarator-aware expression coverage remain open)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`
