@@ -21,3 +21,5 @@ The Makefile lists native/cross targets `i386`, `x86_64`, `i386-win32`, `x86_64-
 ## Outputs and tests
 
 The implementation emits ELF, binary images, COFF, PE, and Mach-O outputs; loads archives, objects, shared libraries, DLLs, and linker scripts; and supports static/shared libraries plus in-memory execution. Regression coverage is in `tests/`, `tests/pp`, `tests/tests2`, `examples/`, and Windows batch tests. The primary gates are `make test`, the preprocessor expected files, ABI/assembler tests, runtime/linker tests, and cross-target builds.
+
+The passing host build/test run and reproducible representative outputs are recorded in [`baseline/README.md`](baseline/README.md), with example, preprocessor, and ELF-header goldens under `baseline/`.

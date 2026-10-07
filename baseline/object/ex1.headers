@@ -1,0 +1,7 @@
+file: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), not stripped
+class: ELF64
+data: 2's complement, little endian
+type: REL (Relocatable file)
+machine: Advanced Micro Devices X86-64
+entry point: 0x0
+program headers: 0

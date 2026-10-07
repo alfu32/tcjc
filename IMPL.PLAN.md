@@ -2,7 +2,7 @@
 
 ## Status
 
-- Overall migration: **NOT_STARTED** (0/16 implementation tasks; 1/48 subtasks complete)
+- Overall migration: **NOT_STARTED** (0/16 implementation tasks; 2/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - A task is `DONE` only when all three subtasks are `DONE`; its aggregate is shown as `x/3`.
@@ -14,10 +14,10 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 
 ## Implementation Tasks
 
-### 1. Baseline and migration contract — `TODO` (1/3)
+### 1. Baseline and migration contract — `TODO` (2/3)
 
 - [x] 1.1 Inventory CLI options, `libtcc` entry points, source modules, target architectures, object formats, and platform-specific behavior. — `DONE` (see [MIGRATION.BASELINE.md](MIGRATION.BASELINE.md))
-- [ ] 1.2 Capture current `make`, `make test`, examples, preprocessor fixtures, and representative compiler outputs as migration goldens. — `TODO`
+- [x] 1.2 Capture current `make`, `make test`, examples, preprocessor fixtures, and representative compiler outputs as migration goldens. — `DONE` (see [baseline/README.md](baseline/README.md))
 - [ ] 1.3 Define supported JDK/toolchain versions, Gradle coordinates, compatibility boundaries, and measurable parity gates. — `TODO`
 
 ### 2. Gradle/Kotlin project foundation — `TODO` (0/3)
