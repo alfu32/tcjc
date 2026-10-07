@@ -3,27 +3,27 @@
 ## Dashboard
 
 ```text
-Overall: 14/48
+Overall: 15/48
 
-[DONE]       [3/9]   1. Language front-end
-[IN_PROGRESS] [5/6]  2. Semantic model and modules
+[IN_PROGRESS] [3/9]  1. Language front-end
+[DONE]       [6/6]   2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-5.3 Type compatibility, layout, ABI metadata, and declaration diagnostics
+6.1 Expression parsing and compile-time expression model
 
 Current milestone:
-M2 — Semantic model and modules
+M1 — Language front-end
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (4/16 implementation tasks; 14/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (5/16 implementation tasks; 15/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -60,11 +60,11 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 4.2 Port macro definitions/expansion, conditional compilation, variadic macros, and predefined macros. — `DONE` (see `compiler-core/.../preprocessor` and `compiler-tests/.../PreprocessorTest.kt`)
 - [x] 4.3 Port include resolution, pragma handling, line directives, and all `tests/pp` expected-output cases. — `DONE` (see `compiler-core/.../preprocessor` and `PreprocessorTest`)
 
-### 5. C types, symbols, and declarations — `IN_PROGRESS` (2/3)
+### 5. C types, symbols, and declarations — `DONE` (3/3)
 
 - [x] 5.1 Implement primitive, qualified, pointer, array, function, struct/union, enum, typedef, and variably modified types. — `DONE` (see `compiler-core/.../types` and `TypesTest`)
 - [x] 5.2 Port symbol scopes, namespaces, storage classes, linkage, visibility, and declaration merging. — `DONE` (see `compiler-core/.../symbols` and `SymbolsTest`)
-- [ ] 5.3 Add type compatibility, layout/alignment, ABI metadata, and diagnostics tests for declaration edge cases. — `TODO`
+- [x] 5.3 Add type compatibility, layout/alignment, ABI metadata, and diagnostics tests for declaration edge cases. — `DONE` (see `compiler-core/.../types/Layout.kt` and `LayoutTest`)
 
 ### 6. Expressions and constant evaluation — `TODO` (0/3)
 
