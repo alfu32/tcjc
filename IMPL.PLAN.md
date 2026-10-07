@@ -186,8 +186,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   and signed IMUL plus signed/unsigned DIV/IDIV operand encodings now have
   byte-exact Kotlin coverage; integer comparisons are zero-extended and
   floating equality/inequality/ordered relations guard UCOMI parity correctly;
-  fixed-register division lowering, external symbol relocations, full tables,
-  operand widths, and addressing support remain open)
+  CALL now produces ELF PC32/PLT32 relocations for external symbols; fixed-
+  register division lowering, other symbol relocations, full tables, operand
+  widths, and addressing support remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`
 

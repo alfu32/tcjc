@@ -6,6 +6,15 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.tinycc.backends.x86.X86Instruction
+import org.tinycc.backends.elf.ElfMachine
+import org.tinycc.backends.elf.ElfObjectDescription
+import org.tinycc.backends.elf.ElfObjectWriter
+import org.tinycc.backends.elf.ElfRelocationSpec
+import org.tinycc.backends.elf.ElfSectionFlags
+import org.tinycc.backends.elf.ElfSectionSpec
+import org.tinycc.backends.elf.ElfSectionType
+import org.tinycc.backends.elf.ElfSymbolSpec
+import org.tinycc.backends.x86.X86RelocationSyntax
 import org.tinycc.backends.x86.X86LinuxElf64
 import org.tinycc.backends.x86.X86MachineCodeEncoder
 import org.tinycc.backends.x86.X86MachineBlock
@@ -225,6 +234,48 @@ class X86MachineCodeTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun emitsElfPcRelativeAndPltRelocationsForExternalCalls() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val encoded = x64.encodeRelocatable(
+            listOf(
+                X86Instruction(X86Opcode.CALL, listOf(X86Operand.Symbol("external", X86RelocationSyntax.PLT32))),
+            ),
+            section = ".text.hot",
+        )
+        assertContentEquals(byteArrayOf(0xE8.toByte(), 0, 0, 0, 0), encoded.bytes)
+        assertEquals(".text.hot", encoded.section)
+        assertEquals(listOf(ElfRelocationSpec(".text.hot", 1, 4, "external", addend = -4)), encoded.relocations)
+
+        val direct = x64.encodeRelocatable(
+            listOf(X86Instruction(X86Opcode.CALL, listOf(X86Operand.Symbol("direct")))),
+        )
+        assertEquals(ElfRelocationSpec(".text", 1, 2, "direct", addend = -4), direct.relocations.single())
+        val i386 = X86MachineCodeEncoder(X86Mode.I386).encodeRelocatable(
+            listOf(X86Instruction(X86Opcode.CALL, listOf(X86Operand.Symbol("legacy", X86RelocationSyntax.PLT32)))),
+        )
+        assertEquals(ElfRelocationSpec(".text", 1, 4, "legacy", addend = -4), i386.relocations.single())
+
+        val objectBytes = ElfObjectWriter().write(
+            ElfObjectDescription(
+                machine = ElfMachine.X86_64,
+                sections = listOf(
+                    ElfSectionSpec(
+                        encoded.section,
+                        ElfSectionType.PROGBITS,
+                        flags = ElfSectionFlags.ALLOC or ElfSectionFlags.EXECINSTR,
+                        alignment = 16,
+                        data = encoded.bytes,
+                    ),
+                ),
+                symbols = listOf(ElfSymbolSpec("external")),
+                relocations = encoded.relocations,
+            ),
+        )
+        assertEquals(0x7F.toByte(), objectBytes[0])
+        assertEquals('E'.code.toByte(), objectBytes[1])
     }
 
     @Test

@@ -6,7 +6,14 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.io.path.createTempFile
+import org.tinycc.backends.elf.ElfRelocationSpec
 import org.tinycc.core.ir.IrRegister
+
+data class X86RelocatableCode(
+    val section: String,
+    val bytes: ByteArray,
+    val relocations: List<ElfRelocationSpec>,
+)
 
 /** Encodes the explicitly supported scalar x86 machine-instruction subset. */
 class X86MachineCodeEncoder(private val mode: X86Mode) {
@@ -78,17 +85,37 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
     )
 
     /** Encodes selected basic blocks, materializing each block name as a branch target. */
-    fun encode(function: X86MachineFunction): ByteArray = encode(
-        function.blocks.flatMap { block ->
-            listOf(X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label(block.name)))) + block.instructions
-        },
-    )
+    fun encode(function: X86MachineFunction): ByteArray = encode(instructions(function))
 
-    fun encode(instructions: List<X86Instruction>): ByteArray {
+    /** Encodes a function and returns ELF relocation records for supported external calls. */
+    fun encodeRelocatable(function: X86MachineFunction, section: String = ".text"): X86RelocatableCode =
+        encodeRelocatable(instructions(function), section)
+
+    /** Encodes instructions and returns ELF relocation records for supported external calls. */
+    fun encodeRelocatable(instructions: List<X86Instruction>, section: String = ".text"): X86RelocatableCode {
+        require(section.isNotBlank()) { "relocatable code section name must not be blank" }
+        val relocations = ArrayList<ElfRelocationSpec>()
+        val bytes = encodeInternal(instructions, section, relocations)
+        return X86RelocatableCode(section, bytes, relocations)
+    }
+
+    fun encode(instructions: List<X86Instruction>): ByteArray = encodeInternal(instructions, null, null)
+
+    private fun instructions(function: X86MachineFunction): List<X86Instruction> = function.blocks.flatMap { block ->
+        listOf(X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label(block.name)))) + block.instructions
+    }
+
+    private fun encodeInternal(
+        instructions: List<X86Instruction>,
+        relocationSection: String?,
+        relocations: MutableList<ElfRelocationSpec>?,
+    ): ByteArray {
         val output = ArrayList<Byte>()
         val labels = HashMap<String, Int>()
         val fixups = ArrayList<BranchFixup>()
-        instructions.forEach { instruction -> encodeInstruction(instruction, output, labels, fixups) }
+        instructions.forEach { instruction ->
+            encodeInstruction(instruction, output, labels, fixups, relocationSection, relocations)
+        }
         fixups.forEach { fixup ->
             val target = labels[fixup.label] ?: error("undefined x86 code label: ${fixup.label}")
             val displacement = target.toLong() - fixup.nextInstructionOffset
@@ -106,6 +133,8 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         output: MutableList<Byte>,
         labels: MutableMap<String, Int>,
         fixups: MutableList<BranchFixup>,
+        relocationSection: String?,
+        relocations: MutableList<ElfRelocationSpec>?,
     ) {
         if (instruction.opcode == X86Opcode.LABEL) {
             require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
@@ -118,6 +147,25 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         val conditionCode = conditionalBranchCodes[instruction.opcode]
         val directLocalCall = instruction.opcode == X86Opcode.CALL &&
             instruction.operands.singleOrNull() is X86Operand.Label
+        val directSymbolCall = instruction.opcode == X86Opcode.CALL &&
+            instruction.operands.singleOrNull() is X86Operand.Symbol
+        if (directSymbolCall) {
+            val symbol = instruction.operands.single() as X86Operand.Symbol
+            val relocationOutput = relocations
+                ?: throw IllegalArgumentException("external symbol calls require relocatable code output")
+            require(symbol.relocation == X86RelocationSyntax.DIRECT || symbol.relocation == X86RelocationSyntax.PLT32) {
+                "unsupported x86 call relocation: ${symbol.relocation}"
+            }
+            output += 0xE8.toByte()
+            val offset = output.size
+            repeat(4) { output += 0 }
+            val type = when (mode) {
+                X86Mode.I386 -> if (symbol.relocation == X86RelocationSyntax.PLT32) 4 else 2
+                X86Mode.X86_64 -> if (symbol.relocation == X86RelocationSyntax.PLT32) 4 else 2
+            }
+            relocationOutput += ElfRelocationSpec(relocationSection!!, offset.toLong(), type, symbol.name, addend = -4)
+            return
+        }
         if (instruction.opcode == X86Opcode.JMP || directLocalCall || conditionCode != null) {
             require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
                 "${instruction.opcode.name.lowercase()} requires one code-label operand"
