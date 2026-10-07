@@ -3,11 +3,11 @@
 ## Dashboard
 
 ```text
-Overall: 7/36
+Overall: 8/36
 
 [DONE]        [3/3]  1. Source preservation and parity rebaseline
 [DONE]        [3/3]  2. Lexer, tokens, and preprocessing
-[TODO]        [0/3]  3. Types, declarations, symbols, and constants
+[IN_PROGRESS] [2/3]  3. Types, declarations, symbols, and constants
 [TODO]        [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
 [TODO]        [0/3]  6. i386 and x86_64 instruction and ABI support
@@ -19,7 +19,7 @@ Overall: 7/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-3.2 — implement namespaces, scopes, linkage, storage classes, tentative definitions, visibility, declaration merging, and symbol lifetime
+3.3 — implement integer/floating/address constant evaluation, initializer folding, layout, alignment, bit-fields, and ABI metadata
 
 Current milestone:
 M1 — complete C type and declaration semantics
@@ -91,15 +91,17 @@ run the relevant checks, commit using Conventional Commits, and push to
   C/assembly fixtures and `pp-counter.c`, including diagnostics for macro
   redefinition; the complete focused preprocessor suite passes)
 
-### 3. Types, declarations, symbols, and constants — `IN_PROGRESS` (1/3)
+### 3. Types, declarations, symbols, and constants — `IN_PROGRESS` (2/3)
 
 - [x] 3.1 Implement all scalar, pointer, array, function, record, enum,
   typedef, VLA, qualifier, attribute, and compatible-type rules. — `DONE`
   (expanded the Kotlin type algebra, target-independent declarator rules,
   parameter adjustment, C attributes, calling conventions, completeness, and
   constraint validation with focused type/layout tests)
-- [ ] 3.2 Implement namespaces, scopes, linkage, storage classes, tentative
-  definitions, visibility, declaration merging, and symbol lifetime. — `TODO`
+- [x] 3.2 Implement namespaces, scopes, linkage, storage classes, tentative
+  definitions, visibility, declaration merging, and symbol lifetime. — `DONE`
+  (added linkage-aware block `extern` reuse, declaration history, tentative
+  definition finalization, namespace/storage diagnostics, and lifetime tests)
 - [ ] 3.3 Implement integer/floating/address constant evaluation, initializer
   folding, layout, alignment, bit-fields, and ABI metadata. — `TODO`
 

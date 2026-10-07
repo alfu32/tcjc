@@ -1,6 +1,7 @@
 package org.tinycc.core
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -77,5 +78,40 @@ class SymbolsTest {
 
         assertTrue(symbol.isDefined)
         assertEquals(Linkage.EXTERNAL, symbol.linkage)
+    }
+
+    @Test
+    fun reusesFileLinkageForBlockExternAndFinalizesTentativeDefinitions() {
+        val symbols = SymbolTable()
+        val tentative = symbols.declare(ObjectDeclaration("shared", CTypes.int))!!
+        symbols.enter(ScopeKind.BLOCK)
+        val blockExtern = symbols.declare(
+            ObjectDeclaration("shared", CTypes.int, DeclarationAttributes(storage = StorageClass.EXTERN)),
+        )
+        assertSame(tentative, blockExtern)
+        assertTrue(tentative.isTentative)
+        assertEquals(2, tentative.declarations.size)
+        assertEquals(ScopeKind.BLOCK, symbols.exit())
+
+        val finalized = symbols.finalizeFileScope()
+        assertEquals(listOf(tentative), finalized)
+        assertFalse(tentative.isTentative)
+        assertTrue(tentative.isDefined)
+    }
+
+    @Test
+    fun diagnosesInvalidNamespaceAndFileStorageCombinations() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(
+            ObjectDeclaration("register_at_file", CTypes.int, DeclarationAttributes(storage = StorageClass.REGISTER)),
+        )
+        symbols.declare(
+            ObjectDeclaration("label_at_file", CTypes.int),
+            namespace = SymbolNamespace.LABEL,
+        )
+
+        assertTrue(diagnostics.render().contains("file scope"))
+        assertTrue(diagnostics.render().contains("outside a function"))
     }
 }
