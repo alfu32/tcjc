@@ -45,7 +45,13 @@ sealed interface LiteralValue {
 
     data class Character(val value: Int, val wide: Boolean) : LiteralValue
 
-    data class StringValue(val value: String, val wide: Boolean, val prefix: String = "") : LiteralValue
+    data class StringValue(
+        val value: String,
+        val wide: Boolean,
+        val prefix: String = "",
+        /** Decoded target-independent units used by TinyCC's preprocessor token printer. */
+        val codeUnits: List<Int> = value.codePoints().toArray().toList(),
+    ) : LiteralValue
 }
 
 data class Token(

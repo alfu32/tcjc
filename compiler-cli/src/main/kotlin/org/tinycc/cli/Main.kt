@@ -159,12 +159,7 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
                     val literal = token.literal as? org.tinycc.core.lexer.LiteralValue.StringValue
                         ?: return@forEach
                     val wide = literal.prefix == "L"
-                    val characters = if (wide) {
-                        literal.value.codePoints().toArray().asIterable()
-                    } else {
-                        literal.value.encodeToByteArray().map { it.toInt() and 0xff }
-                    }
-                    val body = characters.joinToString(separator = "") { value -> escapeTinyCcStringCharacter(value) }
+                    val body = literal.codeUnits.joinToString(separator = "") { value -> escapeTinyCcStringCharacter(value) }
                     "${if (wide) "L" else ""}\"$body\""
                 }
                 else -> token.lexeme

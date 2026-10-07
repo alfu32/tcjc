@@ -256,6 +256,7 @@ class CliTest {
         source.writeText("""#define HEX_VALUE 0x2a
 int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; char quote = '\'';
 const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"é";
+const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn = "\u00e9"; const wchar_t *wide_byte = L"\xFF";
 """)
         val output = ByteArrayOutputStream()
         val errors = ByteArrayOutputStream()
@@ -271,6 +272,10 @@ const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"�
             assertTrue(text.contains("""quote: \\\" slash:"""), text)
             assertTrue(text.contains("""slash: \\\\ utf8: \303\251"""), text)
             assertTrue(text.contains("const wchar_t *wide = L\"\\351\";"), text)
+            assertTrue(text.contains("const char *escaped = \"\\377\";"), text)
+            assertTrue(text.contains("const char *truncated = \"\\000\";"), text)
+            assertTrue(text.contains("const char *ucn = \"\\303\\251\";"), text)
+            assertTrue(text.contains("const wchar_t *wide_byte = L\"\\377\";"), text)
             assertTrue(!text.contains("# 1 \""), text)
             assertEquals("", errors.toString())
         } finally {

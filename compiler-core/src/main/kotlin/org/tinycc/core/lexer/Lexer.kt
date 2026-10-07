@@ -171,8 +171,75 @@ class Lexer(
             val literal = LiteralValue.Character(value, wide)
             return token(TokenKind.CHARACTER_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
         }
-        val literal = LiteralValue.StringValue(decoded, wide, prefix)
+        val literal = LiteralValue.StringValue(
+            decoded,
+            wide,
+            prefix,
+            decodeStringUnits(body, prefix == "L", start),
+        )
         return token(TokenKind.STRING_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
+    }
+
+    private fun decodeStringUnits(body: String, wide: Boolean, start: Int): List<Int> = buildList {
+        var cursor = 0
+        fun appendValue(value: Int, universal: Boolean = false) {
+            if (wide) {
+                add(value)
+            } else if (universal) {
+                value.takeIf { it in 0..Character.MAX_CODE_POINT && it !in 0xD800..0xDFFF }
+                    ?.let { String(Character.toChars(it)) }
+                    ?.encodeToByteArray()
+                    ?.forEach { add(it.toInt() and 0xff) }
+                    ?: addAll("\uFFFD".encodeToByteArray().map { it.toInt() and 0xff })
+            } else {
+                add(value and 0xff)
+            }
+        }
+        while (cursor < body.length) {
+            val character = body[cursor++]
+            if (character != '\\') {
+                val codePoint = body.codePointAt(cursor - 1)
+                if (codePoint > Char.MAX_VALUE.code) cursor++
+                if (wide) add(codePoint) else {
+                    String(Character.toChars(codePoint)).encodeToByteArray().forEach { add(it.toInt() and 0xff) }
+                }
+                continue
+            }
+            if (cursor >= body.length) break
+            when (val escaped = body[cursor++]) {
+                'a' -> appendValue(7)
+                'b' -> appendValue(8)
+                'f' -> appendValue(12)
+                'n' -> appendValue(10)
+                'r' -> appendValue(13)
+                't' -> appendValue(9)
+                'v' -> appendValue(11)
+                '\\', '\'', '"', '?' -> appendValue(escaped.code)
+                '\n' -> Unit
+                '\r' -> if (cursor < body.length && body[cursor] == '\n') cursor++
+                'x', 'u', 'U' -> {
+                    val universal = escaped != 'x'
+                    val digits = if (escaped == 'u') 4 else if (escaped == 'U') 8 else Int.MAX_VALUE
+                    val number = readDigits(body, cursor, digits, 16, start, exact = universal)
+                    cursor = digitCursor
+                    appendValue(number, universal)
+                }
+                in '0'..'7' -> {
+                    var number = escaped - '0'
+                    var count = 1
+                    while (count < 3 && cursor < body.length && body[cursor] in '0'..'7') {
+                        number = number * 8 + body[cursor++].digitToInt()
+                        count++
+                    }
+                    appendValue(number)
+                }
+                'e' -> appendValue(27)
+                else -> {
+                    diagnostics.warning(location(start), "unknown escape sequence \\$escaped")
+                    appendValue(escaped.code)
+                }
+            }
+        }
     }
 
     private fun decodeEscapes(body: String, start: Int): String = buildString {
