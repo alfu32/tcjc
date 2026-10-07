@@ -77,4 +77,14 @@ class ExpressionParserTest {
         assertEquals(TokenKind.EOF, Lexer("").tokenize().last().kind)
         assertTrue(diagnostics.hasErrors)
     }
+
+    @Test
+    fun parsesGnuElvisComplexTypeNamesAndAdjacentStrings() {
+        val elvis = assertIs<Expression.Conditional>(ExpressionParser(Lexer("value ?: 1").tokenize()).parse())
+        assertIs<Expression.Name>(elvis.whenTrue)
+        val complex = assertIs<Expression.Cast>(ExpressionParser(Lexer("(_Complex float)value").tokenize()).parse())
+        assertEquals(org.tinycc.core.types.CTypes.floatComplex, complex.type)
+        val string = assertIs<Expression.StringLiteral>(ExpressionParser(Lexer("\"a\" \"b\"").tokenize()).parse())
+        assertEquals("ab", string.value)
+    }
 }

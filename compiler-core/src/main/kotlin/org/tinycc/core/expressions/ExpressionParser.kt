@@ -76,7 +76,7 @@ class ExpressionParser(
     private fun parseConditional(): Expression {
         val condition = parseBinary(0)
         if (match(TokenKind.QUESTION) == null) return condition
-        val whenTrue = parseExpression()
+        val whenTrue = if (at(TokenKind.COLON)) condition else parseExpression()
         expect(TokenKind.COLON, "':'")
         val whenFalse = parseAssignment()
         return Expression.Conditional(condition, whenTrue, whenFalse, condition.span.merge(whenFalse.span))
@@ -201,12 +201,25 @@ class ExpressionParser(
             TokenKind.CHARACTER_LITERAL -> Expression.Character((token.literal as LiteralValue.Character).value, token.span)
             TokenKind.STRING_LITERAL -> {
                 val value = token.literal as LiteralValue.StringValue
-                Expression.StringLiteral(value.value, value.wide, token.span)
+                var text = value.value
+                var wide = value.wide
+                var end = token.span
+                while (at(TokenKind.STRING_LITERAL)) {
+                    val adjacent = take()
+                    val next = adjacent.literal as LiteralValue.StringValue
+                    text += next.value
+                    wide = wide || next.wide
+                    end = end.merge(adjacent.span)
+                }
+                Expression.StringLiteral(text, wide, end)
             }
             TokenKind.LEFT_PAREN -> parseParenthesizedOrCast(token)
             TokenKind.ALIGNOF -> parseAlignOf(token)
             TokenKind.TYPEOF -> parseTypeOf(token)
             TokenKind.GENERIC -> parseGenericSelection(token)
+            TokenKind.NAN -> Expression.Floating("NAN", token.span)
+            TokenKind.SNAN -> Expression.Floating("SNAN", token.span)
+            TokenKind.INF -> Expression.Floating("INF", token.span)
             else -> {
                 error(token, "expression expected")
                 Expression.Invalid(token.span)
@@ -314,6 +327,14 @@ class ExpressionParser(
             TokenKind.BOOL -> CTypes.bool
             TokenKind.FLOAT -> CTypes.float
             TokenKind.DOUBLE -> CTypes.double
+            TokenKind.COMPLEX -> when {
+                match(TokenKind.FLOAT) != null -> CTypes.floatComplex
+                match(TokenKind.LONG) != null -> {
+                    expect(TokenKind.DOUBLE, "'double'")
+                    CTypes.longDoubleComplex
+                }
+                else -> CTypes.doubleComplex
+            }
             TokenKind.SHORT -> CType.Primitive(PrimitiveKind.SHORT)
             TokenKind.LONG -> when {
                 match(TokenKind.LONG) != null -> CType.Primitive(PrimitiveKind.LONG_LONG)
@@ -378,7 +399,7 @@ class ExpressionParser(
 
     private fun isTypeStart(kind: TokenKind): Boolean = kind in setOf(
         TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT, TokenKind.FLOAT, TokenKind.DOUBLE,
-        TokenKind.SHORT, TokenKind.LONG, TokenKind.SIGNED, TokenKind.UNSIGNED, TokenKind.CONST,
+        TokenKind.SHORT, TokenKind.LONG, TokenKind.SIGNED, TokenKind.UNSIGNED, TokenKind.COMPLEX, TokenKind.CONST,
         TokenKind.VOLATILE, TokenKind.RESTRICT, TokenKind.ATOMIC,
     )
 

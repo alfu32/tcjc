@@ -76,6 +76,8 @@ class LayoutTest {
         assertEquals(4, flexibleLayout.size)
         assertEquals(16, layout.sizeOf(vector))
         assertEquals(16, layout.alignmentOf(vector))
+        assertEquals(16, layout.sizeOf(CTypes.doubleComplex))
+        assertEquals(8, layout.alignmentOf(CTypes.doubleComplex))
         assertEquals(TargetDataModels.I386_SYSV.architecture, AbiMetadataCatalog.I386_SYSV.architecture)
         assertEquals(TargetDataModels.ARM_EABI.pointerBytes, AbiMetadataCatalog.ARM_EABI.pointerBytes)
         assertEquals(16, AbiMetadataCatalog.ARM64_AAPCS.stackAlignment)

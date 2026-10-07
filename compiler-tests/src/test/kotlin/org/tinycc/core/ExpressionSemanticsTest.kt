@@ -151,4 +151,16 @@ class ExpressionSemanticsTest {
         assertEquals(java.math.BigInteger.valueOf(4), kotlin.test.assertIs<ConstantValue.Integer>(folded).value)
         assertEquals(0, diagnostics.errorCount)
     }
+
+    @Test
+    fun appliesComplexArithmeticPromotion() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("z", CTypes.doubleComplex))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+        val result = analyzer.analyze(ExpressionParser(Lexer("z + 1.0").tokenize()).parse())
+
+        assertEquals(CTypes.doubleComplex, result.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
 }

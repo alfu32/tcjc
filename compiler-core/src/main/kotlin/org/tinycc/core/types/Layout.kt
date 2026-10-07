@@ -231,9 +231,17 @@ class TypeLayout(private val model: TargetDataModel) {
         PrimitiveKind.FLOAT -> model.floatBytes
         PrimitiveKind.DOUBLE -> model.doubleBytes
         PrimitiveKind.LONG_DOUBLE -> model.longDoubleBytes
+        PrimitiveKind.FLOAT_COMPLEX -> model.floatBytes * 2
+        PrimitiveKind.DOUBLE_COMPLEX -> model.doubleBytes * 2
+        PrimitiveKind.LONG_DOUBLE_COMPLEX -> model.longDoubleBytes * 2
     }
 
-    private fun primitiveAlignment(kind: PrimitiveKind): Long = primitiveSize(kind).coerceAtMost(model.maxAlignment).coerceAtLeast(1)
+    private fun primitiveAlignment(kind: PrimitiveKind): Long = when (kind) {
+        PrimitiveKind.FLOAT_COMPLEX -> model.floatBytes.coerceAtMost(model.maxAlignment)
+        PrimitiveKind.DOUBLE_COMPLEX -> model.doubleBytes.coerceAtMost(model.maxAlignment)
+        PrimitiveKind.LONG_DOUBLE_COMPLEX -> model.longDoubleBytes.coerceAtMost(model.maxAlignment)
+        else -> primitiveSize(kind).coerceAtMost(model.maxAlignment)
+    }.coerceAtLeast(1)
 
     private fun alignUp(value: Long, alignment: Long): Long =
         if (alignment <= 1) value else (value + alignment - 1) / alignment * alignment

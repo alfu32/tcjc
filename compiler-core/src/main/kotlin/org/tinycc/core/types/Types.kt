@@ -17,6 +17,9 @@ enum class PrimitiveKind {
     FLOAT,
     DOUBLE,
     LONG_DOUBLE,
+    FLOAT_COMPLEX,
+    DOUBLE_COMPLEX,
+    LONG_DOUBLE_COMPLEX,
 }
 
 enum class RecordKind { STRUCT, UNION }
@@ -185,6 +188,9 @@ object CTypes {
     val unsignedLongLong = CType.Primitive(PrimitiveKind.UNSIGNED_LONG_LONG)
     val longLong = CType.Primitive(PrimitiveKind.LONG_LONG)
     val longDouble = CType.Primitive(PrimitiveKind.LONG_DOUBLE)
+    val floatComplex = CType.Primitive(PrimitiveKind.FLOAT_COMPLEX)
+    val doubleComplex = CType.Primitive(PrimitiveKind.DOUBLE_COMPLEX)
+    val longDoubleComplex = CType.Primitive(PrimitiveKind.LONG_DOUBLE_COMPLEX)
 
     fun annotated(base: CType, attributes: TypeAttributes): CType = when (base) {
         is CType.Qualified -> base.copy(attributes = base.attributes.merge(attributes))

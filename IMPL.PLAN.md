@@ -123,7 +123,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   array compound literals, and `__builtin_offsetof` are now covered; inline-asm
   templates/statements with constraint validation are now covered; target-
   specific atomic and variadic lowering, global asm, and full
-  declarator-aware expression coverage remain open)
+  declarator-aware expression coverage remain open; GNU elvis conditionals,
+  adjacent string concatenation, and complex scalar type parsing, promotion,
+  and layout are also covered)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

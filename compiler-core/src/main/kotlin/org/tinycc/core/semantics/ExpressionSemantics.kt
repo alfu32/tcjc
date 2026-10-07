@@ -406,6 +406,9 @@ class ExpressionSemanticAnalyzer(
 
     private fun commonArithmetic(left: CType, right: CType): CType {
         if (left is CType.Primitive && right is CType.Primitive) {
+            if (left.kind == PrimitiveKind.LONG_DOUBLE_COMPLEX || right.kind == PrimitiveKind.LONG_DOUBLE_COMPLEX) return CTypes.longDoubleComplex
+            if (left.kind == PrimitiveKind.DOUBLE_COMPLEX || right.kind == PrimitiveKind.DOUBLE_COMPLEX) return CTypes.doubleComplex
+            if (left.kind == PrimitiveKind.FLOAT_COMPLEX || right.kind == PrimitiveKind.FLOAT_COMPLEX) return CTypes.floatComplex
             if (left.kind == PrimitiveKind.LONG_DOUBLE || right.kind == PrimitiveKind.LONG_DOUBLE) return CType.Primitive(PrimitiveKind.LONG_DOUBLE)
             if (left.kind == PrimitiveKind.DOUBLE || right.kind == PrimitiveKind.DOUBLE) return CTypes.double
             if (left.kind == PrimitiveKind.FLOAT || right.kind == PrimitiveKind.FLOAT) return CTypes.float
