@@ -3,7 +3,7 @@
 ## Dashboard
 
 ```text
-Overall: 49/51
+Overall: 50/51
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
@@ -11,10 +11,10 @@ Overall: 49/51
 [DONE]       [12/12] 4. Lowering and native target backends
 [DONE]       [15/15] 5. Tooling, integration and quality
 [DONE]       [3/3] 6. Runtime, SDK and platform ABI
-[IN_PROGRESS] [1/3] 7. Legacy C artifact quarantine and final pure-JVM cleanup
+[IN_PROGRESS] [2/3] 7. Legacy C artifact quarantine and final pure-JVM cleanup
 
 Current task:
-17.2 — move residual C/native artifacts into `legacy-c/`
+17.3 — document the quarantine boundary and run final pure-JVM verification
 
 Current milestone:
 M7 — legacy C artifact quarantine and final pure-JVM cleanup
@@ -136,7 +136,7 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 ### 17. Legacy C artifact quarantine and final pure-JVM cleanup — `IN_PROGRESS` (1/3)
 
 - [x] 17.1 Inventory the working tree for residual C sources, headers, native binaries, generated C build files, and associated directories while explicitly preserving `tests/`. — `DONE` (no tracked C sources remain; ignored native artifacts and empty legacy directories were identified)
-- [ ] 17.2 Move residual C/native artifacts and associated legacy directories into `legacy-c/`, without moving or deleting `tests/`. — `TODO`
+- [x] 17.2 Move residual C/native artifacts and associated legacy directories into `legacy-c/`, without moving or deleting `tests/`. — `DONE` (objects, archives, executable, generated configuration/docs, runtime `lib/`, and empty legacy directories moved; `tests/` remains at the repository root)
 - [ ] 17.3 Document the quarantine boundary and verify the Gradle build, test suite, and pure Kotlin/JVM artifact audit after cleanup. — `TODO`
 
 ## Completion Gate
