@@ -331,7 +331,16 @@ class ExpressionSemanticAnalyzer(
         }
         "__builtin_frame_address", "__builtin_return_address" -> {
             requireArgumentCount(expression, 1, name)
-            expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name level must be an integer") }
+            expression.arguments.firstOrNull()?.let { level ->
+                if (!isInteger(canonical(decay(analyze(level))))) {
+                    error(level, "$name level must be an integer")
+                } else {
+                    val constant = ConstantEvaluator(diagnostics, symbols).evaluate(level) as? ConstantValue.Integer
+                    if (constant == null || constant.value.signum() < 0) {
+                        error(level, "$name level must be a nonnegative integer constant")
+                    }
+                }
+            }
             typed(expression, CTypes.pointer(CTypes.void))
         }
         "alloca", "__builtin_alloca" -> {

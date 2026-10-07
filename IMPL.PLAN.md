@@ -134,7 +134,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   constraints, and memory-order operand checks are now validated; variadic
   builtin arity, va_list lvalues, compatible va_copy operands, and va_arg result
   type constraints are now checked; duplicate and incompatible type specifiers
-  now diagnose instead of silently selecting a fallback type)
+  now diagnose instead of silently selecting a fallback type; frame and return
+  address builtins require nonnegative integer constant levels)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

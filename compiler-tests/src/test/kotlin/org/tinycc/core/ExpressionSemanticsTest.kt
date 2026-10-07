@@ -240,4 +240,16 @@ class ExpressionSemanticsTest {
         assertTrue(diagnostics.render().contains("expects 1 argument(s)"))
         assertTrue(diagnostics.render().contains("complete object type"))
     }
+
+    @Test
+    fun requiresNonnegativeConstantFrameAndReturnLevels() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("value", CTypes.int))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+        analyzer.analyze(ExpressionParser(Lexer("__builtin_frame_address(value)").tokenize()).parse())
+        analyzer.analyze(ExpressionParser(Lexer("__builtin_return_address(-1)").tokenize()).parse())
+
+        assertTrue(diagnostics.render().contains("level must be a nonnegative integer constant"))
+    }
 }
