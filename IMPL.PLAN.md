@@ -226,8 +226,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   source files aggregate in token/preprocess output modes and `-o -` routes
   output to stdout; default GCC, `-P`, and `-P1` preprocessing line-marker
   modes preserve source/include transitions; `-P10` converts integer tokens to
-  decimal, floating tokens to TinyCC placeholders, and canonical character
-  tokens; string token rendering and numeric edge-case parity for `-P10`,
+  decimal, floating tokens to TinyCC placeholders, and canonical character and
+  string tokens; escaped-byte/Unicode and numeric edge-case parity for `-P10`,
   multi-unit compilation/linking, remaining options, and full diagnostic parity
   remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,

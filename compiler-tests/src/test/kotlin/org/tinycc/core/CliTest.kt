@@ -255,6 +255,7 @@ class CliTest {
         val source = root.resolve("numbers.c")
         source.writeText("""#define HEX_VALUE 0x2a
 int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; char quote = '\'';
+const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"é";
 """)
         val output = ByteArrayOutputStream()
         val errors = ByteArrayOutputStream()
@@ -267,6 +268,9 @@ int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; ch
             assertTrue(text.contains("float f = <float>;"), text)
             assertTrue(text.contains("char nl = '\\n';"), text)
             assertTrue(text.contains("char quote = '\\'';"), text)
+            assertTrue(text.contains("""quote: \\\" slash:"""), text)
+            assertTrue(text.contains("""slash: \\\\ utf8: \303\251"""), text)
+            assertTrue(text.contains("const wchar_t *wide = L\"\\351\";"), text)
             assertTrue(!text.contains("# 1 \""), text)
             assertEquals("", errors.toString())
         } finally {

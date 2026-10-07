@@ -124,7 +124,8 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
     tokens.forEach { token ->
         if (token.kind != org.tinycc.core.lexer.TokenKind.INTEGER_LITERAL &&
             token.kind != org.tinycc.core.lexer.TokenKind.FLOAT_LITERAL &&
-            token.kind != org.tinycc.core.lexer.TokenKind.CHARACTER_LITERAL
+            token.kind != org.tinycc.core.lexer.TokenKind.CHARACTER_LITERAL &&
+            token.kind != org.tinycc.core.lexer.TokenKind.STRING_LITERAL
         ) return@forEach
         val start = token.span.start.offset
         val end = token.span.end.offset
@@ -154,10 +155,29 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
                     }
                     "${if (literal.wide) "L" else ""}'$escaped'"
                 }
+                org.tinycc.core.lexer.TokenKind.STRING_LITERAL -> {
+                    val literal = token.literal as? org.tinycc.core.lexer.LiteralValue.StringValue
+                        ?: return@forEach
+                    val wide = literal.prefix == "L"
+                    val characters = if (wide) {
+                        literal.value.codePoints().toArray().asIterable()
+                    } else {
+                        literal.value.encodeToByteArray().map { it.toInt() and 0xff }
+                    }
+                    val body = characters.joinToString(separator = "") { value -> escapeTinyCcStringCharacter(value) }
+                    "${if (wide) "L" else ""}\"$body\""
+                }
                 else -> token.lexeme
             },
         )
         cursor = end
     }
     append(source, cursor, source.length)
+}
+
+private fun escapeTinyCcStringCharacter(value: Int): String = when {
+    value == '"'.code || value == '\\'.code -> "\\${value.toChar()}"
+    value in 32..126 -> value.toChar().toString()
+    value == '\n'.code -> "\\n"
+    else -> "\\%03o".format(value and 0x1ff)
 }
