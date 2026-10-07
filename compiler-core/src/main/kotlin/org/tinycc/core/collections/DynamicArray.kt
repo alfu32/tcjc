@@ -48,8 +48,8 @@ class DynamicArray<T>(initialCapacity: Int = DEFAULT_CAPACITY) : Iterable<T> {
         size = 0
     }
 
-    fun toList(): List<T> = buildList(size) {
-        repeat(size) { add(this@DynamicArray[it]) }
+    fun toList(): List<T> = buildList(this@DynamicArray.size) {
+        repeat(this@DynamicArray.size) { add(this@DynamicArray[it]) }
     }
 
     override fun iterator(): Iterator<T> = object : Iterator<T> {
