@@ -10,6 +10,41 @@ import org.tinycc.core.ir.IrRegister
 
 /** Encodes the register/immediate subset used by the backend smoke and parity fixtures. */
 class X86MachineCodeEncoder(private val mode: X86Mode) {
+    private data class ZeroOperandEncoding(val bytes: List<Int>, val mode: X86Mode? = null)
+
+    private val zeroOperandEncodings = mapOf(
+        X86Opcode.RET to ZeroOperandEncoding(listOf(0xC3)),
+        X86Opcode.SYSCALL to ZeroOperandEncoding(listOf(0x0F, 0x05), X86Mode.X86_64),
+        X86Opcode.UD2 to ZeroOperandEncoding(listOf(0x0F, 0x0B)),
+        X86Opcode.NOP to ZeroOperandEncoding(listOf(0x90)),
+        X86Opcode.PAUSE to ZeroOperandEncoding(listOf(0xF3, 0x90)),
+        X86Opcode.FWAIT to ZeroOperandEncoding(listOf(0x9B)),
+        X86Opcode.CLC to ZeroOperandEncoding(listOf(0xF8)),
+        X86Opcode.CLD to ZeroOperandEncoding(listOf(0xFC)),
+        X86Opcode.CLI to ZeroOperandEncoding(listOf(0xFA)),
+        X86Opcode.CLTS to ZeroOperandEncoding(listOf(0x0F, 0x06)),
+        X86Opcode.CMC to ZeroOperandEncoding(listOf(0xF5)),
+        X86Opcode.STC to ZeroOperandEncoding(listOf(0xF9)),
+        X86Opcode.STD to ZeroOperandEncoding(listOf(0xFD)),
+        X86Opcode.STI to ZeroOperandEncoding(listOf(0xFB)),
+        X86Opcode.HLT to ZeroOperandEncoding(listOf(0xF4)),
+        X86Opcode.INT3 to ZeroOperandEncoding(listOf(0xCC)),
+        X86Opcode.INTO to ZeroOperandEncoding(listOf(0xCE), X86Mode.I386),
+        X86Opcode.CPUID to ZeroOperandEncoding(listOf(0x0F, 0xA2)),
+        X86Opcode.RDTSC to ZeroOperandEncoding(listOf(0x0F, 0x31)),
+        X86Opcode.RDMSR to ZeroOperandEncoding(listOf(0x0F, 0x32)),
+        X86Opcode.WRMSR to ZeroOperandEncoding(listOf(0x0F, 0x30)),
+        X86Opcode.RDPMC to ZeroOperandEncoding(listOf(0x0F, 0x33)),
+        X86Opcode.INVD to ZeroOperandEncoding(listOf(0x0F, 0x08)),
+        X86Opcode.WBINVD to ZeroOperandEncoding(listOf(0x0F, 0x09)),
+        X86Opcode.SYSRET to ZeroOperandEncoding(listOf(0x0F, 0x07), X86Mode.X86_64),
+        X86Opcode.MFENCE to ZeroOperandEncoding(listOf(0x0F, 0xAE, 0xF0), X86Mode.X86_64),
+        X86Opcode.LFENCE to ZeroOperandEncoding(listOf(0x0F, 0xAE, 0xE8), X86Mode.X86_64),
+        X86Opcode.SFENCE to ZeroOperandEncoding(listOf(0x0F, 0xAE, 0xF8), X86Mode.X86_64),
+        X86Opcode.ENDBR32 to ZeroOperandEncoding(listOf(0xF3, 0x0F, 0x1E, 0xFB), X86Mode.I386),
+        X86Opcode.ENDBR64 to ZeroOperandEncoding(listOf(0xF3, 0x0F, 0x1E, 0xFA), X86Mode.X86_64),
+    )
+
     fun encode(instructions: List<X86Instruction>): ByteArray {
         val output = ArrayList<Byte>()
         instructions.forEach { instruction -> encodeInstruction(instruction, output) }
@@ -17,13 +52,17 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
     }
 
     private fun encodeInstruction(instruction: X86Instruction, output: MutableList<Byte>) {
-        when (instruction.opcode) {
-            X86Opcode.RET -> output += 0xC3.toByte()
-            X86Opcode.SYSCALL -> {
-                require(mode == X86Mode.X86_64) { "syscall smoke encoding requires x86_64" }
-                output += 0x0F.toByte()
-                output += 0x05.toByte()
+        if (instruction.operands.isEmpty()) {
+            val encoding = zeroOperandEncodings[instruction.opcode]
+            if (encoding != null) {
+                require(encoding.mode == null || encoding.mode == mode) {
+                    "${instruction.opcode} is unavailable in $mode"
+                }
+                output += encoding.bytes.map(Int::toByte)
+                return
             }
+        }
+        when (instruction.opcode) {
             X86Opcode.MOV -> encodeMov(instruction.operands, output)
             X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01)
             X86Opcode.SUB -> encodeBinary(instruction.operands, output, 0x29)
