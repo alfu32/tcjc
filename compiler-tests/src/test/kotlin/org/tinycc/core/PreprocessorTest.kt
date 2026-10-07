@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.preprocessor.Preprocessor
 import org.tinycc.core.preprocessor.PreprocessorOptions
+import org.tinycc.core.preprocessor.PackAction
+import org.tinycc.core.preprocessor.PreprocessorPragma
 
 class PreprocessorTest {
     @Test
@@ -33,6 +35,72 @@ class PreprocessorTest {
         assertTrue(result.contains("const char *name = \"hello world\";"))
         assertTrue(result.contains("int b = xy;"))
         assertTrue(result.contains("a b, c;"))
+    }
+
+    @Test
+    fun respectsRawArgumentsAtPasteSitesAndErasesEmptyVariadicCommas() {
+        val result = Preprocessor(
+            """
+            #define VALUE 41
+            #define CAT(a, b) a ## b
+            #define USE(a, b) a + b
+            #define LOG(fmt, ...) fmt , ## __VA_ARGS__
+            int pasted = CAT(VALUE, suffix);
+            int expanded = USE(VALUE, VALUE);
+            int no_args = LOG(value);
+            int many_args = LOG(value, left, right);
+            """.trimIndent(),
+        ).process().text
+
+        assertTrue(result.contains("int pasted = VALUEsuffix;"))
+        assertTrue(result.contains("int expanded = 41 + 41;"))
+        assertTrue(result.contains("int no_args = value;"))
+        assertTrue(result.contains("int many_args = value"))
+        assertTrue(result.contains("left, right;"))
+    }
+
+    @Test
+    fun supportsNamedGnuVariadicsIncludeQueriesAndFullIfIntegerGrammar() {
+        val directory = Files.createTempDirectory("tinycc-pp-query")
+        Files.writeString(directory.resolve("present.h"), "int present;\n")
+        val result = Preprocessor(
+            """
+            #define GNU_COMMA(x, y...) x, ## y
+            #if defined(__has_include) && __has_include("present.h")
+            int found = ((010 == 8) && (0x10 == 16)) ? 1 : 0;
+            #endif
+            #if __has_include("missing.h")
+            int missing = 1;
+            #else
+            int missing = 0;
+            #endif
+            int args = GNU_COMMA(left, middle, right);
+            """.trimIndent(),
+            path = directory.resolve("main.c"),
+            options = PreprocessorOptions(includePaths = listOf(directory)),
+        ).process().text
+
+        assertTrue(result.contains("int found = ((010 == 8) && (0x10 == 16)) ? 1 : 0;"))
+        assertTrue(result.contains("int missing = 0;"))
+        assertTrue(result.contains("int args = left,middle, right;"))
+    }
+
+    @Test
+    fun recordsPackAndCommentPragmasForLaterSemanticAndLinkerStages() {
+        val result = Preprocessor(
+            """
+            #pragma pack(push, 1)
+            #pragma pack(pop)
+            #pragma comment(lib, "user32")
+            #pragma comment(option, "-subsystem windows")
+            int value;
+            """.trimIndent(),
+        ).process()
+
+        assertTrue(result.pragmas.contains(PreprocessorPragma.Pack(PackAction.PUSH_SET, 1)))
+        assertTrue(result.pragmas.contains(PreprocessorPragma.Pack(PackAction.POP)))
+        assertTrue(result.pragmas.contains(PreprocessorPragma.Library("user32")))
+        assertTrue(result.pragmas.contains(PreprocessorPragma.Option("-subsystem windows")))
     }
 
     @Test

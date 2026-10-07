@@ -21,7 +21,11 @@ data class PreprocessorOptions(
     val sourceLoader: SourceFileLoader = SourceFileLoader(),
 )
 
-data class PreprocessedSource(val text: String, val macros: List<MacroDefinition>)
+data class PreprocessedSource(
+    val text: String,
+    val macros: List<MacroDefinition>,
+    val pragmas: List<PreprocessorPragma> = emptyList(),
+)
 
 /** Handles macro definitions, expansion, and conditional compilation. */
 class Preprocessor private constructor(
@@ -53,7 +57,7 @@ class Preprocessor private constructor(
         val normalizedPath = path?.toAbsolutePath()?.normalize()
         if (normalizedPath != null && !state.activeFiles.add(normalizedPath)) {
             report(1, "recursive include of '$normalizedPath'")
-            return PreprocessedSource("", state.macros.snapshot())
+            return PreprocessedSource("", state.macros.snapshot(), state.pragmas.toList())
         }
         try {
             return processUnit()
@@ -86,7 +90,7 @@ class Preprocessor private constructor(
         if (conditionals.isNotEmpty()) {
             report(1, "unterminated conditional directive")
         }
-        return PreprocessedSource(output.toString(), state.macros.snapshot())
+        return PreprocessedSource(output.toString(), state.macros.snapshot(), state.pragmas.toList())
     }
 
     private fun processDirective(
@@ -104,7 +108,7 @@ class Preprocessor private constructor(
             }
             "ifdef", "ifndef" -> {
                 val parentActive = conditionals.isActive()
-                val defined = state.macros[directive.body.trim()] != null
+                val defined = isDefined(directive.body.trim())
                 val branch = parentActive && if (directive.name == "ifdef") defined else !defined
                 conditionals.addLast(ConditionalFrame(parentActive, branch, branch))
             }
@@ -163,13 +167,19 @@ class Preprocessor private constructor(
             }
             val parameterText = tail.substring(1, close).trim()
             val parameters = if (parameterText.isEmpty()) emptyList() else parameterText.split(',').map { it.trim() }
-            val variadic = parameters.lastOrNull() == "..." || parameters.lastOrNull()?.endsWith("...") == true
-            val normalized = parameters.dropLastWhile { it == "..." }.map { it.removeSuffix("...").trim() }
+            val lastParameter = parameters.lastOrNull()
+            val variadic = lastParameter == "..." || lastParameter?.endsWith("...") == true
+            val variadicName = when {
+                lastParameter == "..." -> "__VA_ARGS__"
+                lastParameter?.endsWith("...") == true -> lastParameter.removeSuffix("...").trim()
+                else -> null
+            }
+            val normalized = if (variadic) parameters.dropLast(1) else parameters
             if (normalized.any { !Regex("^[A-Za-z_$][A-Za-z0-9_$]*$").matches(it) }) {
                 report(line, "invalid macro parameter list")
                 return
             }
-            state.macros.define(MacroDefinition(name, normalized, tail.substring(close + 1).trim(), variadic))
+            state.macros.define(MacroDefinition(name, normalized, tail.substring(close + 1).trim(), variadic, variadicName))
         } else {
             state.macros.define(MacroDefinition(name, null, tail.trim()))
         }
@@ -224,9 +234,52 @@ class Preprocessor private constructor(
             trimmed == "once" -> path?.toAbsolutePath()?.normalize()?.let(state.onceFiles::add)
             trimmed.startsWith("push_macro") -> pragmaMacro(trimmed, line, push = true)
             trimmed.startsWith("pop_macro") -> pragmaMacro(trimmed, line, push = false)
-            else -> Unit
+            trimmed.startsWith("pack") -> pragmaPack(trimmed, line)
+            trimmed.startsWith("comment") -> pragmaComment(trimmed, line)
+            else -> diagnostics.warning(location(line), "#pragma $trimmed ignored", state.includeStack.snapshot())
         }
     }
+
+    private fun pragmaPack(text: String, line: Int) {
+        val body = Regex("^pack\\s*\\((.*)\\)$").find(text)?.groupValues?.get(1)?.trim()
+        if (body == null || body.isEmpty()) {
+            if (body == null) report(line, "malformed #pragma pack directive")
+            else state.pragmas += PreprocessorPragma.Pack(PackAction.RESET)
+            return
+        }
+        when {
+            body == "pop" -> state.pragmas += PreprocessorPragma.Pack(PackAction.POP)
+            body == "push" -> state.pragmas += PreprocessorPragma.Pack(PackAction.PUSH)
+            body.startsWith("push,") -> {
+                val alignment = body.substringAfter(',').trim().toIntOrNull()
+                if (!validPackAlignment(alignment)) report(line, "invalid #pragma pack alignment")
+                else state.pragmas += PreprocessorPragma.Pack(PackAction.PUSH_SET, alignment)
+            }
+            else -> {
+                val alignment = body.toIntOrNull()
+                if (!validPackAlignment(alignment)) report(line, "invalid #pragma pack alignment")
+                else state.pragmas += PreprocessorPragma.Pack(PackAction.SET, alignment)
+            }
+        }
+    }
+
+    private fun pragmaComment(text: String, line: Int) {
+        val match = Regex("^comment\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*,\\s*\\\"([^\\\"]*)\\\"\\s*\\)$").find(text)
+        if (match == null) {
+            report(line, "malformed #pragma comment directive")
+            return
+        }
+        val kind = match.groupValues[1]
+        val value = match.groupValues[2]
+        when (kind) {
+            "lib" -> state.pragmas += PreprocessorPragma.Library(value)
+            "option" -> state.pragmas += PreprocessorPragma.Option(value)
+            else -> state.pragmas += PreprocessorPragma.Comment(kind, value)
+        }
+    }
+
+    private fun validPackAlignment(value: Int?): Boolean =
+        value != null && value in 1..16 && value and (value - 1) == 0
 
     private fun pragmaMacro(text: String, line: Int, push: Boolean) {
         val match = Regex("^[a-z_]+\\s*\\(\\s*\"([^\"]+)\"\\s*\\)$").find(text)
@@ -250,10 +303,25 @@ class Preprocessor private constructor(
     }
 
     private fun evaluate(expression: String, line: Int): Boolean {
-        val protected = protectDefined(expression)
+        val withIncludeQueries = expandIncludeQueries(expression, line)
+        val protected = protectDefined(withIncludeQueries)
         val expanded = expandText(protected.text, emptySet(), line)
         return IfExpression(expanded) { name -> protected.values[name] ?: 0L }.evaluate() != 0L
     }
+
+    private fun isDefined(name: String): Boolean =
+        state.macros[name] != null || name == "__has_include" || name == "__has_include_next"
+
+    private fun expandIncludeQueries(expression: String, line: Int): String =
+        Regex("__has_include(_next)?\\s*\\(\\s*([<\\\"][^>\\\"]+[>\\\"])\\s*\\)").replace(expression) { match ->
+            val operand = expandText(match.groupValues[2], emptySet(), line).trim()
+            val angled = operand.startsWith('<') && operand.endsWith('>')
+            val quoted = operand.startsWith('"') && operand.endsWith('"')
+            if (!angled && !quoted) return@replace "0"
+            val filename = operand.substring(1, operand.length - 1)
+            val found = resolveInclude(filename, quoted, match.groupValues[1] == "_next") != null
+            if (found) "1" else "0"
+        }
 
     private fun protectDefined(expression: String): ProtectedExpression {
         val values = HashMap<String, Long>()
@@ -261,7 +329,7 @@ class Preprocessor private constructor(
             .replace(expression) { match ->
                 val name = match.groupValues[1].ifEmpty { match.groupValues[2] }
                 val marker = "__TCC_DEFINED_${values.size}__"
-                values[marker] = if (state.macros[name] != null) 1 else 0
+                values[marker] = if (isDefined(name)) 1 else 0
                 marker
             }
         return ProtectedExpression(result, values)
@@ -324,22 +392,31 @@ class Preprocessor private constructor(
         line: Int,
     ): String {
         val parameters = definition.parameters ?: return definition.replacement
+        val normalizedArguments = if (parameters.isEmpty() && arguments.size == 1 && arguments[0].isEmpty()) {
+            emptyList()
+        } else {
+            arguments
+        }
         val expected = parameters.size
-        if ((!definition.variadic && arguments.size != expected) || (definition.variadic && arguments.size < expected)) {
+        if ((!definition.variadic && normalizedArguments.size != expected) || (definition.variadic && normalizedArguments.size < expected)) {
             report(line, "macro '${definition.name}' expects ${if (definition.variadic) "at least " else ""}$expected argument(s)")
             return definition.name
         }
         val raw = LinkedHashMap<String, String>()
         val expanded = LinkedHashMap<String, String>()
         parameters.forEachIndexed { index, parameter ->
-            val value = arguments.getOrElse(index) { "" }
+            val value = normalizedArguments.getOrElse(index) { "" }
             raw[parameter] = value
             expanded[parameter] = expandText(value, disabled, line)
         }
         if (definition.variadic) {
-            val varargs = arguments.drop(expected).joinToString(", ")
+            val varargs = normalizedArguments.drop(expected).joinToString(", ")
             raw["__VA_ARGS__"] = varargs
             expanded["__VA_ARGS__"] = expandText(varargs, disabled, line)
+            definition.variadicName?.let { name ->
+                raw[name] = varargs
+                expanded[name] = expanded["__VA_ARGS__"].orEmpty()
+            }
         }
         var replacement = definition.replacement
         val stringized = HashMap<String, String>()
@@ -350,29 +427,77 @@ class Preprocessor private constructor(
             stringized[marker] = stringize(value)
             marker
         }
-        val hasPaste = replacement.contains("##")
-        val parts = replacement.split("##")
-        replacement = parts.map { part ->
-            substitute(part, if (hasPaste) raw else expanded)
-        }.let { substituted ->
-            if (hasPaste) substituted.joinToString("") { it.trim() } else substituted.joinToString("")
-        }
+        replacement = substituteReplacement(replacement, raw, expanded)
         stringized.forEach { (marker, value) -> replacement = replacement.replace(marker, value) }
         return expandText(replacement, disabled, line)
     }
 
-    private fun substitute(text: String, values: Map<String, String>): String = buildString(text.length) {
+    private fun substituteReplacement(
+        replacement: String,
+        raw: Map<String, String>,
+        expanded: Map<String, String>,
+    ): String {
+        val parts = replacement.split("##")
+        if (parts.size == 1) return substituteIdentifiers(parts.single(), expanded)
+        val substituted = parts.mapIndexed { index, part ->
+            val rawNames = buildSet {
+                if (index > 0) boundaryParameter(part, fromEnd = false)?.let(::add)
+                if (index < parts.lastIndex) boundaryParameter(part, fromEnd = true)?.let(::add)
+            }
+            substituteIdentifiers(part, raw, expanded, rawNames).trim()
+        }.toMutableList()
+        val result = StringBuilder()
+        substituted.forEachIndexed { index, part ->
+            if (index > 0 && part.isEmpty() && result.trimEnd().endsWith(",")) {
+                while (result.isNotEmpty() && result.last().isWhitespace()) result.deleteCharAt(result.lastIndex)
+                if (result.lastOrNull() == ',') result.deleteCharAt(result.lastIndex)
+                while (result.isNotEmpty() && result.last().isWhitespace()) result.deleteCharAt(result.lastIndex)
+            }
+            result.append(part)
+        }
+        return result.toString()
+    }
+
+    private fun substituteIdentifiers(text: String, values: Map<String, String>): String =
+        substituteIdentifiers(text, values, values, emptySet())
+
+    private fun substituteIdentifiers(
+        text: String,
+        raw: Map<String, String>,
+        expanded: Map<String, String>,
+        rawNames: Set<String>,
+    ): String = buildString(text.length) {
         var index = 0
         while (index < text.length) {
-            if (isIdentifierStart(text[index])) {
+            if (text[index] == '/' && text.getOrNull(index + 1) == '*') {
+                val end = text.indexOf("*/", index + 2).let { if (it < 0) text.length else it + 2 }
+                append(text.substring(index, end))
+                index = end
+            } else if (text[index] == '/' && text.getOrNull(index + 1) == '/') {
+                append(text.substring(index))
+                break
+            } else if (text[index] == '\'' || text[index] == '"') {
+                val end = quotedEnd(text, index)
+                append(text.substring(index, end))
+                index = end
+            } else if (isIdentifierStart(text[index])) {
                 val start = index++
                 while (index < text.length && isIdentifierPart(text[index])) index++
                 val name = text.substring(start, index)
-                append(values[name] ?: name)
+                append(if (name in rawNames) raw[name] ?: name else expanded[name] ?: name)
             } else {
                 append(text[index++])
             }
         }
+    }
+
+    private fun boundaryParameter(text: String, fromEnd: Boolean): String? {
+        val match = if (fromEnd) {
+            Regex("([A-Za-z_$][A-Za-z0-9_$]*)\\s*$").find(text)
+        } else {
+            Regex("^\\s*([A-Za-z_$][A-Za-z0-9_$]*)").find(text)
+        }
+        return match?.groupValues?.get(1)
     }
 
     private fun builtinValue(name: String, line: Int): String? = options.predefined[name] ?: when (name) {
@@ -467,6 +592,7 @@ class Preprocessor private constructor(
         val onceFiles = HashSet<Path>()
         val activeFiles = HashSet<Path>()
         val includeStack = IncludeStack()
+        val pragmas = ArrayList<PreprocessorPragma>()
     }
 
     private data class ConditionalFrame(
@@ -485,7 +611,17 @@ private class IfExpression(private val text: String, private val markerValue: (S
     private val tokens = tokenize(text)
     private var index = 0
 
-    fun evaluate(): Long = parseOr()
+    fun evaluate(): Long = parseConditional()
+
+    private fun parseConditional(): Long {
+        val condition = parseOr()
+        if (peek() != "?") return condition
+        take()
+        val whenTrue = parseConditional()
+        if (peek() == ":") take()
+        val whenFalse = parseConditional()
+        return if (condition != 0L) whenTrue else whenFalse
+    }
 
     private fun parseOr(): Long {
         var value = parseAnd()
@@ -578,15 +714,38 @@ private class IfExpression(private val text: String, private val markerValue: (S
     private fun parsePrimary(): Long {
         if (peek() == "(") {
             take()
-            val value = parseOr()
+            val value = parseConditional()
             if (peek() == ")") take()
             return value
         }
         val value = take()
         if (value == null) return 0
-        if (value.startsWith("'")) return value.getOrNull(1)?.code?.toLong() ?: 0
-        return value.removeSuffix("u").removeSuffix("U").removeSuffix("l").removeSuffix("L")
-            .let { number -> number.toLongOrNull() ?: runCatching { java.math.BigInteger(number.removePrefix("0x"), if (number.startsWith("0x")) 16 else 10).toLong() }.getOrElse { markerValue(value) } }
+        if (value.startsWith("'")) return characterValue(value)
+        val number = value.replace(Regex("(?i)(ull|llu|ul|lu|ll|u|l)+$"), "")
+        return runCatching {
+            val normalized = number.lowercase()
+            when {
+                normalized.startsWith("0x") -> java.math.BigInteger(normalized.substring(2), 16).toLong()
+                normalized.startsWith("0b") -> java.math.BigInteger(normalized.substring(2), 2).toLong()
+                normalized.length > 1 && normalized.startsWith('0') -> java.math.BigInteger(normalized.substring(1), 8).toLong()
+                else -> number.toLong()
+            }
+        }.getOrElse { markerValue(value) }
+    }
+
+    private fun characterValue(token: String): Long {
+        if (token.length < 2) return 0
+        if (token[1] != '\\') return token[1].code.toLong()
+        return when (token.getOrNull(2)) {
+            'n' -> '\n'.code.toLong()
+            'r' -> '\r'.code.toLong()
+            't' -> '\t'.code.toLong()
+            '\\' -> '\\'.code.toLong()
+            '\'' -> '\''.code.toLong()
+            '"' -> '"'.code.toLong()
+            'x' -> token.drop(3).dropLastWhile { it == '\'' }.toLongOrNull(16) ?: 0
+            else -> token.getOrNull(2)?.digitToIntOrNull(8)?.toLong() ?: 0
+        }
     }
 
     private fun compare(parse: () -> Long, operators: Set<String>): Long {

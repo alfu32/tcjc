@@ -7,6 +7,7 @@ data class MacroDefinition(
     val parameters: List<String>?,
     val replacement: String,
     val variadic: Boolean = false,
+    val variadicName: String? = null,
 )
 
 /** Ordered macro table so diagnostics and snapshots remain deterministic. */
