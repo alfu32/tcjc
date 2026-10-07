@@ -145,6 +145,8 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
             X86Opcode.IMUL -> encodeImul(instruction.operands, output)
+            X86Opcode.DIV -> encodeDivision(instruction.operands, output, 6)
+            X86Opcode.IDIV -> encodeDivision(instruction.operands, output, 7)
             X86Opcode.SHL -> encodeShift(instruction.operands, output, 4)
             X86Opcode.SHR -> encodeShift(instruction.operands, output, 5)
             X86Opcode.SAR -> encodeShift(instruction.operands, output, 7)
@@ -219,6 +221,21 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             }
             else -> error("unsupported imul source: $source")
         }
+    }
+
+    private fun encodeDivision(operands: List<X86Operand>, output: MutableList<Byte>, extension: Int) {
+        require(operands.size == 1) { "${if (extension == 6) "div" else "idiv"} requires one divisor operand" }
+        val divisor = operands.single()
+        if (divisor is X86Operand.Register) {
+            val register = physicalRegister(divisor)
+            require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                "division register width must match ${mode.bits}-bit target mode"
+            }
+        }
+        require(divisor is X86Operand.Register || divisor is X86Operand.Memory) {
+            "division divisor must be a register or memory operand"
+        }
+        encodeRm(0xF7, extension, divisor, output)
     }
 
     private fun encodeLea(operands: List<X86Operand>, output: MutableList<Byte>) {

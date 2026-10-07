@@ -358,6 +358,40 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesSignedAndUnsignedDivisionOperands() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0xF7.toByte(), 0xF9.toByte(),
+                0x49, 0xF7.toByte(), 0x74, 0x24, 8,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.IDIV, listOf(r64("rcx"))),
+                    X86Instruction(X86Opcode.DIV, listOf(X86Operand.Memory(r64("r12").value, 8))),
+                ),
+            ),
+        )
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ebp = physical(X86Mode.I386, "ebp")
+        assertContentEquals(
+            byteArrayOf(0xF7.toByte(), 0xF8.toByte(), 0xF7.toByte(), 0x75, 0xFC.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.IDIV, listOf(eax)),
+                    X86Instruction(X86Opcode.DIV, listOf(X86Operand.Memory(ebp.value, -4))),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            i386.encode(listOf(X86Instruction(X86Opcode.IDIV, listOf(X86Operand.Immediate(3)))))
+        }
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }

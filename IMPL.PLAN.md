@@ -182,9 +182,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   branches with block-label resolution, LEA address calculation, and TEST
   register/immediate forms, indirect/local CALL, and PUSH/POP register,
   memory, and immediate forms, plus SHL/SHR/SAR immediate and CL-count forms
-  and signed IMUL register, memory, and immediate forms now have byte-exact
-  Kotlin coverage; external symbol relocations, full tables, operand widths,
-  and addressing support remain open)
+  and signed IMUL plus signed/unsigned DIV/IDIV operand encodings now have
+  byte-exact Kotlin coverage; fixed-register division lowering, external
+  symbol relocations, full tables, operand widths, and addressing support
+  remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`
 
