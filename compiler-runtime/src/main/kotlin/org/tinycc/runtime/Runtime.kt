@@ -14,12 +14,21 @@ object CompilerRuntime {
     fun floatToInt(value: Double): Long = value.toLong()
     fun intToFloat(value: Long): Double = value.toDouble()
 
-    fun boundsCheck(index: Long, length: Long) {
-        require(index >= 0 && index < length) { "bounds check failed: index=$index length=$length" }
+    fun boundsCheck(index: Long, length: Long, location: RuntimeSourceLocation? = null) {
+        RuntimeInstrumentation.boundsChecked(index, length, location)
+        if (index < 0 || index >= length) {
+            RuntimeInstrumentation.fail(
+                RuntimeCheckKind.BOUNDS,
+                "index=$index length=$length",
+                location,
+            )
+        }
     }
 
-    fun stackProbe(bytes: Long) {
-        require(bytes >= 0) { "stack probe size must not be negative" }
+    fun stackProbe(bytes: Long, location: RuntimeSourceLocation? = null) {
+        if (bytes < 0) {
+            RuntimeInstrumentation.fail(RuntimeCheckKind.STACK, "size=$bytes", location)
+        }
     }
 
     private fun unsigned(value: Long): BigInteger = BigInteger.valueOf(value).and(BigInteger("ffffffffffffffff", 16))

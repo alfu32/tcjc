@@ -5,10 +5,18 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 import org.tinycc.runtime.CompilerRuntime
+import org.tinycc.runtime.RuntimeCheckKind
+import org.tinycc.runtime.RuntimeDiagnostic
+import org.tinycc.runtime.RuntimeDebugInfo
+import org.tinycc.runtime.RuntimeInstrumentation
+import org.tinycc.runtime.RuntimeInstrumentationConfig
 import org.tinycc.runtime.KotlinRuntimeLinker
 import org.tinycc.runtime.RuntimeLinkMode
 import org.tinycc.runtime.RuntimeLinkOptions
 import org.tinycc.runtime.RuntimeObject
+import org.tinycc.runtime.RuntimeProfileEvent
+import org.tinycc.runtime.RuntimeSanitizerException
+import org.tinycc.runtime.RuntimeSourceLocation
 
 class RuntimeTest {
     @Test
@@ -39,5 +47,52 @@ class RuntimeTest {
                 RuntimeLinkOptions(RuntimeLinkMode.SHARED, "x86_64-linux", "bad"),
             )
         }
+    }
+
+    @Test
+    fun reportsBoundsFailuresWithDebugLocationsBacktracesAndProfileEvents() {
+        val location = RuntimeSourceLocation("sample.c", 12, 4, "main")
+        val diagnostics = mutableListOf<RuntimeDiagnostic>()
+        val events = mutableListOf<RuntimeProfileEvent>()
+        val config = RuntimeInstrumentationConfig(
+            maxBacktraceFrames = 8,
+            debugInfo = RuntimeDebugInfo("sample", mapOf("main" to location)),
+            diagnosticSink = diagnostics::add,
+            profiler = events::add,
+        )
+
+        val error = assertFailsWith<RuntimeSanitizerException> {
+            RuntimeInstrumentation.scoped(config) {
+                RuntimeInstrumentation.traceFunction("main") {
+                    CompilerRuntime.boundsCheck(2, 2, location)
+                }
+            }
+        }
+
+        assertEquals(RuntimeCheckKind.BOUNDS, error.diagnostic.kind)
+        assertEquals(location, error.diagnostic.location)
+        assertTrue(error.diagnostic.backtrace.isNotEmpty())
+        assertEquals(listOf(error.diagnostic), diagnostics)
+        assertTrue(events.any { it is RuntimeProfileEvent.FunctionEntered && it.location == location })
+        assertTrue(events.any { it is RuntimeProfileEvent.FunctionExited && it.location == location })
+        assertTrue(events.any { it is RuntimeProfileEvent.DiagnosticRaised })
+        assertTrue(error.message!!.contains("sample.c:12:4 in main"))
+    }
+
+    @Test
+    fun disablesBacktracesForSanitizerFriendlyMachineReadableReports() {
+        val diagnostics = mutableListOf<RuntimeDiagnostic>()
+        val location = RuntimeSourceLocation("stack.c", 3)
+        val error = assertFailsWith<RuntimeSanitizerException> {
+            RuntimeInstrumentation.scoped(
+                RuntimeInstrumentationConfig(captureBacktrace = false, diagnosticSink = diagnostics::add),
+            ) {
+                CompilerRuntime.stackProbe(-1, location)
+            }
+        }
+        assertEquals(RuntimeCheckKind.STACK, error.diagnostic.kind)
+        assertTrue(error.diagnostic.backtrace.isEmpty())
+        assertEquals("stack.c:3:1", error.diagnostic.location.toString())
+        assertEquals(error.diagnostic, diagnostics.single())
     }
 }
