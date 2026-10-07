@@ -3,27 +3,27 @@
 ## Dashboard
 
 ```text
-Overall: 35/48
+Overall: 36/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
-[IN_PROGRESS] [11/12] 4. Lowering and native target backends
+[DONE]       [12/12] 4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
-[TODO]       [0/3]   6. Runtime, SDK and platform ABI
+[IN_PROGRESS] [1/3] 6. Runtime, SDK and platform ABI
 
 Current task:
-12.3 libtcc1 and assembly/C runtime helpers, then static/shared/PIC/cross-linked verification
+13.1 `-run`, temporary executable handling, dynamic library loading, environment propagation, and exit behavior
 
 Current milestone:
-M4 — Lowering and native target backends
+M6 — Runtime, SDK and platform ABI
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (8/16 implementation tasks; 24/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (12/16 implementation tasks; 36/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -102,11 +102,11 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 11.2 Port C67 code generation, COFF integration, and the target-specific restrictions currently encoded in TCC. — `DONE` (see `compiler-backends/.../c67/C67Backend.kt` and `C67BackendTest`)
 - [x] 11.3 Add cross-target compile/link fixtures and document toolchain/emulator requirements for unavailable hosts. — `DONE` (see `compiler-backends/.../CrossTargetMatrix.kt`, [CROSS-TARGETS.md](CROSS-TARGETS.md), and `CrossTargetMatrixTest`)
 
-### 12. Object formats, linker, and native runtime — `IN_PROGRESS` (2/3)
+### 12. Object formats, linker, and native runtime — `DONE` (3/3)
 
 - [x] 12.1 Port ELF sections, symbols, relocations, dynamic linking, TLS, DWARF/Stabs metadata, and platform startup rules. — `DONE` (see `compiler-backends/.../elf/ElfWriter.kt` and `ElfWriterTest`)
 - [x] 12.2 Port PE/COFF and Mach-O writers/linking paths, import/export handling, and Windows runtime integration. — `DONE` (see `compiler-backends/.../portable/PortableObjectWriters.kt` and `PortableObjectWriterTest`)
-- [ ] 12.3 Port `libtcc1` and assembly/C runtime helpers, then verify static, shared, PIC, and cross-linked programs. — `TODO`
+- [x] 12.3 Port `libtcc1` and assembly/C runtime helpers, then verify static, shared, PIC, and cross-linked programs. — `DONE` (see `compiler-runtime/.../Runtime.kt` and `RuntimeTest`; native dependencies are rejected)
 
 ### 13. Execution, bounds checking, debugging, and embedding — `TODO` (0/3)
 
