@@ -250,8 +250,34 @@ class CliTest {
     }
 
     @Test
-    fun rejectsUnimplementedNumericOnlyPreprocessingModeExplicitly() {
-        val error = assertFailsWith<CliParseException> { CommandLineParser().parse(listOf("-P10")) }
-        assertTrue(error.message.orEmpty().contains("numeric-only preprocessing is not implemented"))
+    fun numericOnlyPreprocessingConvertsIntegerAndFloatingTokens() {
+        val root = Files.createTempDirectory("tcjc-cli-p10-")
+        val source = root.resolve("numbers.c")
+        source.writeText("""#define HEX_VALUE 0x2a
+int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; char quote = '\'';
+""")
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+
+        try {
+            assertEquals(0, execute(listOf("-E", "-P10", source.toString()), PrintStream(output), PrintStream(errors)))
+            val text = output.toString()
+            assertTrue(text.contains("int value = 42 + 17;"), text)
+            assertTrue(text.contains("double d = <double>;"), text)
+            assertTrue(text.contains("float f = <float>;"), text)
+            assertTrue(text.contains("char nl = '\\n';"), text)
+            assertTrue(text.contains("char quote = '\\'';"), text)
+            assertTrue(!text.contains("# 1 \""), text)
+            assertEquals("", errors.toString())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun laterLineMarkerOptionOverridesNumericPreprocessingMode() {
+        val options = CommandLineParser().parse(listOf("-P10", "-P1", "unit.c"))
+        assertEquals(false, options.numericPreprocessing)
+        assertEquals(org.tinycc.core.preprocessor.LineMarkerMode.STANDARD, options.lineMarkerMode)
     }
 }

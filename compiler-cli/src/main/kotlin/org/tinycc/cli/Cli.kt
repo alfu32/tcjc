@@ -13,6 +13,7 @@ data class CliOptions(
     val run: Boolean = false,
     val outputType: org.tinycc.api.embedding.CompilerOutputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS,
     val lineMarkerMode: LineMarkerMode = LineMarkerMode.GCC,
+    val numericPreprocessing: Boolean = false,
     val outputPath: Path? = null,
     val target: String = "x86_64-linux",
     val includePaths: List<Path> = emptyList(),
@@ -136,6 +137,7 @@ class CommandLineParser(
         var run = false
         var outputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS
         var lineMarkerMode = LineMarkerMode.GCC
+        var numericPreprocessing = false
         var outputPath: Path? = null
         var target = "x86_64-linux"
         var runtimeArguments = emptyList<String>()
@@ -162,11 +164,16 @@ class CommandLineParser(
                     val format = argument.removePrefix("-P")
                     val formatNumber = if (format.isEmpty()) 0 else format.toIntOrNull()
                         ?: throw CliParseException("invalid line marker format: $argument")
-                    lineMarkerMode = when (formatNumber) {
-                        0 -> LineMarkerMode.NONE
-                        1 -> LineMarkerMode.STANDARD
-                        10 -> throw CliParseException("-P10 numeric-only preprocessing is not implemented")
-                        else -> LineMarkerMode.GCC
+                    if (formatNumber == 10) {
+                        lineMarkerMode = LineMarkerMode.NONE
+                        numericPreprocessing = true
+                    } else {
+                        numericPreprocessing = false
+                        lineMarkerMode = when (formatNumber) {
+                            0 -> LineMarkerMode.NONE
+                            1 -> LineMarkerMode.STANDARD
+                            else -> LineMarkerMode.GCC
+                        }
                     }
                 }
                 argument == "-c" -> outputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS
@@ -213,6 +220,7 @@ class CommandLineParser(
             run = run,
             outputType = outputType,
             lineMarkerMode = lineMarkerMode,
+            numericPreprocessing = numericPreprocessing,
             outputPath = outputPath,
             target = target,
             includePaths = includePaths.map(Path::toAbsolutePath).map(Path::normalize),
@@ -261,7 +269,7 @@ fun cliHelp(): String = """
 
     Actions:
       -E, -c                 emit preprocessed text or deterministic token output
-      -P, -P1                suppress line markers or use #line markers with -E
+      -P, -P1, -P10          select no markers, #line markers, or numeric tokens with -E
       -run, --run            request execution after compilation
       -o, --output FILE      write output to FILE
       -h, --help             show this help

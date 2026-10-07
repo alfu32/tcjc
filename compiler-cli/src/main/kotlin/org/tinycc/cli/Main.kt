@@ -68,7 +68,16 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
                 error.println("tcc-jvm: -run requires a native executable artifact from the target backend")
                 return 2
             }
-            val outputBytes = if (results.size == 1) compiler.outputBytes() else aggregateOutput(results, options.outputType)
+            val outputBytes = if (options.numericPreprocessing && options.outputType == CompilerOutputType.PREPROCESSED) {
+                results.joinToString(separator = "") { result ->
+                    renderNumericPreprocessed(result.preprocessedSource, result.tokens)
+                        .let { if (it.isNotEmpty() && !it.endsWith('\n')) "$it\n" else it }
+                }.encodeToByteArray()
+            } else if (results.size == 1) {
+                compiler.outputBytes()
+            } else {
+                aggregateOutput(results, options.outputType)
+            }
             val writeToStdout = options.outputPath == null || options.outputPath.toString() == "-"
             if (!writeToStdout) {
                 val outputPath = requireNotNull(options.outputPath)
@@ -108,4 +117,47 @@ private fun aggregateOutput(
             }
         }
         .encodeToByteArray()
+}
+
+private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.core.lexer.Token>): String = buildString {
+    var cursor = 0
+    tokens.forEach { token ->
+        if (token.kind != org.tinycc.core.lexer.TokenKind.INTEGER_LITERAL &&
+            token.kind != org.tinycc.core.lexer.TokenKind.FLOAT_LITERAL &&
+            token.kind != org.tinycc.core.lexer.TokenKind.CHARACTER_LITERAL
+        ) return@forEach
+        val start = token.span.start.offset
+        val end = token.span.end.offset
+        if (start < cursor || end > source.length) return@forEach
+        append(source, cursor, start)
+        append(
+            when (token.kind) {
+                org.tinycc.core.lexer.TokenKind.INTEGER_LITERAL -> {
+                    val value = (token.literal as? org.tinycc.core.lexer.LiteralValue.Integer)?.value
+                        ?: return@forEach
+                    value.mod(java.math.BigInteger.ONE.shiftLeft(64)).toString()
+                }
+                org.tinycc.core.lexer.TokenKind.FLOAT_LITERAL -> when {
+                    token.lexeme.endsWith('f', ignoreCase = true) -> "<float>"
+                    token.lexeme.endsWith('l', ignoreCase = true) -> "<long double>"
+                    else -> "<double>"
+                }
+                org.tinycc.core.lexer.TokenKind.CHARACTER_LITERAL -> {
+                    val literal = token.literal as? org.tinycc.core.lexer.LiteralValue.Character
+                        ?: return@forEach
+                    val value = literal.value
+                    val escaped = when {
+                        value == '\n'.code -> "\\n"
+                        value in 32..126 && value != '\''.code && value != '\\'.code -> value.toChar().toString()
+                        value == '\''.code || value == '\\'.code -> "\\${value.toChar()}"
+                        else -> "\\%03o".format(value and 0x1ff)
+                    }
+                    "${if (literal.wide) "L" else ""}'$escaped'"
+                }
+                else -> token.lexeme
+            },
+        )
+        cursor = end
+    }
+    append(source, cursor, source.length)
 }
