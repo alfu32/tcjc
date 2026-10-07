@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test
 import org.tinycc.backends.x86.X86Instruction
 import org.tinycc.backends.x86.X86LinuxElf64
 import org.tinycc.backends.x86.X86MachineCodeEncoder
+import org.tinycc.backends.x86.X86MachineBlock
+import org.tinycc.backends.x86.X86MachineFunction
 import org.tinycc.backends.x86.X86Mode
 import org.tinycc.backends.x86.X86Opcode
 import org.tinycc.backends.x86.X86Operand
@@ -161,6 +163,60 @@ class X86MachineCodeTest {
         assertContentEquals(
             byteArrayOf(0x81.toByte(), 0xE8.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
             i386.encode(listOf(X86Instruction(X86Opcode.SUB, listOf(eax, X86Operand.Immediate(0xFFFF_FFFFL))))),
+        )
+    }
+
+    @Test
+    fun resolvesForwardAndBackwardRelativeBranches() {
+        val encoder = X86MachineCodeEncoder(X86Mode.X86_64)
+        assertContentEquals(
+            byteArrayOf(
+                0x0F, 0x85.toByte(), 5, 0, 0, 0,
+                0xE9.toByte(), 0xF5.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+            ),
+            encoder.encode(
+                listOf(
+                    X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("entry"))),
+                    X86Instruction(X86Opcode.JNE, listOf(X86Operand.Label("exit"))),
+                    X86Instruction(X86Opcode.JMP, listOf(X86Operand.Label("entry"))),
+                    X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("exit"))),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalStateException> {
+            encoder.encode(listOf(X86Instruction(X86Opcode.JMP, listOf(X86Operand.Label("missing")))))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            encoder.encode(
+                listOf(
+                    X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("same"))),
+                    X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("same"))),
+                ),
+            )
+        }
+
+        val selectedFunction = X86MachineFunction(
+            "branching",
+            X86Mode.X86_64,
+            listOf(
+                X86MachineBlock(
+                    "entry",
+                    listOf(
+                        X86Instruction(X86Opcode.JNE, listOf(X86Operand.Label("exit"))),
+                        X86Instruction(X86Opcode.JMP, listOf(X86Operand.Label("entry"))),
+                    ),
+                ),
+                X86MachineBlock("exit", listOf(X86Instruction(X86Opcode.RET))),
+            ),
+            emptySet(),
+        )
+        assertContentEquals(
+            byteArrayOf(
+                0x0F, 0x85.toByte(), 5, 0, 0, 0,
+                0xE9.toByte(), 0xF5.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+                0xC3.toByte(),
+            ),
+            encoder.encode(selectedFunction),
         )
     }
 

@@ -178,8 +178,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   TLS, relocations, register allocation, and both i386 and SysV/Win64 ABIs. —
   `IN_PROGRESS` (selected zero-operand scalar/control/fence/CET instructions and
   register, base-displacement, SIB, and absolute memory forms for MOV/ADD/SUB
-  plus immediate ADD/OR/AND/SUB/XOR/CMP now have byte-exact Kotlin coverage;
-  full tables, operand widths, and addressing support remain open)
+  plus immediate ADD/OR/AND/SUB/XOR/CMP and rel32 JMP/JNE with block-label
+  resolution now have byte-exact Kotlin coverage; full tables, operand widths,
+  and addressing support remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`
 

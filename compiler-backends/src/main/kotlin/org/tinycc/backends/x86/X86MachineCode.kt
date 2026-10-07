@@ -11,6 +11,7 @@ import org.tinycc.core.ir.IrRegister
 /** Encodes the explicitly supported scalar x86 machine-instruction subset. */
 class X86MachineCodeEncoder(private val mode: X86Mode) {
     private data class ZeroOperandEncoding(val bytes: List<Int>, val mode: X86Mode? = null)
+    private data class BranchFixup(val label: String, val displacementOffset: Int, val nextInstructionOffset: Int)
 
     private val zeroOperandEncodings = mapOf(
         X86Opcode.RET to ZeroOperandEncoding(listOf(0xC3)),
@@ -45,13 +46,59 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         X86Opcode.ENDBR64 to ZeroOperandEncoding(listOf(0xF3, 0x0F, 0x1E, 0xFA), X86Mode.X86_64),
     )
 
+    /** Encodes selected basic blocks, materializing each block name as a branch target. */
+    fun encode(function: X86MachineFunction): ByteArray = encode(
+        function.blocks.flatMap { block ->
+            listOf(X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label(block.name)))) + block.instructions
+        },
+    )
+
     fun encode(instructions: List<X86Instruction>): ByteArray {
         val output = ArrayList<Byte>()
-        instructions.forEach { instruction -> encodeInstruction(instruction, output) }
+        val labels = HashMap<String, Int>()
+        val fixups = ArrayList<BranchFixup>()
+        instructions.forEach { instruction -> encodeInstruction(instruction, output, labels, fixups) }
+        fixups.forEach { fixup ->
+            val target = labels[fixup.label] ?: error("undefined x86 code label: ${fixup.label}")
+            val displacement = target.toLong() - fixup.nextInstructionOffset
+            require(displacement in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+                "x86 branch target is outside rel32 range: ${fixup.label}"
+            }
+            val value = displacement.toInt()
+            repeat(4) { index -> output[fixup.displacementOffset + index] = (value ushr (index * 8)).toByte() }
+        }
         return output.toByteArray()
     }
 
-    private fun encodeInstruction(instruction: X86Instruction, output: MutableList<Byte>) {
+    private fun encodeInstruction(
+        instruction: X86Instruction,
+        output: MutableList<Byte>,
+        labels: MutableMap<String, Int>,
+        fixups: MutableList<BranchFixup>,
+    ) {
+        if (instruction.opcode == X86Opcode.LABEL) {
+            require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
+                "label marker requires exactly one label operand"
+            }
+            val name = (instruction.operands.single() as X86Operand.Label).name
+            require(labels.putIfAbsent(name, output.size) == null) { "duplicate x86 code label: $name" }
+            return
+        }
+        if (instruction.opcode == X86Opcode.JMP || instruction.opcode == X86Opcode.JNE) {
+            require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
+                "${instruction.opcode.name.lowercase()} requires one code-label operand"
+            }
+            val label = (instruction.operands.single() as X86Operand.Label).name
+            if (instruction.opcode == X86Opcode.JMP) output += 0xE9.toByte()
+            else {
+                output += 0x0F
+                output += 0x85.toByte()
+            }
+            val displacementOffset = output.size
+            repeat(4) { output += 0 }
+            fixups += BranchFixup(label, displacementOffset, output.size)
+            return
+        }
         if (instruction.operands.isEmpty()) {
             val encoding = zeroOperandEncodings[instruction.opcode]
             if (encoding != null) {
