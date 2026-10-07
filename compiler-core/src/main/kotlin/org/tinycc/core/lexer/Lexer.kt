@@ -2,6 +2,7 @@ package org.tinycc.core.lexer
 
 import java.math.BigInteger
 import java.nio.file.Path
+import kotlin.math.pow
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.diagnostics.LineMap
 import org.tinycc.core.diagnostics.SourceLocation
@@ -39,7 +40,7 @@ class Lexer(
             val next = peek(prefixLength)
             if (next == '\'' || next == '"') return quotedLiteral(start, prefixLength)
         }
-        if (isIdentifierStart(character)) return identifier(start)
+        if (isIdentifierStart(character) || isUniversalEscapeStart(index)) return identifier(start)
         if (character.isDigit() || (character == '.' && peek(1)?.isDigit() == true)) return number(start)
 
         if (character == '\'' || character == '"') return quotedLiteral(start, 0)
@@ -65,11 +66,15 @@ class Lexer(
     private fun identifier(start: Int): Token {
         while (index < source.length) {
             val character = source[index]
-            if (!isIdentifierPart(character)) break
-            index++
+            when {
+                isIdentifierPart(character) -> index++
+                isUniversalEscapeStart(index) -> consumeUniversalEscape()
+                else -> break
+            }
         }
         val text = source.substring(start, index)
-        return token(keywordKinds[text] ?: TokenKind.IDENTIFIER, start, index)
+        val keyword = TccTokenIds.keyword(text)
+        return token(keyword?.kind ?: TokenKind.IDENTIFIER, start, index, tccId = keyword?.tccId)
     }
 
     private fun number(start: Int): Token {
@@ -94,9 +99,10 @@ class Lexer(
             return token(TokenKind.INVALID, start, index)
         }
         if (isFloating) {
-            val value = numberPart.toDoubleOrNull()
+            val value = parseFloating(numberPart)
             if (value == null && !numberPart.contains('p', true)) error(start, "invalid floating constant '$raw'")
-            return token(TokenKind.FLOAT_LITERAL, start, index, LiteralValue.Floating(raw, suffix.singleOrNull(), value))
+            val literal = LiteralValue.Floating(raw, suffix.singleOrNull(), value)
+            return token(TokenKind.FLOAT_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
         }
 
         val (base, digits) = when {
@@ -116,12 +122,8 @@ class Lexer(
             suffix.contains('l', true) -> 1
             else -> 0
         }
-        return token(
-            TokenKind.INTEGER_LITERAL,
-            start,
-            index,
-            LiteralValue.Integer(value, base, unsigned, longRank),
-        )
+        val literal = LiteralValue.Integer(value, base, unsigned, longRank)
+        return token(TokenKind.INTEGER_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
     }
 
     private fun quotedLiteral(start: Int, prefixLength: Int): Token {
@@ -161,9 +163,11 @@ class Lexer(
             if (codePoints.isEmpty()) error(start, "empty character constant")
             if (codePoints.size > 1) diagnostics.warning(location(start), "multi-character character constant")
             val value = if (wide) codePoints.firstOrNull() ?: 0 else codePoints.fold(0) { acc, value -> (acc shl 8) or (value and 0xff) }
-            return token(TokenKind.CHARACTER_LITERAL, start, index, LiteralValue.Character(value, wide))
+            val literal = LiteralValue.Character(value, wide)
+            return token(TokenKind.CHARACTER_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
         }
-        return token(TokenKind.STRING_LITERAL, start, index, LiteralValue.StringValue(decoded, wide))
+        val literal = LiteralValue.StringValue(decoded, wide, prefix)
+        return token(TokenKind.STRING_LITERAL, start, index, literal, TccTokenIds.literalId(literal))
     }
 
     private fun decodeEscapes(body: String, start: Int): String = buildString {
@@ -189,9 +193,10 @@ class Lexer(
                 '\\', '\'', '"', '?' -> append(escaped)
                 '\n' -> Unit
                 '\r' -> if (cursor < body.length && body[cursor] == '\n') cursor++
-                'x' -> appendCodePoint(readDigits(body, cursor, 2, 16, start).also { cursor = digitCursor })
+                'x' -> appendCodePoint(readDigits(body, cursor, Int.MAX_VALUE, 16, start).also { cursor = digitCursor })
                 'u' -> appendCodePoint(readDigits(body, cursor, 4, 16, start, exact = true).also { cursor = digitCursor })
                 'U' -> appendCodePoint(readDigits(body, cursor, 8, 16, start, exact = true).also { cursor = digitCursor })
+                'e' -> append('\u001B')
                 in '0'..'7' -> {
                     var value = escaped - '0'
                     var count = 1
@@ -224,7 +229,11 @@ class Lexer(
         var count = 0
         while (cursor < text.length && count < maximum) {
             val digit = text[cursor].digitToIntOrNull(radix) ?: break
-            value = value * radix + digit
+            if (value > (Int.MAX_VALUE - digit) / radix) {
+                error(location, "escape sequence is too large")
+            } else {
+                value = value * radix + digit
+            }
             cursor++
             count++
         }
@@ -243,6 +252,10 @@ class Lexer(
         while (index < source.length) {
             when {
                 source[index].isWhitespace() -> index++
+                source[index] == '\\' && peek(1) == '\n' -> index += 2
+                source[index] == '\\' && peek(1) == '\r' -> {
+                    index += if (peek(2) == '\n') 3 else 2
+                }
                 source.startsWith("//", index) -> {
                     index += 2
                     while (index < source.length && source[index] != '\n') index++
@@ -272,10 +285,39 @@ class Lexer(
 
     private fun isIdentifierPart(character: Char): Boolean = isIdentifierStart(character) || character.isDigit()
 
+    private fun isUniversalEscapeStart(offset: Int): Boolean =
+        source.getOrNull(offset) == '\\' && source.getOrNull(offset + 1) in setOf('u', 'U')
+
+    private fun consumeUniversalEscape() {
+        val start = index
+        val width = if (source[index + 1] == 'u') 4 else 8
+        index += 2
+        val digitStart = index
+        repeat(width) {
+            if (source.getOrNull(index)?.digitToIntOrNull(16) == null) {
+                error(start, "invalid universal character name")
+                return@repeat
+            }
+            index++
+        }
+        if (index - digitStart != width) {
+            while (source.getOrNull(index)?.digitToIntOrNull(16) != null) index++
+        }
+        val value = source.substring(digitStart, minOf(index, digitStart + width)).toLongOrNull(16) ?: -1
+        if (value !in 0L..Character.MAX_CODE_POINT.toLong() || value in 0xD800L..0xDFFFL) {
+            error(start, "universal character name is not a Unicode scalar value")
+        }
+    }
+
     private fun peek(distance: Int): Char? = source.getOrNull(index + distance)
 
-    private fun token(kind: TokenKind, start: Int, end: Int, literal: LiteralValue? = null): Token =
-        Token(kind, source.substring(start, end), span(start, end), literal)
+    private fun token(
+        kind: TokenKind,
+        start: Int,
+        end: Int,
+        literal: LiteralValue? = null,
+        tccId: Int? = null,
+    ): Token = Token(kind, source.substring(start, end), span(start, end), literal, tccId ?: literal?.let(TccTokenIds::literalId) ?: kind.tccId)
 
     private fun span(start: Int, end: Int): SourceSpan = SourceSpan(location(start), location(end))
 
@@ -283,11 +325,26 @@ class Lexer(
 
     private fun error(offset: Int, message: String) = diagnostics.error(location(offset), message)
 
+    private fun parseFloating(number: String): Double? {
+        if (!number.startsWith("0x", ignoreCase = true)) return number.toDoubleOrNull()
+        val exponentMarker = number.indexOfFirst { it == 'p' || it == 'P' }
+        if (exponentMarker < 0) return null
+        val mantissa = number.substring(2, exponentMarker)
+        val exponent = number.substring(exponentMarker + 1).toIntOrNull() ?: return null
+        val point = mantissa.indexOf('.')
+        val whole = if (point < 0) mantissa else mantissa.removeRange(point, point + 1)
+        if (whole.isEmpty() || whole.any { it.digitToIntOrNull(16) == null }) return null
+        val fractionalDigits = if (point < 0) 0 else mantissa.length - point - 1
+        val significand = BigInteger(whole, 16).toDouble() / 16.0.pow(fractionalDigits)
+        return Math.scalb(significand, exponent)
+    }
+
     private data class Operator(val text: String, val kind: TokenKind)
 
     private companion object {
         val operators = listOf(
             Operator("<<=", TokenKind.LEFT_SHIFT_ASSIGN), Operator(">>=", TokenKind.RIGHT_SHIFT_ASSIGN),
+            Operator("%:%:", TokenKind.HASH_HASH),
             Operator("...", TokenKind.ELLIPSIS), Operator("->", TokenKind.ARROW), Operator("++", TokenKind.PLUS_PLUS),
             Operator("--", TokenKind.MINUS_MINUS), Operator("<<", TokenKind.LEFT_SHIFT), Operator(">>", TokenKind.RIGHT_SHIFT),
             Operator("<=", TokenKind.LESS_EQUAL), Operator(">=", TokenKind.GREATER_EQUAL), Operator("==", TokenKind.EQUAL_EQUAL),
@@ -295,6 +352,8 @@ class Lexer(
             Operator("+=", TokenKind.PLUS_ASSIGN), Operator("-=", TokenKind.MINUS_ASSIGN), Operator("*=", TokenKind.STAR_ASSIGN),
             Operator("/=", TokenKind.SLASH_ASSIGN), Operator("%=", TokenKind.PERCENT_ASSIGN), Operator("&=", TokenKind.AMPERSAND_ASSIGN),
             Operator("|=", TokenKind.PIPE_ASSIGN), Operator("^=", TokenKind.CARET_ASSIGN), Operator("##", TokenKind.HASH_HASH),
+            Operator("<:", TokenKind.LEFT_BRACKET), Operator(":>", TokenKind.RIGHT_BRACKET),
+            Operator("<%", TokenKind.LEFT_BRACE), Operator("%>", TokenKind.RIGHT_BRACE), Operator("%:", TokenKind.HASH),
             Operator("(", TokenKind.LEFT_PAREN), Operator(")", TokenKind.RIGHT_PAREN), Operator("[", TokenKind.LEFT_BRACKET),
             Operator("]", TokenKind.RIGHT_BRACKET), Operator("{", TokenKind.LEFT_BRACE), Operator("}", TokenKind.RIGHT_BRACE),
             Operator(",", TokenKind.COMMA), Operator(";", TokenKind.SEMICOLON), Operator(":", TokenKind.COLON),
@@ -303,35 +362,6 @@ class Lexer(
             Operator("/", TokenKind.SLASH), Operator("%", TokenKind.PERCENT), Operator("&", TokenKind.AMPERSAND),
             Operator("|", TokenKind.PIPE), Operator("^", TokenKind.CARET), Operator("~", TokenKind.TILDE),
             Operator("!", TokenKind.BANG), Operator("=", TokenKind.ASSIGN), Operator("<", TokenKind.LESS), Operator(">", TokenKind.GREATER),
-        )
-
-        val keywordKinds = mapOf(
-            "if" to TokenKind.IF, "else" to TokenKind.ELSE, "while" to TokenKind.WHILE, "for" to TokenKind.FOR,
-            "do" to TokenKind.DO, "continue" to TokenKind.CONTINUE, "break" to TokenKind.BREAK, "return" to TokenKind.RETURN,
-            "goto" to TokenKind.GOTO, "switch" to TokenKind.SWITCH, "case" to TokenKind.CASE, "default" to TokenKind.DEFAULT,
-            "asm" to TokenKind.ASM, "__asm" to TokenKind.ASM, "__asm__" to TokenKind.ASM, "extern" to TokenKind.EXTERN,
-            "static" to TokenKind.STATIC, "unsigned" to TokenKind.UNSIGNED, "_Atomic" to TokenKind.ATOMIC, "const" to TokenKind.CONST,
-            "__const" to TokenKind.CONST, "__const__" to TokenKind.CONST, "volatile" to TokenKind.VOLATILE,
-            "__volatile" to TokenKind.VOLATILE, "__volatile__" to TokenKind.VOLATILE, "register" to TokenKind.REGISTER,
-            "signed" to TokenKind.SIGNED, "__signed" to TokenKind.SIGNED, "__signed__" to TokenKind.SIGNED,
-            "auto" to TokenKind.AUTO, "inline" to TokenKind.INLINE, "__inline" to TokenKind.INLINE, "__inline__" to TokenKind.INLINE,
-            "restrict" to TokenKind.RESTRICT, "__restrict" to TokenKind.RESTRICT, "__restrict__" to TokenKind.RESTRICT,
-            "__extension__" to TokenKind.EXTENSION, "_Thread_local" to TokenKind.THREAD_LOCAL, "__thread" to TokenKind.THREAD_LOCAL,
-            "_Generic" to TokenKind.GENERIC, "_Static_assert" to TokenKind.STATIC_ASSERT, "void" to TokenKind.VOID,
-            "char" to TokenKind.CHAR, "int" to TokenKind.INT, "float" to TokenKind.FLOAT, "double" to TokenKind.DOUBLE,
-            "_Bool" to TokenKind.BOOL, "_Complex" to TokenKind.COMPLEX, "short" to TokenKind.SHORT, "long" to TokenKind.LONG,
-            "struct" to TokenKind.STRUCT, "union" to TokenKind.UNION, "typedef" to TokenKind.TYPEDEF, "enum" to TokenKind.ENUM,
-            "sizeof" to TokenKind.SIZEOF, "__attribute" to TokenKind.ATTRIBUTE, "__attribute__" to TokenKind.ATTRIBUTE,
-            "__alignof" to TokenKind.ALIGNOF, "__alignof__" to TokenKind.ALIGNOF, "_Alignof" to TokenKind.ALIGNOF,
-            "_Alignas" to TokenKind.ALIGNAS, "typeof" to TokenKind.TYPEOF, "__typeof" to TokenKind.TYPEOF,
-            "__typeof__" to TokenKind.TYPEOF, "__label__" to TokenKind.LABEL,
-            "define" to TokenKind.DEFINE, "include" to TokenKind.INCLUDE, "include_next" to TokenKind.INCLUDE_NEXT,
-            "ifdef" to TokenKind.IFDEF, "ifndef" to TokenKind.IFNDEF, "elif" to TokenKind.ELIF, "endif" to TokenKind.ENDIF,
-            "defined" to TokenKind.DEFINED, "undef" to TokenKind.UNDEF, "error" to TokenKind.ERROR, "warning" to TokenKind.WARNING,
-            "line" to TokenKind.LINE, "pragma" to TokenKind.PRAGMA, "__func__" to TokenKind.FUNC, "__nan__" to TokenKind.NAN,
-            "__snan__" to TokenKind.SNAN, "__inf__" to TokenKind.INF, "pack" to TokenKind.PACK, "comment" to TokenKind.COMMENT,
-            "lib" to TokenKind.LIB, "push_macro" to TokenKind.PUSH_MACRO, "pop_macro" to TokenKind.POP_MACRO,
-            "once" to TokenKind.ONCE, "option" to TokenKind.OPTION,
         )
     }
 }

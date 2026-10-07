@@ -45,7 +45,7 @@ sealed interface LiteralValue {
 
     data class Character(val value: Int, val wide: Boolean) : LiteralValue
 
-    data class StringValue(val value: String, val wide: Boolean) : LiteralValue
+    data class StringValue(val value: String, val wide: Boolean, val prefix: String = "") : LiteralValue
 }
 
 data class Token(
@@ -53,4 +53,6 @@ data class Token(
     val lexeme: String,
     val span: SourceSpan,
     val literal: LiteralValue? = null,
+    /** Raw TinyCC-compatible token value retained for parser/backend parity. */
+    val tccId: Int = kind.tccId,
 )

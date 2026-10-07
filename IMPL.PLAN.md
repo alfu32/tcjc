@@ -3,10 +3,10 @@
 ## Dashboard
 
 ```text
-Overall: 3/36
+Overall: 4/36
 
 [DONE]        [3/3]  1. Source preservation and parity rebaseline
-[IN_PROGRESS] [0/3]  2. Lexer, tokens, and preprocessing
+[IN_PROGRESS] [1/3]  2. Lexer, tokens, and preprocessing
 [TODO]        [0/3]  3. Types, declarations, symbols, and constants
 [TODO]        [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
@@ -19,7 +19,7 @@ Overall: 3/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-2.1 — implement exact token numbering, literals, escapes, comments, and locations
+2.2 — implement macro expansion, token pasting/stringizing, conditionals, includes, pragmas, and predefined macros
 
 Current milestone:
 M0 — source preservation and parity rebaseline
@@ -75,8 +75,11 @@ run the relevant checks, commit using Conventional Commits, and push to
 
 ### 2. Lexer, tokens, and preprocessing — `IN_PROGRESS` (0/3)
 
-- [ ] 2.1 Implement exact token numbering, identifiers, literals, escapes,
-  comments, character sets, locations, and error recovery. — `TODO`
+- [x] 2.1 Implement exact token numbering, identifiers, literals, escapes,
+  comments, character sets, locations, and error recovery. — `DONE`
+  (added historical base token IDs and literal classes, raw IDs on tokens,
+  hexadecimal floating constants, digraphs, line splicing, GNU escapes, and
+  universal character-name validation with focused lexer tests)
 - [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
   includes, pragmas, predefined macros, and line control. — `TODO`
 - [ ] 2.3 Port every preprocessor fixture and add differential tests for all

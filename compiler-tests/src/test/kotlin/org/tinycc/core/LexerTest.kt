@@ -57,4 +57,38 @@ class LexerTest {
         assertTrue(literalDiagnostics.render().contains("invalid number"))
         assertTrue(literalDiagnostics.render().contains("unknown escape sequence"))
     }
+
+    @Test
+    fun preservesHistoricalTinyCcTokenIdsAndLiteralClasses() {
+        val tokens = Lexer("if int __attribute__ ++ -> ... && 7u 8L 9LL 1.0f 2.0L 'a' L\"x\"").tokenize()
+
+        assertEquals(256, tokens[0].tccId)
+        assertEquals(299, tokens[1].tccId)
+        assertEquals(312, tokens[2].tccId)
+        assertEquals(0x82, tokens[3].tccId)
+        assertEquals(0xA0, tokens[4].tccId)
+        assertEquals(0xA1, tokens[5].tccId)
+        assertEquals(0x90, tokens[6].tccId)
+        assertEquals(0xC3, tokens[7].tccId)
+        assertEquals(0xC6, tokens[8].tccId)
+        assertEquals(0xC4, tokens[9].tccId)
+        assertEquals(0xCA, tokens[10].tccId)
+        assertEquals(0xCC, tokens[11].tccId)
+        assertEquals(0xC0, tokens[12].tccId)
+        assertEquals(0xC9, tokens[13].tccId)
+    }
+
+    @Test
+    fun lexesHexadecimalFloatingConstantsLineSplicesAndDigraphs() {
+        val diagnostics = DiagnosticEngine()
+        val tokens = Lexer("0x1.8p+1\\\nvalue <: 2 :> %:%:", diagnostics = diagnostics).tokenize()
+
+        assertEquals(3.0, (tokens[0].literal as LiteralValue.Floating).value)
+        assertEquals(TokenKind.IDENTIFIER, tokens[1].kind)
+        assertEquals(2, tokens[1].span.start.line)
+        assertEquals(TokenKind.LEFT_BRACKET, tokens[2].kind)
+        assertEquals(TokenKind.RIGHT_BRACKET, tokens[4].kind)
+        assertEquals(TokenKind.HASH_HASH, tokens[5].kind)
+        assertEquals(0, diagnostics.errorCount)
+    }
 }
