@@ -223,9 +223,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   (dash input now reads UTF-8 stdin for currently supported preprocess/token
   output modes, `__FILE__` expands to `"-"`, stdin diagnostics retain the `-`
   filename, and quoted includes search the working directory; multiple
-  source files now aggregate in token/preprocess output modes; multi-unit
-  compilation/linking, remaining options, and full diagnostic parity remain
-  open)
+  source files aggregate in token/preprocess output modes and `-o -` routes
+  output to stdout; multi-unit compilation/linking, remaining options, and full
+  diagnostic parity remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
   source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`
 - [ ] 11.3 Produce reproducible Gradle/JVM distributions and verify that no

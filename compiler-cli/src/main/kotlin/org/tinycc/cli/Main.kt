@@ -68,11 +68,13 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
                 return 2
             }
             val outputBytes = if (results.size == 1) compiler.outputBytes() else aggregateOutput(results, options.outputType)
-            if (options.outputPath != null) {
-                options.outputPath.toAbsolutePath().normalize().parent?.let(Files::createDirectories)
-                Files.write(options.outputPath, outputBytes)
+            val writeToStdout = options.outputPath == null || options.outputPath.toString() == "-"
+            if (!writeToStdout) {
+                val outputPath = requireNotNull(options.outputPath)
+                outputPath.toAbsolutePath().normalize().parent?.let(Files::createDirectories)
+                Files.write(outputPath, outputBytes)
             } else output.write(outputBytes)
-            if (options.outputPath == null && options.outputType == CompilerOutputType.TOKENS) {
+            if (writeToStdout && options.outputType == CompilerOutputType.TOKENS) {
                 output.println()
             }
             0

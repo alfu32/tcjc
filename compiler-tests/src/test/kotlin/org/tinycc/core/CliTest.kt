@@ -171,4 +171,31 @@ class CliTest {
             root.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun routesDashOutputToStandardOutput() {
+        val root = Files.createTempDirectory("tcjc-cli-output-stdout-")
+        val source = root.resolve("source.c")
+        source.writeText("int stdout_value;\n")
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+
+        try {
+            assertEquals(
+                0,
+                execute(listOf("-E", "-o", "-", source.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertEquals("int stdout_value;\n", output.toString())
+            assertEquals("", errors.toString())
+
+            output.reset()
+            assertEquals(
+                0,
+                execute(listOf("-E", "--output=-", source.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertEquals("int stdout_value;\n", output.toString())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }

@@ -158,7 +158,8 @@ class CommandLineParser(
                 argument == "-c" -> outputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS
                 argument == "-m32" -> target = target.replace(Regex("^[^-]+"), "i386")
                 argument == "-m64" -> target = target.replace(Regex("^[^-]+"), "x86_64")
-                argument == "-o" || argument == "--output" -> outputPath = nextValue(expanded, ++index, argument).toPath()
+                argument == "-o" || argument == "--output" ->
+                    outputPath = nextValue(expanded, ++index, argument, allowDash = true).toPath()
                 argument.startsWith("--output=") -> outputPath = argument.substringAfter('=').toPath()
                 argument == "--target" -> target = nextValue(expanded, ++index, argument)
                 argument.startsWith("--target=") -> target = argument.substringAfter('=')
@@ -228,8 +229,8 @@ class CommandLineParser(
         return value
     }
 
-    private fun nextValue(arguments: List<String>, index: Int, option: String): String {
-        if (index >= arguments.size || arguments[index].startsWith("-")) {
+    private fun nextValue(arguments: List<String>, index: Int, option: String, allowDash: Boolean = false): String {
+        if (index >= arguments.size || arguments[index].startsWith("-") && !(allowDash && arguments[index] == "-")) {
             throw CliParseException("$option expects a value")
         }
         return arguments[index]
