@@ -189,8 +189,9 @@ class ExpressionSemanticAnalyzer(
             -> if (isArithmetic(leftType) && isArithmetic(rightType)) typed(expression, commonArithmetic(leftType, rightType)) else invalid(expression, "binary operator requires arithmetic operands")
             BinaryOperator.REMAINDER,
             BinaryOperator.BITWISE_AND, BinaryOperator.BITWISE_XOR, BinaryOperator.BITWISE_OR,
-            BinaryOperator.SHIFT_LEFT, BinaryOperator.SHIFT_RIGHT,
             -> if (isInteger(leftType) && isInteger(rightType)) typed(expression, commonArithmetic(leftType, rightType)) else invalid(expression, "integer operands are required")
+            BinaryOperator.SHIFT_LEFT, BinaryOperator.SHIFT_RIGHT,
+            -> if (isInteger(leftType) && isInteger(rightType)) typed(expression, integerPromotedType(leftType)) else invalid(expression, "integer operands are required")
         }
     }
 
@@ -551,6 +552,12 @@ class ExpressionSemanticAnalyzer(
         val sourceBits = integerBitWidth(kind)
         val intBits = integerBitWidth(PrimitiveKind.INT)
         return if (isUnsigned(kind) && sourceBits >= intBits) PrimitiveKind.UNSIGNED_INT else PrimitiveKind.INT
+    }
+
+    private fun integerPromotedType(type: CType): CType = when (val value = canonical(type)) {
+        is CType.Primitive -> CType.Primitive(integerPromotion(value.kind))
+        is CType.Enumeration -> CType.Primitive(integerPromotion(value.underlying))
+        else -> CTypes.int
     }
 
     private fun integerBitWidth(kind: PrimitiveKind): Long =

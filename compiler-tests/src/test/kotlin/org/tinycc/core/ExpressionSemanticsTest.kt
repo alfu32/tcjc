@@ -183,15 +183,18 @@ class ExpressionSemanticsTest {
         symbols.declare(ObjectDeclaration("longUnsigned", CTypes.unsignedLong))
         symbols.declare(ObjectDeclaration("small", CTypes.unsignedShort))
         symbols.declare(ObjectDeclaration("signedInt", CTypes.int))
+        symbols.declare(ObjectDeclaration("rightShift", CTypes.unsignedLongLong))
         val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
 
         val representable = analyzer.analyze(ExpressionParser(Lexer("wideSigned + smallUnsigned").tokenize()).parse())
         val sameWidthUnsigned = analyzer.analyze(ExpressionParser(Lexer("longLongSigned + longUnsigned").tokenize()).parse())
         val promoted = analyzer.analyze(ExpressionParser(Lexer("small + signedInt").tokenize()).parse())
+        val shift = analyzer.analyze(ExpressionParser(Lexer("wideSigned >> rightShift").tokenize()).parse())
 
         assertEquals(CTypes.long, representable.type)
         assertEquals(CTypes.unsignedLongLong, sameWidthUnsigned.type)
         assertEquals(CTypes.int, promoted.type)
+        assertEquals(CTypes.long, shift.type)
         assertEquals(0, diagnostics.errorCount)
     }
 
