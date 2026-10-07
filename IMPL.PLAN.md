@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 27/48
+Overall: 28/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
-[IN_PROGRESS] [3/12] 4. Lowering and native target backends
+[IN_PROGRESS] [4/12] 4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-10.1 ARM instruction generation, ARM/Thumb ABI choices, VFP/EABI variants, and assembler behavior
+10.2 ARM64 instruction generation, calling convention, floating-point, atomics, and platform ABI details
 
 Current milestone:
 M4 — Lowering and native target backends
@@ -90,9 +90,9 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 9.2 Port x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `compiler-backends/.../x86/X86Backend.kt`, and expanded `X86BackendTest`)
 - [x] 9.3 Pass native i386/x86_64 compile, link, run, ABI, assembler, and self-hosting parity tests. — `DONE` (see `compiler-backends/.../x86/X86MachineCode.kt` and `X86MachineCodeTest`; native smoke uses a Kotlin-built ELF64 image)
 
-### 10. ARM and ARM64 backends — `TODO` (0/3)
+### 10. ARM and ARM64 backends — `IN_PROGRESS` (1/3)
 
-- [ ] 10.1 Port ARM instruction generation, ARM/Thumb ABI choices, VFP/EABI variants, and assembler behavior. — `TODO`
+- [x] 10.1 Port ARM instruction generation, ARM/Thumb ABI choices, VFP/EABI variants, and assembler behavior. — `DONE` (see `compiler-backends/.../arm/ArmBackend.kt` and `ArmBackendTest`)
 - [ ] 10.2 Port ARM64 instruction generation, calling convention, floating-point, atomics, and platform ABI details. — `TODO`
 - [ ] 10.3 Validate ARM/ARM64 cross builds and execution where available, including Windows and Apple variants. — `TODO`
 
