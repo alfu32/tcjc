@@ -127,6 +127,35 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesLeaForI386AndExtendedX8664AddressRegisters() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0x8D.toByte(), 0x45, 0xF8.toByte(),
+                0x4D, 0x8D.toByte(), 0x84.toByte(), 0x24, 0x80.toByte(), 0, 0, 0,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.LEA, listOf(r64("rax"), X86Operand.Memory(r64("rbp").value, -8))),
+                    X86Instruction(X86Opcode.LEA, listOf(r64("r8"), X86Operand.Memory(r64("r12").value, 128))),
+                ),
+            ),
+        )
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ebp = physical(X86Mode.I386, "ebp")
+        assertContentEquals(
+            byteArrayOf(0x8D.toByte(), 0x45, 0xFC.toByte()),
+            i386.encode(listOf(X86Instruction(X86Opcode.LEA, listOf(eax, X86Operand.Memory(ebp.value, -4))))),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            i386.encode(listOf(X86Instruction(X86Opcode.LEA, listOf(r64("rax"), X86Operand.Memory()))))
+        }
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }

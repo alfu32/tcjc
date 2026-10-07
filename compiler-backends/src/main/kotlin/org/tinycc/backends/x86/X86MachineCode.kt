@@ -131,6 +131,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         }
         when (instruction.opcode) {
             X86Opcode.MOV -> encodeMov(instruction.operands, output)
+            X86Opcode.LEA -> encodeLea(instruction.operands, output)
             X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01, 0)
             X86Opcode.OR -> encodeBinary(instruction.operands, output, 0x09, 1)
             X86Opcode.AND -> encodeBinary(instruction.operands, output, 0x21, 4)
@@ -141,6 +142,16 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.POP -> encodeStackRegister(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
         }
+    }
+
+    private fun encodeLea(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 2) { "lea requires a register destination and memory source" }
+        val destination = physicalRegister(operands[0])
+        require(destination.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && destination.bits == mode.bits) {
+            "${mode.bits}-bit lea requires a ${mode.bits}-bit integer destination register"
+        }
+        require(operands[1] is X86Operand.Memory) { "lea source must be a memory address" }
+        encodeRm(0x8D, destination.number, operands[1], output)
     }
 
     private fun encodeMov(operands: List<X86Operand>, output: MutableList<Byte>) {
