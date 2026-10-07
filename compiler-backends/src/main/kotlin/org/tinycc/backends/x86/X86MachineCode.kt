@@ -144,6 +144,9 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
+            X86Opcode.SHL -> encodeShift(instruction.operands, output, 4)
+            X86Opcode.SHR -> encodeShift(instruction.operands, output, 5)
+            X86Opcode.SAR -> encodeShift(instruction.operands, output, 7)
             X86Opcode.CALL -> encodeIndirectCall(instruction.operands, output)
             X86Opcode.PUSH -> encodeStackOperand(instruction.operands, output, push = true)
             X86Opcode.POP -> encodeStackOperand(instruction.operands, output, push = false)
@@ -157,6 +160,36 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             "indirect call requires a register or memory operand; external symbols need relocation support"
         }
         encodeRm(0xFF, 2, operands.single(), output)
+    }
+
+    private fun encodeShift(operands: List<X86Operand>, output: MutableList<Byte>, extension: Int) {
+        require(operands.size == 2) { "shift requires a register or memory destination and a count" }
+        val destination = operands[0]
+        if (destination is X86Operand.Register) {
+            val register = physicalRegister(destination)
+            require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                "shift register width must match ${mode.bits}-bit target mode"
+            }
+        }
+        require(destination is X86Operand.Register || destination is X86Operand.Memory) {
+            "shift destination must be a register or memory operand"
+        }
+        when (val count = operands[1]) {
+            is X86Operand.Immediate -> {
+                require(count.value in 0L..255L) { "x86 shift immediate must fit 8 bits" }
+                val value = count.value.toInt()
+                encodeRm(if (value == 1) 0xD1 else 0xC1, extension, destination, output)
+                if (value != 1) output += value.toByte()
+            }
+            is X86Operand.Register -> {
+                val register = physicalRegister(count)
+                require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER &&
+                    register.bits == mode.bits && register.number == 1
+                ) { "variable x86 shift count must be held in CX/ECX/RCX (CL)" }
+                encodeRm(0xD3, extension, destination, output)
+            }
+            else -> error("x86 shift count must be an immediate or CL register: $count")
+        }
     }
 
     private fun encodeLea(operands: List<X86Operand>, output: MutableList<Byte>) {

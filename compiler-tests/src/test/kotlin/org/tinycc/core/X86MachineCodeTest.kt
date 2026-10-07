@@ -276,6 +276,50 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesLogicalAndArithmeticShiftsByImmediateOrCl() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0xD1.toByte(), 0xE0.toByte(),
+                0x48, 0xC1.toByte(), 0xE8.toByte(), 2,
+                0x48, 0xD3.toByte(), 0x7D, 0xF8.toByte(),
+                0x49, 0xD3.toByte(), 0xE0.toByte(),
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.SHL, listOf(r64("rax"), X86Operand.Immediate(1))),
+                    X86Instruction(X86Opcode.SHR, listOf(r64("rax"), X86Operand.Immediate(2))),
+                    X86Instruction(
+                        X86Opcode.SAR,
+                        listOf(X86Operand.Memory(r64("rbp").value, -8), r64("rcx")),
+                    ),
+                    X86Instruction(X86Opcode.SHL, listOf(r64("r8"), r64("rcx"))),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.SHL, listOf(r64("rax"), X86Operand.Immediate(256)))))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.SHR, listOf(r64("rax"), r64("rdx")))))
+        }
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ecx = physical(X86Mode.I386, "ecx")
+        assertContentEquals(
+            byteArrayOf(0xD1.toByte(), 0xE0.toByte(), 0xD3.toByte(), 0xF9.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.SHL, listOf(eax, X86Operand.Immediate(1))),
+                    X86Instruction(X86Opcode.SAR, listOf(ecx, ecx)),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }
