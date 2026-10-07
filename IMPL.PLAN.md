@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 19/48
+Overall: 20/48
 
-[IN_PROGRESS] [7/9]  1. Language front-end
+[IN_PROGRESS] [8/9]  1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
@@ -13,7 +13,7 @@ Overall: 19/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-7.2 Function definitions, parameters, variadics, and returns
+7.3 Parser/semantic regression coverage for scopes, unreachable code, VLAs, and control-flow errors
 
 Current milestone:
 M1 — Language front-end
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (6/16 implementation tasks; 19/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (6/16 implementation tasks; 20/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -72,10 +72,10 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 6.2 Implement conversions, lvalues, pointer arithmetic, qualifiers, overload-free operator typing, and diagnostics. — `DONE` (see `compiler-core/.../semantics/ExpressionSemantics.kt` and `ExpressionSemanticsTest`)
 - [x] 6.3 Port integer, floating-point, address, relocation, and compile-time constant evaluation with golden tests. — `DONE` (see `compiler-core/.../constants` and `ConstantEvaluationTest`)
 
-### 7. Statements, functions, and control flow — `IN_PROGRESS` (1/3)
+### 7. Statements, functions, and control flow — `IN_PROGRESS` (2/3)
 
 - [x] 7.1 Port blocks, declarations, expression statements, selection, loops, jumps, labels, and switch lowering. — `DONE` (see `compiler-core/.../statements` and `StatementParserTest`)
-- [ ] 7.2 Port function definitions, parameters, calling metadata, variadic functions, nested/local functions, and returns. — `TODO`
+- [x] 7.2 Port function definitions, parameters, calling metadata, variadic functions, nested/local functions, and returns. — `DONE` (see `compiler-core/.../functions` and `FunctionParserTest`)
 - [ ] 7.3 Add parser/semantic regression coverage for scope, unreachable code, VLA behavior, and control-flow errors. — `TODO`
 
 ### 8. Generic IR and code-emission layer — `TODO` (0/3)
