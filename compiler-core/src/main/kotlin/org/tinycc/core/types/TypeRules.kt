@@ -136,9 +136,47 @@ class TypeRules(private val diagnostics: DiagnosticEngine = DiagnosticEngine()) 
             if (bound is ArrayBound.Flexible && index != type.fields.lastIndex) {
                 diagnostics.error(location, "flexible array must be the last field")
             }
+            validateBitField(field, location)
             validateType(field.type, TypeUse.FIELD, location, seen)
         }
         return !diagnostics.hasErrors
+    }
+
+    private fun validateBitField(field: Field, location: SourceLocation): Boolean {
+        val width = field.bitWidth ?: return true
+        val base = unqualified(field.type)
+        val integerType = base is CType.Primitive && base.kind in setOf(
+            PrimitiveKind.BOOL,
+            PrimitiveKind.CHAR,
+            PrimitiveKind.SIGNED_CHAR,
+            PrimitiveKind.UNSIGNED_CHAR,
+            PrimitiveKind.SHORT,
+            PrimitiveKind.UNSIGNED_SHORT,
+            PrimitiveKind.INT,
+            PrimitiveKind.UNSIGNED_INT,
+            PrimitiveKind.LONG,
+            PrimitiveKind.UNSIGNED_LONG,
+            PrimitiveKind.LONG_LONG,
+            PrimitiveKind.UNSIGNED_LONG_LONG,
+        )
+        if (!integerType && base !is CType.Enumeration) {
+            diagnostics.error(location, "bit-field type must be an integer or enumeration type")
+            return false
+        }
+        if (width < 0 || width > 64) {
+            diagnostics.error(location, "bit-field width must be between 0 and 64 bits")
+            return false
+        }
+        if (width == 0 && field.name != null) {
+            diagnostics.error(location, "zero-width bit-field must be unnamed")
+            return false
+        }
+        return true
+    }
+
+    private fun unqualified(type: CType): CType = when (val unaliased = CTypes.unalias(type)) {
+        is CType.Qualified -> unqualified(unaliased.base)
+        else -> unaliased
     }
 
     private fun validateEnum(type: CType.Enumeration, location: SourceLocation): Boolean {

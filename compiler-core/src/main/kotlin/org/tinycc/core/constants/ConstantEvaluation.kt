@@ -3,6 +3,7 @@ package org.tinycc.core.constants
 import java.math.BigDecimal
 import java.math.BigInteger
 import org.tinycc.core.diagnostics.DiagnosticEngine
+import org.tinycc.core.diagnostics.SourceLocation
 import org.tinycc.core.expressions.BinaryOperator
 import org.tinycc.core.expressions.Expression
 import org.tinycc.core.expressions.SizeOperand
@@ -12,9 +13,10 @@ import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.PrimitiveKind
 import org.tinycc.core.types.TargetDataModels
+import org.tinycc.core.types.ArrayBound
 import org.tinycc.core.types.TypeLayout
 
-enum class RelocationKind { ABSOLUTE, PC_RELATIVE, GOT, TLS }
+enum class RelocationKind { ABSOLUTE, PC_RELATIVE, GOT, PLT, TLS, SECTION_RELATIVE }
 
 data class Relocation(val symbol: String, val addend: Long = 0, val kind: RelocationKind = RelocationKind.ABSOLUTE)
 
@@ -22,6 +24,8 @@ sealed interface ConstantValue {
     data class Integer(val value: BigInteger) : ConstantValue
     data class Floating(val value: BigDecimal) : ConstantValue
     data class Address(val relocation: Relocation) : ConstantValue
+    data class Aggregate(val values: List<ConstantValue>) : ConstantValue
+    data object Zero : ConstantValue
     data object NotConstant : ConstantValue
 }
 
@@ -36,7 +40,8 @@ class ConstantEvaluator(
     fun evaluate(expression: Expression): ConstantValue = when (expression) {
         is Expression.Integer -> ConstantValue.Integer(expression.value)
         is Expression.Character -> ConstantValue.Integer(BigInteger.valueOf(expression.value.toLong()))
-        is Expression.Floating -> expression.raw.toBigDecimalOrNull()?.let(ConstantValue::Floating) ?: notConstant(expression, "invalid floating constant")
+        is Expression.Floating -> parseFloating(expression.raw)?.let(ConstantValue::Floating)
+            ?: notConstant(expression, "invalid floating constant")
         is Expression.Name, is Expression.StringLiteral -> ConstantValue.NotConstant
         is Expression.Invalid, is Expression.Call, is Expression.Index, is Expression.Member -> ConstantValue.NotConstant
         is Expression.CompoundLiteral -> ConstantValue.NotConstant
@@ -53,13 +58,55 @@ class ConstantEvaluator(
         }
     }
 
+    fun evaluateInitializer(initializer: org.tinycc.core.expressions.Initializer, expected: CType): ConstantValue {
+        return when (initializer) {
+            is org.tinycc.core.expressions.Initializer.ExpressionValue -> {
+                val value = evaluate(initializer.expression)
+                if (value is ConstantValue.NotConstant) {
+                    notConstant(initializer.expression, "initializer is not a constant expression")
+                } else value
+            }
+            is org.tinycc.core.expressions.Initializer.ListValue -> {
+                val aggregate = canonical(expected)
+                if (aggregate is CType.Array || aggregate is CType.Record) {
+                    val elementTypes = initializerElementTypes(expected, initializer.values.size)
+                    if (elementTypes == null || initializer.values.size > elementTypes.size && aggregate !is CType.Array) {
+                        diagnostics.error(SourceLocation(), "initializer list does not match aggregate type")
+                        return ConstantValue.NotConstant
+                    }
+                    if (aggregate is CType.Array && aggregate.bound is ArrayBound.Constant && initializer.values.size > aggregate.bound.length) {
+                        diagnostics.error(SourceLocation(), "too many initializers for array")
+                        return ConstantValue.NotConstant
+                    }
+                    val values = initializer.values.mapIndexed { index, value ->
+                        evaluateInitializer(value, elementTypes!![index])
+                    }.toMutableList()
+                    while ((aggregate !is CType.Array && values.size < elementTypes!!.size) ||
+                        (aggregate is CType.Array && aggregate.bound is ArrayBound.Constant && values.size < aggregate.bound.length)) {
+                        values += ConstantValue.Zero
+                    }
+                    ConstantValue.Aggregate(values)
+                } else if (initializer.values.size == 1) {
+                    evaluateInitializer(initializer.values.single(), expected)
+                } else {
+                    diagnostics.error(SourceLocation(), "initializer list does not match aggregate type")
+                    ConstantValue.NotConstant
+                }
+            }
+        }
+    }
+
     private fun evaluateUnary(expression: Expression.Unary): ConstantValue {
         if (expression.operator == org.tinycc.core.expressions.UnaryOperator.ADDRESS) return addressOf(expression.operand, expression)
         val value = evaluate(expression.operand)
         return when (expression.operator) {
             org.tinycc.core.expressions.UnaryOperator.PLUS -> value
-            org.tinycc.core.expressions.UnaryOperator.MINUS -> integer(value)?.let { ConstantValue.Integer(it.negate()) } ?: notConstant(expression, "unary operand is not constant")
-            org.tinycc.core.expressions.UnaryOperator.LOGICAL_NOT -> integer(value)?.let { bool(it != BigInteger.ZERO) } ?: notConstant(expression, "unary operand is not constant")
+            org.tinycc.core.expressions.UnaryOperator.MINUS -> integer(value)?.let { ConstantValue.Integer(it.negate()) }
+                ?: floating(value)?.let { ConstantValue.Floating(it.negate()) }
+                ?: notConstant(expression, "unary operand is not constant")
+            org.tinycc.core.expressions.UnaryOperator.LOGICAL_NOT -> integer(value)?.let { bool(it == BigInteger.ZERO) }
+                ?: floating(value)?.let { bool(it.compareTo(BigDecimal.ZERO) == 0) }
+                ?: notConstant(expression, "unary operand is not constant")
             org.tinycc.core.expressions.UnaryOperator.BITWISE_NOT -> integer(value)?.let { ConstantValue.Integer(it.not()) } ?: notConstant(expression, "unary operand is not constant")
             org.tinycc.core.expressions.UnaryOperator.DEREFERENCE,
             org.tinycc.core.expressions.UnaryOperator.PRE_INCREMENT,
@@ -71,6 +118,14 @@ class ConstantEvaluator(
 
     private fun evaluateBinary(expression: Expression.Binary): ConstantValue {
         val left = evaluate(expression.left)
+        if (expression.operator == BinaryOperator.LOGICAL_AND) {
+            val leftInteger = integer(left)
+            if (leftInteger != null && leftInteger == BigInteger.ZERO) return bool(false)
+        }
+        if (expression.operator == BinaryOperator.LOGICAL_OR) {
+            val leftInteger = integer(left)
+            if (leftInteger != null && leftInteger != BigInteger.ZERO) return bool(true)
+        }
         val right = evaluate(expression.right)
         if (expression.operator == BinaryOperator.COMMA) return right
         if (left is ConstantValue.Address || right is ConstantValue.Address) return evaluateAddressBinary(expression, left, right)
@@ -79,7 +134,11 @@ class ConstantEvaluator(
         if (leftInteger != null && rightInteger != null) return evaluateIntegerBinary(expression.operator, leftInteger, rightInteger)
         val leftFloat = floating(left)
         val rightFloat = floating(right)
-        if (leftFloat != null && rightFloat != null) return evaluateFloatingBinary(expression.operator, leftFloat, rightFloat)
+        if (leftFloat != null || rightFloat != null) {
+            val leftNumber = leftFloat ?: leftInteger?.toBigDecimal()
+            val rightNumber = rightFloat ?: rightInteger?.toBigDecimal()
+            if (leftNumber != null && rightNumber != null) return evaluateFloatingBinary(expression.operator, leftNumber, rightNumber)
+        }
         return notConstant(expression, "binary operands are not constant")
     }
 
@@ -149,7 +208,18 @@ class ConstantEvaluator(
             ?: notConstant(expression, "sizeof operand has no compile-time size")
     }
 
+    private fun initializerElementTypes(type: CType, count: Int): List<CType>? = when (val canonical = canonical(type)) {
+        is CType.Array -> when (canonical.bound) {
+            is ArrayBound.Constant -> List(canonical.bound.length.toInt()) { canonical.element }
+            ArrayBound.Flexible, ArrayBound.Unspecified, is ArrayBound.Variable -> List(count) { canonical.element }
+        }
+        is CType.Record -> canonical.fields.map { it.type }
+        else -> null
+    }
+
     private fun cast(type: CType, value: ConstantValue, expression: Expression): ConstantValue {
+        if (value is ConstantValue.NotConstant) return value
+        if (canonical(type) is CType.Pointer && value is ConstantValue.Address) return value
         val primitive = canonical(type) as? CType.Primitive ?: return value
         return when (primitive.kind) {
             PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE, PrimitiveKind.LONG_DOUBLE ->
@@ -163,6 +233,13 @@ class ConstantEvaluator(
             ConstantValue.Address(Relocation(expression.identifier))
         } else notConstant(outer, "address refers to an unknown symbol")
         else -> notConstant(outer, "address is not relocatable")
+    }
+
+    private fun parseFloating(raw: String): BigDecimal? {
+        val normalized = raw.removeSuffix("f").removeSuffix("F").removeSuffix("l").removeSuffix("L")
+        return normalized.toBigDecimalOrNull() ?: runCatching {
+            BigDecimal.valueOf(java.lang.Double.parseDouble(normalized))
+        }.getOrNull()
     }
 
     private fun pointerElementSize(expression: Expression): Long {

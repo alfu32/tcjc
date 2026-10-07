@@ -3,12 +3,12 @@
 ## Dashboard
 
 ```text
-Overall: 8/36
+Overall: 9/36
 
 [DONE]        [3/3]  1. Source preservation and parity rebaseline
 [DONE]        [3/3]  2. Lexer, tokens, and preprocessing
-[IN_PROGRESS] [2/3]  3. Types, declarations, symbols, and constants
-[TODO]        [0/3]  4. Expressions, statements, functions, and semantics
+[DONE]        [3/3]  3. Types, declarations, symbols, and constants
+[IN_PROGRESS] [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
 [TODO]        [0/3]  6. i386 and x86_64 instruction and ABI support
 [TODO]        [0/3]  7. ARM and ARM64 instruction and ABI support
@@ -19,10 +19,10 @@ Overall: 8/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-3.3 — implement integer/floating/address constant evaluation, initializer folding, layout, alignment, bit-fields, and ABI metadata
+4.1 — implement the complete expression grammar, conversions, lvalues, pointer arithmetic, compound literals, and GNU/TCC expression extensions
 
 Current milestone:
-M1 — complete C type and declaration semantics
+M2 — complete C expression, statement, and function semantics
 ```
 
 `completed/total` counts terminal subtasks in the complete subtree. A task is
@@ -102,10 +102,14 @@ run the relevant checks, commit using Conventional Commits, and push to
   definitions, visibility, declaration merging, and symbol lifetime. — `DONE`
   (added linkage-aware block `extern` reuse, declaration history, tentative
   definition finalization, namespace/storage diagnostics, and lifetime tests)
-- [ ] 3.3 Implement integer/floating/address constant evaluation, initializer
-  folding, layout, alignment, bit-fields, and ABI metadata. — `TODO`
+- [x] 3.3 Implement integer/floating/address constant evaluation, initializer
+  folding, layout, alignment, bit-fields, and ABI metadata. — `DONE` (implemented
+  short-circuit and mixed numeric folding, hexadecimal floating constants,
+  relocatable addresses, aggregate initializer zero-fill, flexible/vector
+  layout, bit-field packing and constraints, and target ABI metadata for i386,
+  x86_64, ARM, ARM64, RISC-V, and C67; focused and full Gradle suites pass)
 
-### 4. Expressions, statements, functions, and semantics — `TODO` (0/3)
+### 4. Expressions, statements, functions, and semantics — `IN_PROGRESS` (0/3)
 
 - [ ] 4.1 Implement the complete expression grammar, conversions, lvalues,
   pointer arithmetic, compound literals, and GNU/TCC expression extensions. — `TODO`

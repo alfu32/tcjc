@@ -13,7 +13,10 @@ import org.tinycc.core.types.Field
 import org.tinycc.core.types.RecordKind
 import org.tinycc.core.types.TargetDataModels
 import org.tinycc.core.types.TypeCompatibilityChecker
+import org.tinycc.core.types.TypeAttributes
 import org.tinycc.core.types.TypeLayout
+import org.tinycc.core.types.TypeRules
+import org.tinycc.core.types.TypeUse
 
 class LayoutTest {
     @Test
@@ -46,5 +49,54 @@ class LayoutTest {
         assertTrue(!checker.requireComplete(CType.Array(CTypes.int, ArrayBound.Unspecified), context = "parameter"))
         assertTrue(diagnostics.render().contains("incompatible assignment"))
         assertTrue(diagnostics.render().contains("parameter is incomplete"))
+    }
+
+    @Test
+    fun laysOutBitFieldsFlexibleArraysVectorsAndAllTargetAbis() {
+        val layout = TypeLayout(TargetDataModels.X86_64_SYSV)
+        val bits = CType.Record(RecordKind.STRUCT, "Bits")
+        bits.completeWith(
+            listOf(
+                Field("first", CTypes.unsignedInt, bitWidth = 3),
+                Field("second", CTypes.unsignedInt, bitWidth = 5),
+                Field("value", CTypes.int),
+            ),
+        )
+        val flexible = CType.Record(RecordKind.STRUCT, "Buffer")
+        flexible.completeWith(listOf(Field("length", CTypes.int), Field("data", CTypes.flexibleArrayOf(CTypes.char))))
+        val vector = CTypes.annotated(CTypes.float, TypeAttributes(vectorBytes = 16, aligned = 16))
+
+        val bitLayout = layout.recordLayout(bits)!!
+        val flexibleLayout = layout.recordLayout(flexible)!!
+
+        assertEquals(0, bitLayout.fields[0].offset)
+        assertEquals(0, bitLayout.fields[0].bitOffset)
+        assertEquals(3, bitLayout.fields[1].bitOffset)
+        assertEquals(4, bitLayout.fields[2].offset)
+        assertEquals(4, flexibleLayout.size)
+        assertEquals(16, layout.sizeOf(vector))
+        assertEquals(16, layout.alignmentOf(vector))
+        assertEquals(TargetDataModels.I386_SYSV.architecture, AbiMetadataCatalog.I386_SYSV.architecture)
+        assertEquals(TargetDataModels.ARM_EABI.pointerBytes, AbiMetadataCatalog.ARM_EABI.pointerBytes)
+        assertEquals(16, AbiMetadataCatalog.ARM64_AAPCS.stackAlignment)
+        assertEquals(16, AbiMetadataCatalog.RISCV64.stackAlignment)
+        assertEquals(TargetDataModels.C67_MODEL.pointerBytes, AbiMetadataCatalog.C67.pointerBytes)
+    }
+
+    @Test
+    fun rejectsInvalidBitFieldTypesAndNamedZeroWidthFields() {
+        val diagnostics = DiagnosticEngine()
+        val rules = TypeRules(diagnostics)
+        val invalid = CType.Record(RecordKind.STRUCT, "InvalidBits")
+        invalid.completeWith(
+            listOf(
+                Field("fraction", CTypes.float, bitWidth = 3),
+                Field("namedZero", CTypes.int, bitWidth = 0),
+            ),
+        )
+
+        assertTrue(!rules.validate(invalid, TypeUse.OBJECT))
+        assertTrue(diagnostics.render().contains("bit-field type"))
+        assertTrue(diagnostics.render().contains("zero-width"))
     }
 }

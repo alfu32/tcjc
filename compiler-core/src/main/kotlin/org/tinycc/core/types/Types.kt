@@ -30,6 +30,8 @@ enum class CallingConvention {
     WIN64,
     AAPCS,
     AAPCS64,
+    RISCV64,
+    C67,
 }
 
 data class TypeAttributes(

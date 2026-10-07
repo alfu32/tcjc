@@ -33,6 +33,8 @@ data class FieldLayout(
     val offset: Long,
     val size: Long,
     val alignment: Long,
+    val bitOffset: Int? = null,
+    val bitWidth: Int? = null,
 )
 
 data class RecordLayout(
@@ -51,6 +53,15 @@ data class AbiMetadata(
 )
 
 object AbiMetadataCatalog {
+    val I386_SYSV = AbiMetadata(
+        TargetArchitecture.I386,
+        CallingConvention.CDECL,
+        pointerBytes = 4,
+        stackAlignment = 4,
+        calleeSavedRegisters = setOf("ebx", "esi", "edi", "ebp"),
+        aggregateReturnInMemory = true,
+    )
+
     val X86_64_SYSV = AbiMetadata(
         TargetArchitecture.X86_64,
         CallingConvention.SYSV64,
@@ -67,6 +78,42 @@ object AbiMetadataCatalog {
         stackAlignment = 16,
         calleeSavedRegisters = setOf("rbx", "rbp", "rdi", "rsi", "r12", "r13", "r14", "r15"),
         aggregateReturnInMemory = false,
+    )
+
+    val ARM_EABI = AbiMetadata(
+        TargetArchitecture.ARM,
+        CallingConvention.AAPCS,
+        pointerBytes = 4,
+        stackAlignment = 8,
+        calleeSavedRegisters = setOf("r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr"),
+        aggregateReturnInMemory = false,
+    )
+
+    val ARM64_AAPCS = AbiMetadata(
+        TargetArchitecture.ARM64,
+        CallingConvention.AAPCS64,
+        pointerBytes = 8,
+        stackAlignment = 16,
+        calleeSavedRegisters = (19..28).map { "x$it" }.toSet() + "x29",
+        aggregateReturnInMemory = false,
+    )
+
+    val RISCV64 = AbiMetadata(
+        TargetArchitecture.RISCV64,
+        CallingConvention.RISCV64,
+        pointerBytes = 8,
+        stackAlignment = 16,
+        calleeSavedRegisters = setOf("s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"),
+        aggregateReturnInMemory = false,
+    )
+
+    val C67 = AbiMetadata(
+        TargetArchitecture.C67,
+        CallingConvention.C67,
+        pointerBytes = 4,
+        stackAlignment = 8,
+        calleeSavedRegisters = setOf("a10", "a11", "a12", "a13", "a14", "a15"),
+        aggregateReturnInMemory = true,
     )
 }
 
@@ -108,6 +155,18 @@ class TypeLayout(private val model: TargetDataModel) {
         var offset = 0L
         var alignment = 1L
         var unionSize = 0L
+        var bitStorageOffset: Long? = null
+        var bitStorageSize = 0L
+        var bitStorageBits = 0
+        var bitCursor = 0
+
+        fun flushBitStorage() {
+            bitStorageOffset = null
+            bitStorageSize = 0
+            bitStorageBits = 0
+            bitCursor = 0
+        }
+
         record.fields.forEach { field ->
             val isFlexibleTail = field === record.fields.lastOrNull() &&
                 CTypes.unalias(field.type) is CType.Array &&
@@ -116,10 +175,42 @@ class TypeLayout(private val model: TargetDataModel) {
             val fieldAlignment = if (record.packed || record.attributes.packed || field.attributes.packed) 1L
             else field.attributes.aligned ?: alignmentOf(field.type) ?: return null
             alignment = maxOf(alignment, fieldAlignment)
+
+            if (field.bitWidth != null) {
+                val width = field.bitWidth
+                if (width < 0 || width > size * 8) return null
+                if (record.kind == RecordKind.UNION) {
+                    fieldLayouts += FieldLayout(field.name, 0, size, fieldAlignment, 0, width)
+                    unionSize = maxOf(unionSize, size)
+                    return@forEach
+                }
+                if (width == 0) {
+                    flushBitStorage()
+                    offset = alignUp(offset, fieldAlignment)
+                    fieldLayouts += FieldLayout(field.name, offset, 0, fieldAlignment, 0, width)
+                    return@forEach
+                }
+                val bits = (size * 8).toInt()
+                if (bitStorageOffset == null || bitStorageBits != bits || bitCursor + width > bits) {
+                    flushBitStorage()
+                    val storageOffset = alignUp(offset, fieldAlignment)
+                    bitStorageOffset = storageOffset
+                    bitStorageSize = size
+                    bitStorageBits = bits
+                    offset = storageOffset + bitStorageSize
+                }
+                val storageOffset = bitStorageOffset ?: return@forEach
+                fieldLayouts += FieldLayout(field.name, storageOffset, bitStorageSize, fieldAlignment, bitCursor, width)
+                bitCursor += width
+                if (bitCursor == bitStorageBits) flushBitStorage()
+                return@forEach
+            }
+            flushBitStorage()
             val fieldOffset = if (record.kind == RecordKind.UNION) 0 else alignUp(offset, fieldAlignment)
             fieldLayouts += FieldLayout(field.name, fieldOffset, size, fieldAlignment)
             if (record.kind == RecordKind.UNION) unionSize = maxOf(unionSize, size) else offset = fieldOffset + size
         }
+        flushBitStorage()
         val size = if (record.kind == RecordKind.UNION) unionSize else offset
         val recordAlignment = when {
             record.packed || record.attributes.packed -> 1L

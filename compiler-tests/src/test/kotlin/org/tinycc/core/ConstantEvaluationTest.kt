@@ -46,4 +46,22 @@ class ConstantEvaluationTest {
         assertTrue(invalid is ConstantValue.NotConstant)
         assertTrue(diagnostics.hasErrors)
     }
+
+    @Test
+    fun foldsShortCircuitMixedNumericAndAggregateInitializers() {
+        val diagnostics = DiagnosticEngine()
+        val evaluator = ConstantEvaluator(diagnostics)
+        val shortCircuit = evaluator.evaluate(ExpressionParser(Lexer("0 && (1 / 0)").tokenize()).parse())
+        val mixed = evaluator.evaluate(ExpressionParser(Lexer("0x1p2 + 1").tokenize()).parse())
+        val initializer = ExpressionParser(Lexer("{ 1, 2, 3 }").tokenize()).parseInitializer()
+        val aggregate = evaluator.evaluateInitializer(initializer, CTypes.arrayOf(CTypes.int, 4))
+
+        assertEquals(BigInteger.ZERO, assertIs<ConstantValue.Integer>(shortCircuit).value)
+        assertEquals("5", assertIs<ConstantValue.Floating>(mixed).value.stripTrailingZeros().toPlainString())
+        val values = assertIs<ConstantValue.Aggregate>(aggregate).values
+        assertEquals(4, values.size)
+        assertEquals(BigInteger.ONE, assertIs<ConstantValue.Integer>(values[0]).value)
+        assertTrue(values[3] is ConstantValue.Zero)
+        assertTrue(!diagnostics.hasErrors)
+    }
 }
