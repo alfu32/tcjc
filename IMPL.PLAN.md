@@ -179,7 +179,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   `IN_PROGRESS` (selected zero-operand scalar/control/fence/CET instructions and
   register, base-displacement, SIB, and absolute memory forms for MOV/ADD/SUB
   plus immediate ADD/OR/AND/SUB/XOR/CMP and rel32 JMP/all 16 conditional
-  branches with block-label resolution, LEA address calculation, and TEST
+  branches with block-label resolution, LEA address calculation, scalar SSE
+  moves/arithmetic/UCOMI comparisons, and TEST
   register/immediate forms, indirect/local CALL, and PUSH/POP register,
   memory, and immediate forms, plus SHL/SHR/SAR immediate and CL-count forms
   and signed IMUL plus signed/unsigned DIV/IDIV operand encodings now have

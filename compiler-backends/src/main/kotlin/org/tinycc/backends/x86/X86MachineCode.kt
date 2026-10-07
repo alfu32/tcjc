@@ -149,6 +149,18 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         when (instruction.opcode) {
             X86Opcode.MOV -> encodeMov(instruction.operands, output)
             X86Opcode.MOVZX -> encodeMovzx(instruction.operands, output)
+            X86Opcode.MOVSS -> encodeSseMove(instruction.operands, output, single = true)
+            X86Opcode.MOVSD -> encodeSseMove(instruction.operands, output, single = false)
+            X86Opcode.ADDSS -> encodeSseBinary(instruction.operands, output, 0x58, single = true)
+            X86Opcode.ADDSD -> encodeSseBinary(instruction.operands, output, 0x58, single = false)
+            X86Opcode.SUBSS -> encodeSseBinary(instruction.operands, output, 0x5C, single = true)
+            X86Opcode.SUBSD -> encodeSseBinary(instruction.operands, output, 0x5C, single = false)
+            X86Opcode.MULSS -> encodeSseBinary(instruction.operands, output, 0x59, single = true)
+            X86Opcode.MULSD -> encodeSseBinary(instruction.operands, output, 0x59, single = false)
+            X86Opcode.DIVSS -> encodeSseBinary(instruction.operands, output, 0x5E, single = true)
+            X86Opcode.DIVSD -> encodeSseBinary(instruction.operands, output, 0x5E, single = false)
+            X86Opcode.UCOMISS -> encodeUcomi(instruction.operands, output, single = true)
+            X86Opcode.UCOMISD -> encodeUcomi(instruction.operands, output, single = false)
             X86Opcode.LEA -> encodeLea(instruction.operands, output)
             X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01, 0)
             X86Opcode.OR -> encodeBinary(instruction.operands, output, 0x09, 1)
@@ -169,6 +181,91 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.POP -> encodeStackOperand(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
         }
+    }
+
+    private fun encodeSseMove(operands: List<X86Operand>, output: MutableList<Byte>, single: Boolean) {
+        require(operands.size == 2) { "scalar SSE move requires two operands" }
+        val prefix = if (single) 0xF3 else 0xF2
+        val destination = operands[0]
+        val source = operands[1]
+        if (destination is X86Operand.Memory) {
+            val register = sseRegister(source)
+            encodeRm(listOf(0x0F, 0x11), register, destination, output, w = false, legacyPrefixes = listOf(prefix))
+        } else {
+            val register = sseRegister(destination)
+            require(source is X86Operand.Register || source is X86Operand.Memory) {
+                "scalar SSE move source must be an XMM register or memory operand"
+            }
+            encodeSseRm(listOf(0x0F, 0x10), register, source, output, listOf(prefix))
+        }
+    }
+
+    private fun encodeSseBinary(
+        operands: List<X86Operand>,
+        output: MutableList<Byte>,
+        opcode: Int,
+        single: Boolean,
+    ) {
+        require(operands.size == 2) { "scalar SSE arithmetic requires two operands" }
+        val destination = sseRegister(operands[0])
+        val source = operands[1]
+        require(source is X86Operand.Register || source is X86Operand.Memory) {
+            "scalar SSE arithmetic source must be an XMM register or memory operand"
+        }
+        encodeSseRm(
+            listOf(0x0F, opcode),
+            destination,
+            source,
+            output,
+            listOf(if (single) 0xF3 else 0xF2),
+        )
+    }
+
+    private fun encodeUcomi(operands: List<X86Operand>, output: MutableList<Byte>, single: Boolean) {
+        require(operands.size == 2) { "ucomi requires two operands" }
+        val left = sseRegister(operands[0])
+        val right = operands[1]
+        require(right is X86Operand.Register || right is X86Operand.Memory) {
+            "ucomi source must be an XMM register or memory operand"
+        }
+        encodeSseRm(listOf(0x0F, 0x2E), left, right, output, if (single) emptyList() else listOf(0x66))
+    }
+
+    private fun encodeSseRm(
+        opcode: List<Int>,
+        registerField: Int,
+        operand: X86Operand,
+        output: MutableList<Byte>,
+        legacyPrefixes: List<Int>,
+    ) {
+        when (operand) {
+            is X86Operand.Register -> {
+                val base = sseRegister(operand)
+                legacyPrefixes.forEach { output += it.toByte() }
+                rex(output, register = registerField, base = base)
+                opcode.forEach { output += it.toByte() }
+                output += modRm(3, registerField, base)
+            }
+            is X86Operand.Memory -> encodeRm(
+                opcode,
+                registerField,
+                operand,
+                output,
+                w = false,
+                legacyPrefixes = legacyPrefixes,
+            )
+            else -> error("expected XMM register or memory operand, got $operand")
+        }
+    }
+
+    private fun sseRegister(operand: X86Operand): Int {
+        val register = physicalRegister(operand)
+        require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.FLOAT ||
+            register.registerClass == org.tinycc.core.ir.IrRegisterClass.VECTOR
+        ) { "scalar SSE instruction requires an XMM register" }
+        val number = register.number - if (mode == X86Mode.I386) 8 else 16
+        require(number in 0..7) { "XMM register is unavailable in $mode: ${register.name}" }
+        return number
     }
 
     private fun encodeSetcc(operands: List<X86Operand>, output: MutableList<Byte>) {
@@ -448,15 +545,17 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         operand: X86Operand,
         output: MutableList<Byte>,
         w: Boolean = mode == X86Mode.X86_64,
+        legacyPrefixes: List<Int> = emptyList(),
     ) {
         when (operand) {
             is X86Operand.Register -> {
                 val base = physicalRegister(operand)
+                legacyPrefixes.forEach { output += it.toByte() }
                 rex(output, w = w, register = registerField, base = base.number)
                 output += opcode.map(Int::toByte)
                 output += modRm(3, registerField, base.number)
             }
-            is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output, w)
+            is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output, w, legacyPrefixes)
             else -> error("expected register or memory operand, got $operand")
         }
     }
@@ -467,6 +566,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         memory: X86Operand.Memory,
         output: MutableList<Byte>,
         w: Boolean,
+        legacyPrefixes: List<Int> = emptyList(),
     ) {
         require(memory.symbol == null && memory.relocation == X86RelocationSyntax.DIRECT) {
             "symbolic memory operands require relocation support"
@@ -490,6 +590,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         } else {
             require(base == null || base.bits == 64) { "x86_64 memory addressing requires 64-bit registers" }
         }
+        legacyPrefixes.forEach { output += it.toByte() }
         rex(output, w = w, register = registerField, base = base?.number ?: 0)
         output += opcode.map(Int::toByte)
         val rm = if (needsSib) 4 else base!!.number

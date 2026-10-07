@@ -442,6 +442,53 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesScalarSseMovesArithmeticAndComparisons() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val x = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0xF3.toByte(), 0x0F, 0x10, 0xC1.toByte(),
+                0xF2.toByte(), 0x0F, 0x10, 0x50, 8,
+                0xF3.toByte(), 0x0F, 0x11, 0x5D, 0xFC.toByte(),
+                0xF3.toByte(), 0x0F, 0x58, 0xC1.toByte(),
+                0xF2.toByte(), 0x41, 0x0F, 0x5C, 0x54, 0x24, 8,
+                0xF3.toByte(), 0x0F, 0x59, 0xD8.toByte(),
+                0xF2.toByte(), 0x0F, 0x5E, 0xD8.toByte(),
+                0x0F, 0x2E, 0xC1.toByte(),
+                0x66, 0x0F, 0x2E, 0xD3.toByte(),
+                0xF2.toByte(), 0x41, 0x0F, 0x11, 0x4C, 0x24, 8,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.MOVSS, listOf(x("xmm0"), x("xmm1"))),
+                    X86Instruction(X86Opcode.MOVSD, listOf(x("xmm2"), X86Operand.Memory(x("rax").value, 8))),
+                    X86Instruction(X86Opcode.MOVSS, listOf(X86Operand.Memory(x("rbp").value, -4), x("xmm3"))),
+                    X86Instruction(X86Opcode.ADDSS, listOf(x("xmm0"), x("xmm1"))),
+                    X86Instruction(X86Opcode.SUBSD, listOf(x("xmm2"), X86Operand.Memory(x("r12").value, 8))),
+                    X86Instruction(X86Opcode.MULSS, listOf(x("xmm3"), x("xmm0"))),
+                    X86Instruction(X86Opcode.DIVSD, listOf(x("xmm3"), x("xmm0"))),
+                    X86Instruction(X86Opcode.UCOMISS, listOf(x("xmm0"), x("xmm1"))),
+                    X86Instruction(X86Opcode.UCOMISD, listOf(x("xmm2"), x("xmm3"))),
+                    X86Instruction(X86Opcode.MOVSD, listOf(X86Operand.Memory(x("r12").value, 8), x("xmm1"))),
+                ),
+            ),
+        )
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val xmm0 = physical(X86Mode.I386, "xmm0")
+        val xmm1 = physical(X86Mode.I386, "xmm1")
+        assertContentEquals(
+            byteArrayOf(0xF3.toByte(), 0x0F, 0x58, 0xC1.toByte(), 0x66, 0x0F, 0x2E, 0xC8.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.ADDSS, listOf(xmm0, xmm1)),
+                    X86Instruction(X86Opcode.UCOMISD, listOf(xmm1, xmm0)),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }
