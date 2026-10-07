@@ -104,15 +104,20 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             return
         }
         val conditionCode = conditionalBranchCodes[instruction.opcode]
-        if (instruction.opcode == X86Opcode.JMP || conditionCode != null) {
+        val directLocalCall = instruction.opcode == X86Opcode.CALL &&
+            instruction.operands.singleOrNull() is X86Operand.Label
+        if (instruction.opcode == X86Opcode.JMP || directLocalCall || conditionCode != null) {
             require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
                 "${instruction.opcode.name.lowercase()} requires one code-label operand"
             }
             val label = (instruction.operands.single() as X86Operand.Label).name
-            if (instruction.opcode == X86Opcode.JMP) output += 0xE9.toByte()
-            else {
+            when {
+                instruction.opcode == X86Opcode.JMP -> output += 0xE9.toByte()
+                directLocalCall -> output += 0xE8.toByte()
+                else -> {
                 output += 0x0F
                 output += (0x80 + conditionCode!!).toByte()
+                }
             }
             val displacementOffset = output.size
             repeat(4) { output += 0 }
@@ -139,10 +144,19 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
+            X86Opcode.CALL -> encodeIndirectCall(instruction.operands, output)
             X86Opcode.PUSH -> encodeStackRegister(instruction.operands, output, push = true)
             X86Opcode.POP -> encodeStackRegister(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
         }
+    }
+
+    private fun encodeIndirectCall(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 1) { "indirect call requires one register or memory operand" }
+        require(operands.single() is X86Operand.Register || operands.single() is X86Operand.Memory) {
+            "indirect call requires a register or memory operand; external symbols need relocation support"
+        }
+        encodeRm(0xFF, 2, operands.single(), output)
     }
 
     private fun encodeLea(operands: List<X86Operand>, output: MutableList<Byte>) {

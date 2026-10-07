@@ -191,6 +191,43 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesIndirectAndLocalRelativeCalls() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0xFF.toByte(), 0xD0.toByte(),
+                0x48, 0xFF.toByte(), 0x54, 0x24, 8,
+                0xE8.toByte(), 0, 0, 0, 0,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.CALL, listOf(r64("rax"))),
+                    X86Instruction(X86Opcode.CALL, listOf(X86Operand.Memory(r64("rsp").value, 8))),
+                    X86Instruction(X86Opcode.CALL, listOf(X86Operand.Label("next"))),
+                    X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("next"))),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.CALL, listOf(X86Operand.Symbol("external")))))
+        }
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ebp = physical(X86Mode.I386, "ebp")
+        assertContentEquals(
+            byteArrayOf(0xFF.toByte(), 0xD0.toByte(), 0xFF.toByte(), 0x55, 0xFC.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.CALL, listOf(eax)),
+                    X86Instruction(X86Opcode.CALL, listOf(X86Operand.Memory(ebp.value, -4))),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }
