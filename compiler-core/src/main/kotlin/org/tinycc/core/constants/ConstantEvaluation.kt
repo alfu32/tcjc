@@ -329,12 +329,14 @@ class ConstantEvaluator(
             }
             "__builtin_offsetof" -> {
                 val record = (expression.arguments.getOrNull(0) as? Expression.TypeOperand)?.type?.let(::canonical)
-                val fieldName = (expression.arguments.getOrNull(1) as? Expression.Name)?.identifier
-                val layoutField = (record as? CType.Record)?.let { recordType ->
-                    layout.recordLayout(recordType)?.fields?.firstOrNull { it.name == fieldName }
-                }
-                layoutField?.let { integer(BigInteger.valueOf(it.offset)) }
-                    ?: notConstant(expression, "$name requires a known record field")
+                val designator = expression.arguments.getOrNull(1)
+                val offset = if (record is CType.Record && designator != null) {
+                    layout.offsetOf(record, designator) { index ->
+                        (evaluate(index) as? ConstantValue.Integer)?.value?.longValueExact()
+                    }
+                } else null
+                offset?.let { integer(BigInteger.valueOf(it)) }
+                    ?: notConstant(expression, "$name requires a valid constant member designator")
             }
             else -> ConstantValue.NotConstant
         }

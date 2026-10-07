@@ -2,6 +2,7 @@ package org.tinycc.core.types
 
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.diagnostics.SourceLocation
+import org.tinycc.core.expressions.Expression
 
 enum class TargetArchitecture { I386, X86_64, ARM, ARM64, RISCV64, C67 }
 
@@ -219,6 +220,45 @@ class TypeLayout(private val model: TargetDataModel) {
             else -> alignment.coerceAtMost(model.maxAlignment)
         }
         return RecordLayout(alignUp(size, recordAlignment), recordAlignment, fieldLayouts)
+    }
+
+    fun offsetOf(
+        record: CType.Record,
+        designator: Expression,
+        evaluateIndex: (Expression) -> Long?,
+    ): Long? {
+        fun resolve(type: CType, path: Expression): Pair<CType, Long>? {
+            return when (path) {
+                is Expression.Name -> {
+                    val current = CTypes.unalias(type) as? CType.Record ?: return null
+                    val field = current.fields.firstOrNull { it.name == path.identifier } ?: return null
+                    val fieldOffset = recordLayout(current)?.fields?.firstOrNull { it.name == path.identifier }?.offset ?: return null
+                    field.type to fieldOffset
+                }
+                is Expression.Member -> {
+                    if (path.throughPointer) return null
+                    val (containerType, baseOffset) = resolve(type, path.receiver) ?: return null
+                    val container = CTypes.unalias(containerType) as? CType.Record ?: return null
+                    val field = container.fields.firstOrNull { it.name == path.name } ?: return null
+                    val fieldOffset = recordLayout(container)?.fields?.firstOrNull { it.name == path.name }?.offset ?: return null
+                    field.type to Math.addExact(baseOffset, fieldOffset)
+                }
+                is Expression.Index -> {
+                    val (arrayType, baseOffset) = resolve(type, path.array) ?: return null
+                    val element = when (val aggregate = CTypes.unalias(arrayType)) {
+                        is CType.Array -> aggregate.element
+                        is CType.Pointer -> aggregate.pointee
+                        else -> return null
+                    }
+                    val index = evaluateIndex(path.index) ?: return null
+                    val elementSize = sizeOf(element) ?: return null
+                    element to Math.addExact(baseOffset, Math.multiplyExact(index, elementSize))
+                }
+                else -> null
+            }
+        }
+
+        return runCatching { resolve(record, designator)?.second }.getOrNull()
     }
 
     private fun primitiveSize(kind: PrimitiveKind): Long = when (kind) {

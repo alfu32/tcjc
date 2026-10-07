@@ -131,6 +131,7 @@ run the relevant checks, commit using Conventional Commits, and push to
   specifier permutations, `_Atomic(type)`, and GNU `typeof(type)` type forms
   are now parsed; integer promotions and mixed signed/unsigned conversions now
   use target widths; shift expressions preserve the promoted left operand type;
+  `__builtin_offsetof` resolves nested fields and constant array indexes;
   complex arithmetic promotions use the widest real
   component type; TinyCC special floating constants retain float typing
   and constant-evaluation semantics; atomic builtin signatures, pointer/value

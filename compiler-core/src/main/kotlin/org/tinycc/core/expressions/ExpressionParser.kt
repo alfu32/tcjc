@@ -179,8 +179,7 @@ class ExpressionParser(
                     val start = current()
                     arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))
                 } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_offsetof" && arguments.size == 1) {
-                    val field = expect(TokenKind.IDENTIFIER, "field name")
-                    arguments += Expression.Name(field.lexeme, field.span)
+                    arguments += parsePostfix()
                 } else if (typeArguments && (callee as Expression.Name).identifier == "__builtin_va_arg" && arguments.isNotEmpty()) {
                     val start = current()
                     arguments += Expression.TypeOperand(parseTypeName(), start.span.merge(previous().span))

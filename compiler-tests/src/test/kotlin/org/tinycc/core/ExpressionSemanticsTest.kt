@@ -21,6 +21,9 @@ import org.tinycc.core.types.ObjectDeclaration
 import org.tinycc.core.types.Field
 import org.tinycc.core.types.RecordKind
 import org.tinycc.core.types.TypeQualifiers
+import org.tinycc.core.types.ArrayBound
+import org.tinycc.core.types.TargetDataModels
+import org.tinycc.core.types.TypeLayout
 
 class ExpressionSemanticsTest {
     @Test
@@ -155,6 +158,39 @@ class ExpressionSemanticsTest {
 
         assertEquals(CTypes.unsignedLong, result.type)
         assertEquals(java.math.BigInteger.valueOf(4), kotlin.test.assertIs<ConstantValue.Integer>(folded).value)
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
+    fun resolvesNestedAndIndexedBuiltinOffsetofDesignators() {
+        val diagnostics = DiagnosticEngine()
+        val nested = CType.Record(RecordKind.STRUCT, "Nested")
+        nested.completeWith(listOf(Field("marker", CTypes.char), Field("value", CTypes.int)))
+        val outer = CType.Record(RecordKind.STRUCT, "Outer")
+        outer.completeWith(
+            listOf(
+                Field("tag", CTypes.char),
+                Field("nested", nested),
+                Field("items", CType.Array(CTypes.int, ArrayBound.Constant(4))),
+            ),
+        )
+        val layout = TypeLayout(TargetDataModels.X86_64_SYSV)
+        val typeNames = mapOf("struct Outer" to outer)
+        val nestedCall = ExpressionParser(
+            Lexer("__builtin_offsetof(struct Outer, nested.value)").tokenize(),
+            typeNames = typeNames,
+        ).parse()
+        val indexedCall = ExpressionParser(
+            Lexer("__builtin_offsetof(struct Outer, items[2])").tokenize(),
+            typeNames = typeNames,
+        ).parse()
+        val evaluator = ConstantEvaluator(diagnostics, layout = layout)
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, layout = layout)
+
+        assertEquals(CTypes.unsignedLong, analyzer.analyze(nestedCall).type)
+        assertEquals(CTypes.unsignedLong, analyzer.analyze(indexedCall).type)
+        assertEquals(java.math.BigInteger.valueOf(8), kotlin.test.assertIs<ConstantValue.Integer>(evaluator.evaluate(nestedCall)).value)
+        assertEquals(java.math.BigInteger.valueOf(20), kotlin.test.assertIs<ConstantValue.Integer>(evaluator.evaluate(indexedCall)).value)
         assertEquals(0, diagnostics.errorCount)
     }
 

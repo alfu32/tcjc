@@ -329,10 +329,13 @@ class ExpressionSemanticAnalyzer(
         "__builtin_offsetof" -> {
             requireArgumentCount(expression, 2, name)
             val record = (expression.arguments.getOrNull(0) as? Expression.TypeOperand)?.type?.let(::canonical)
-            val fieldName = (expression.arguments.getOrNull(1) as? Expression.Name)?.identifier
-            val field = (record as? CType.Record)?.fields?.firstOrNull { it.name == fieldName }
-            val fieldLayout = if (field != null) layout.recordLayout(record)?.fields?.firstOrNull { it.name == fieldName } else null
-            if (field == null || fieldLayout == null) invalid(expression, "$name requires a known record field")
+            val designator = expression.arguments.getOrNull(1)
+            val offset = if (record is CType.Record && designator != null) {
+                layout.offsetOf(record, designator) { index ->
+                    (ConstantEvaluator(diagnostics, symbols).evaluate(index) as? ConstantValue.Integer)?.value?.longValueExact()
+                }
+            } else null
+            if (offset == null) invalid(expression, "$name requires a valid constant member designator")
             else typed(expression, CTypes.unsignedLong)
         }
         "__builtin_frame_address", "__builtin_return_address" -> {
