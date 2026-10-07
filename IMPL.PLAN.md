@@ -130,7 +130,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   typedef and tagged-record/enum type names are now accepted in type names;
   specifier permutations, `_Atomic(type)`, and GNU `typeof(type)` type forms
   are now parsed; TinyCC special floating constants now retain float typing
-  and constant-evaluation semantics)
+  and constant-evaluation semantics; atomic builtin signatures, pointer/value
+  constraints, and memory-order operand checks are now validated)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

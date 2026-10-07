@@ -189,4 +189,29 @@ class ExpressionSemanticsTest {
             assertEquals(CTypes.float, analyzer.analyze(expression).type)
         }
     }
+
+    @Test
+    fun validatesAtomicBuiltinSignaturesAndPointerTargets() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("value", CTypes.int))
+        symbols.declare(ObjectDeclaration("expected", CTypes.int))
+        symbols.declare(ObjectDeclaration("other", CTypes.long))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+        val validLoad = analyzer.analyze(ExpressionParser(Lexer("__atomic_load(&value, 0)").tokenize()).parse())
+        val validStore = analyzer.analyze(ExpressionParser(Lexer("__atomic_store(&value, 3, 0)").tokenize()).parse())
+        val validCompare = analyzer.analyze(
+            ExpressionParser(Lexer("__atomic_compare_exchange(&value, &expected, 3, 0, 5, 5)").tokenize()).parse(),
+        )
+        analyzer.analyze(ExpressionParser(Lexer("__atomic_load(&value)").tokenize()).parse())
+        analyzer.analyze(ExpressionParser(Lexer("__atomic_fetch_add(&value, 1.5, 0)").tokenize()).parse())
+        analyzer.analyze(ExpressionParser(Lexer("__atomic_compare_exchange(&value, &other, 3, 0, 5, 5)").tokenize()).parse())
+
+        assertEquals(CTypes.int, validLoad.type)
+        assertEquals(CTypes.void, validStore.type)
+        assertEquals(CTypes.int, validCompare.type)
+        assertTrue(diagnostics.render().contains("expects 2 argument(s)"))
+        assertTrue(diagnostics.render().contains("operand must be an integer"))
+        assertTrue(diagnostics.render().contains("expected-value argument must point"))
+    }
 }

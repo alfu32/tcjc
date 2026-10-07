@@ -339,15 +339,75 @@ class ExpressionSemanticAnalyzer(
     }
 
     private fun analyzeAtomicBuiltin(expression: Expression.Call, name: String): TypedExpression {
-        expression.arguments.forEach { analyze(it) }
-        val pointee = expression.arguments.firstOrNull()?.let(::analyze)?.type?.let(::canonical)
-            .let { it as? CType.Pointer }?.pointee
-        return when {
-            name.contains("compare_exchange") -> typed(expression, CTypes.int)
-            name.contains("_store") || name.endsWith("_fence") || name.endsWith("_thread_fence") -> typed(expression, CTypes.void)
-            pointee != null -> typed(expression, pointee)
-            else -> invalid(expression, "$name requires a pointer operand")
+        val signature = atomicBuiltinSignature(name) ?: return invalid(expression, "unknown atomic builtin '$name'")
+        if (expression.arguments.size != signature.argumentCount) {
+            return invalid(expression, "$name expects ${signature.argumentCount} argument(s)")
         }
+        val arguments = expression.arguments.map(::analyze)
+        val atomicPointer = canonical(decay(arguments[0])) as? CType.Pointer
+            ?: return invalid(expression, "$name first argument must be a pointer")
+        val valueType = canonical(atomicPointer.pointee)
+        val valueSize = layout.sizeOf(valueType)
+        if (valueSize == null || valueSize <= 0 || valueSize > 8 || valueSize.and(valueSize - 1) != 0L) {
+            return invalid(expression, "$name atomic target must have a supported integer-sized representation")
+        }
+
+        when (signature.kind) {
+            AtomicBuiltinKind.LOAD, AtomicBuiltinKind.EXCHANGE, AtomicBuiltinKind.STORE -> {
+                if (signature.valueIndex != null) {
+                    requireCompatible(valueType, decay(arguments[signature.valueIndex]), expression.arguments[signature.valueIndex].span.start, "$name value")
+                }
+                if (signature.orderIndex != null) validateAtomicOrder(expression, signature.orderIndex, arguments)
+            }
+            AtomicBuiltinKind.COMPARE_EXCHANGE -> {
+                val expectedPointer = canonical(decay(arguments[1])) as? CType.Pointer
+                if (expectedPointer == null || !CTypes.compatible(valueType, expectedPointer.pointee)) {
+                    error(expression.arguments[1], "$name expected-value argument must point to the atomic value type")
+                }
+                requireCompatible(valueType, decay(arguments[2]), expression.arguments[2].span.start, "$name desired value")
+                if (!isInteger(canonical(decay(arguments[3])))) error(expression.arguments[3], "$name weak flag must be an integer")
+                validateAtomicOrder(expression, 4, arguments)
+                validateAtomicOrder(expression, 5, arguments)
+            }
+            AtomicBuiltinKind.FETCH -> {
+                if (!isInteger(valueType)) return invalid(expression, "$name requires an integer atomic target")
+                if (!isInteger(canonical(decay(arguments[1])))) error(expression.arguments[1], "$name operand must be an integer")
+                validateAtomicOrder(expression, 2, arguments)
+            }
+        }
+        return typed(expression, if (signature.kind == AtomicBuiltinKind.STORE) CTypes.void else if (signature.kind == AtomicBuiltinKind.COMPARE_EXCHANGE) CTypes.int else valueType)
+    }
+
+    private fun validateAtomicOrder(expression: Expression.Call, index: Int, arguments: List<TypedExpression>) {
+        if (!isInteger(canonical(decay(arguments[index])))) {
+            error(expression.arguments[index], "atomic memory order must be an integer")
+        }
+    }
+
+    private fun atomicBuiltinSignature(name: String): AtomicBuiltinSignature? = when {
+        name == "__atomic_store" -> AtomicBuiltinSignature(AtomicBuiltinKind.STORE, 3, valueIndex = 1, orderIndex = 2)
+        name == "__atomic_load" -> AtomicBuiltinSignature(AtomicBuiltinKind.LOAD, 2, orderIndex = 1)
+        name == "__atomic_exchange" -> AtomicBuiltinSignature(AtomicBuiltinKind.EXCHANGE, 3, valueIndex = 1, orderIndex = 2)
+        name == "__atomic_compare_exchange" -> AtomicBuiltinSignature(AtomicBuiltinKind.COMPARE_EXCHANGE, 6)
+        name in ATOMIC_FETCH_BUILTINS -> AtomicBuiltinSignature(AtomicBuiltinKind.FETCH, 3)
+        else -> null
+    }
+
+    private enum class AtomicBuiltinKind { STORE, LOAD, EXCHANGE, COMPARE_EXCHANGE, FETCH }
+
+    private data class AtomicBuiltinSignature(
+        val kind: AtomicBuiltinKind,
+        val argumentCount: Int,
+        val valueIndex: Int? = null,
+        val orderIndex: Int? = null,
+    )
+
+    private companion object {
+        val ATOMIC_FETCH_BUILTINS = setOf(
+            "__atomic_fetch_add", "__atomic_fetch_sub", "__atomic_fetch_or", "__atomic_fetch_xor",
+            "__atomic_fetch_and", "__atomic_fetch_nand", "__atomic_add_fetch", "__atomic_sub_fetch",
+            "__atomic_or_fetch", "__atomic_xor_fetch", "__atomic_and_fetch", "__atomic_nand_fetch",
+        )
     }
 
     private fun requireArgumentCount(expression: Expression.Call, expected: Int, name: String) {
