@@ -3,11 +3,11 @@
 ## Dashboard
 
 ```text
-Overall: 9/36
+Overall: 3/36
 
 [DONE]        [3/3]  1. Source preservation and parity rebaseline
-[DONE]        [3/3]  2. Lexer, tokens, and preprocessing
-[DONE]        [3/3]  3. Types, declarations, symbols, and constants
+[IN_PROGRESS] [0/3]  2. Lexer, tokens, and preprocessing
+[IN_PROGRESS] [0/3]  3. Types, declarations, symbols, and constants
 [IN_PROGRESS] [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
 [TODO]        [0/3]  6. i386 and x86_64 instruction and ABI support
@@ -19,10 +19,10 @@ Overall: 9/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-4.1 — implement the complete expression grammar, conversions, lvalues, pointer arithmetic, compound literals, and GNU/TCC expression extensions
+2.1 — achieve exact TinyCC token/lexer parity across the historical token tables and lexer tests
 
 Current milestone:
-M2 — complete C expression, statement, and function semantics
+M1 — establish complete lexical, preprocessing, and type-system parity
 ```
 
 `completed/total` counts terminal subtasks in the complete subtree. A task is
@@ -73,41 +73,37 @@ run the relevant checks, commit using Conventional Commits, and push to
   — `DONE` (see `MIGRATION.GAP.md`; all current entries remain `PARTIAL` or
   `MISSING` until complete behavioral evidence exists)
 
-### 2. Lexer, tokens, and preprocessing — `DONE` (3/3)
+### 2. Lexer, tokens, and preprocessing — `IN_PROGRESS` (0/3)
 
-- [x] 2.1 Implement exact token numbering, identifiers, literals, escapes,
-  comments, character sets, locations, and error recovery. — `DONE`
-  (added historical base token IDs and literal classes, raw IDs on tokens,
-  hexadecimal floating constants, digraphs, line splicing, GNU escapes, and
-  universal character-name validation with focused lexer tests)
-- [x] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
-  includes, pragmas, predefined macros, and line control. — `DONE`
-  (added correct raw/expanded substitution, GNU named variadics, comma elision,
-  `__has_include`, full integer/ternary conditional parsing, pragma event
-  capture, and focused tests)
-- [x] 2.3 Port every preprocessor fixture and add differential tests for all
-  historical lexer/preprocessor edge cases. — `DONE`
-  (added a token-level differential harness covering all restored `tests/pp`
-  C/assembly fixtures and `pp-counter.c`, including diagnostics for macro
-  redefinition; the complete focused preprocessor suite passes)
+- [ ] 2.1 Implement exact token numbering, identifiers, literals, escapes,
+  comments, character sets, locations, and error recovery. — `IN_PROGRESS`
+  (base historical token IDs, literal classes, raw token IDs, hex floats,
+  digraphs, line splicing, GNU escapes, and UCN checks exist; full token-table,
+  character-set, and malformed-input parity is not yet demonstrated)
+- [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
+  includes, pragmas, predefined macros, and line control. — `IN_PROGRESS`
+  (many GNU macro and conditional forms are covered, but all platform
+  predefined macros, include/search behavior, pragmas, and edge cases remain
+  incomplete against the historical implementation)
+- [ ] 2.3 Port every preprocessor fixture and add differential tests for all
+  historical lexer/preprocessor edge cases. — `IN_PROGRESS`
+  (the current token-level harness covers `tests/pp` fixtures, not the complete
+  lexer/preprocessor corpus or every diagnostic and target configuration)
 
-### 3. Types, declarations, symbols, and constants — `DONE` (3/3)
+### 3. Types, declarations, symbols, and constants — `IN_PROGRESS` (0/3)
 
-- [x] 3.1 Implement all scalar, pointer, array, function, record, enum,
-  typedef, VLA, qualifier, attribute, and compatible-type rules. — `DONE`
-  (expanded the Kotlin type algebra, target-independent declarator rules,
-  parameter adjustment, C attributes, calling conventions, completeness, and
-  constraint validation with focused type/layout tests)
-- [x] 3.2 Implement namespaces, scopes, linkage, storage classes, tentative
-  definitions, visibility, declaration merging, and symbol lifetime. — `DONE`
-  (added linkage-aware block `extern` reuse, declaration history, tentative
-  definition finalization, namespace/storage diagnostics, and lifetime tests)
-- [x] 3.3 Implement integer/floating/address constant evaluation, initializer
-  folding, layout, alignment, bit-fields, and ABI metadata. — `DONE` (implemented
-  short-circuit and mixed numeric folding, hexadecimal floating constants,
-  relocatable addresses, aggregate initializer zero-fill, flexible/vector
-  layout, bit-field packing and constraints, and target ABI metadata for i386,
-  x86_64, ARM, ARM64, RISC-V, and C67; focused and full Gradle suites pass)
+- [ ] 3.1 Implement all scalar, pointer, array, function, record, enum,
+  typedef, VLA, qualifier, attribute, and compatible-type rules. — `IN_PROGRESS`
+  (the type algebra and selected declaration/layout constraints exist; the gap
+  matrix still identifies incomplete C/GNU type, VLA, and ABI behavior)
+- [ ] 3.2 Implement namespaces, scopes, linkage, storage classes, tentative
+  definitions, visibility, declaration merging, and symbol lifetime. — `IN_PROGRESS`
+  (selected scopes, linkage merging, and tentative-definition behavior have
+  tests; complete TinyCC symbol and linkage parity remains unverified)
+- [ ] 3.3 Implement integer/floating/address constant evaluation, initializer
+  folding, layout, alignment, bit-fields, and ABI metadata. — `IN_PROGRESS`
+  (selected folding/layout paths and metadata are implemented, but historical
+  constant forms, target layouts, bit-field rules, and ABI parity remain open)
 
 ### 4. Expressions, statements, functions, and semantics — `IN_PROGRESS` (0/3)
 
