@@ -46,6 +46,26 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun pointerDifferenceUsesTargetPtrdiffType() {
+        val cases = listOf(
+            TargetDataModels.I386_SYSV to CTypes.int,
+            TargetDataModels.X86_64_SYSV to CTypes.long,
+            TargetDataModels.X86_64_WIN64 to CTypes.longLong,
+        )
+        for ((model, expected) in cases) {
+            val diagnostics = DiagnosticEngine()
+            val symbols = SymbolTable(diagnostics)
+            symbols.declare(ObjectDeclaration("left", CTypes.pointer(CTypes.int)))
+            symbols.declare(ObjectDeclaration("right", CTypes.pointer(CTypes.int)))
+            val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols, TypeLayout(model))
+            val result = analyzer.analyze(ExpressionParser(Lexer("left - right").tokenize()).parse())
+
+            assertEquals(expected, result.type, model.toString())
+            assertEquals(0, diagnostics.errorCount)
+        }
+    }
+
+    @Test
     fun diagnosesInvalidAssignmentsAndUnknownMembers() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)

@@ -205,7 +205,7 @@ class ExpressionSemanticAnalyzer(
             leftPointer != null && rightInteger && pointerStride(leftPointer.pointee) != null -> typed(expression, left)
             !subtract && leftInteger && rightPointer != null && pointerStride(rightPointer.pointee) != null -> typed(expression, right)
             subtract && leftPointer != null && rightPointer != null &&
-                CTypes.compatible(leftPointer.pointee, rightPointer.pointee) && pointerStride(leftPointer.pointee) != null -> typed(expression, CTypes.long)
+                CTypes.compatible(leftPointer.pointee, rightPointer.pointee) && pointerStride(leftPointer.pointee) != null -> typed(expression, layout.pointerDifferenceType())
             else -> invalid(expression, "invalid pointer arithmetic")
         }
     }

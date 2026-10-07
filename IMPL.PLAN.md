@@ -142,7 +142,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   address builtins require nonnegative integer constant levels; parser-local
   struct/union/enum tag references preserve shared tag identity; incomplete
   object pointers reject arithmetic/indexing while TinyCC byte-stride behavior
-  for void/function pointers is preserved)
+  for void/function pointers is preserved; pointer subtraction now selects
+  target ptrdiff_t semantics for i386, x86_64 SysV, and x86_64 Win64)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

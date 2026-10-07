@@ -23,6 +23,7 @@ data class TargetDataModel(
 object TargetDataModels {
     val I386_SYSV = TargetDataModel(TargetArchitecture.I386, 4, 2, 4, 4, 8, 4, 8, 12, 4, 8)
     val X86_64_SYSV = TargetDataModel(TargetArchitecture.X86_64, 8, 2, 4, 8, 8, 4, 8, 16, 8, 16)
+    val X86_64_WIN64 = TargetDataModel(TargetArchitecture.X86_64, 8, 2, 4, 4, 8, 4, 8, 8, 8, 16)
     val ARM_EABI = TargetDataModel(TargetArchitecture.ARM, 4, 2, 4, 4, 8, 4, 8, 8, 4, 8)
     val ARM64_AAPCS = TargetDataModel(TargetArchitecture.ARM64, 8, 2, 4, 8, 8, 4, 8, 16, 8, 16)
     val RISCV64 = TargetDataModel(TargetArchitecture.RISCV64, 8, 2, 4, 8, 8, 4, 8, 16, 8, 16)
@@ -118,7 +119,14 @@ object AbiMetadataCatalog {
     )
 }
 
-class TypeLayout(private val model: TargetDataModel) {
+class TypeLayout(val model: TargetDataModel) {
+    /** TinyCC's target-selected signed type for pointer differences. */
+    fun pointerDifferenceType(): CType = when {
+        model.pointerBytes == 4L -> CTypes.int
+        model.longBytes == 4L -> CTypes.longLong
+        else -> CTypes.long
+    }
+
     fun sizeOf(type: CType): Long? = when (val unaliased = CTypes.unalias(type)) {
         is CType.Primitive -> primitiveSize(unaliased.kind)
         is CType.Qualified -> unaliased.attributes.vectorBytes ?: sizeOf(unaliased.base)
