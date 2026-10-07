@@ -156,6 +156,41 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesTestRegisterAndFullWidthImmediateForms() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0x85.toByte(), 0xD8.toByte(),
+                0x4C, 0x85.toByte(), 0x45, 0xF8.toByte(),
+                0x48, 0xF7.toByte(), 0xC0.toByte(), 0x78, 0x56, 0x34, 0x12,
+                0x49, 0xF7.toByte(), 0x44, 0x24, 8, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.TEST, listOf(r64("rax"), r64("rbx"))),
+                    X86Instruction(X86Opcode.TEST, listOf(X86Operand.Memory(r64("rbp").value, -8), r64("r8"))),
+                    X86Instruction(X86Opcode.TEST, listOf(r64("rax"), X86Operand.Immediate(0x12345678))),
+                    X86Instruction(
+                        X86Opcode.TEST,
+                        listOf(X86Operand.Memory(r64("r12").value, 8), X86Operand.Immediate(-1)),
+                    ),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.TEST, listOf(r64("rax"), X86Operand.Immediate(0x80000000L)))))
+        }
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        assertContentEquals(
+            byteArrayOf(0xF7.toByte(), 0xC0.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+            i386.encode(listOf(X86Instruction(X86Opcode.TEST, listOf(eax, X86Operand.Immediate(0xFFFF_FFFFL))))),
+        )
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }

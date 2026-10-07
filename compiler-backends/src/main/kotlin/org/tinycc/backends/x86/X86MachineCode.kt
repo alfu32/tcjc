@@ -138,6 +138,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.SUB -> encodeBinary(instruction.operands, output, 0x29, 5)
             X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
+            X86Opcode.TEST -> encodeTest(instruction.operands, output)
             X86Opcode.PUSH -> encodeStackRegister(instruction.operands, output, push = true)
             X86Opcode.POP -> encodeStackRegister(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
@@ -210,6 +211,48 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         val useSignedByte = immediate in -128L..127L
         encodeRm(if (useSignedByte) 0x83 else 0x81, extension, destination, output)
         if (useSignedByte) output += immediate.toByte() else appendInt(output, immediate.toInt())
+    }
+
+    private fun encodeTest(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 2) { "test requires two operands" }
+        val destination = operands[0]
+        val source = operands[1]
+        when (source) {
+            is X86Operand.Register -> {
+                val register = physicalRegister(source)
+                require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                    "test register width must match ${mode.bits}-bit target mode"
+                }
+                if (destination is X86Operand.Register) {
+                    val destinationRegister = physicalRegister(destination)
+                    require(destinationRegister.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER &&
+                        destinationRegister.bits == mode.bits
+                    ) { "test register width must match ${mode.bits}-bit target mode" }
+                }
+                require(destination is X86Operand.Register || destination is X86Operand.Memory) {
+                    "test destination must be a register or memory operand"
+                }
+                encodeRm(0x85, register.number, destination, output)
+            }
+            is X86Operand.Immediate -> {
+                val immediate = source.value
+                val inRange = immediate == immediate.toInt().toLong() ||
+                    (mode == X86Mode.I386 && immediate in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL)
+                require(inRange) { "x86 test immediate must fit the target's 32-bit encoding" }
+                if (destination is X86Operand.Register) {
+                    val register = physicalRegister(destination)
+                    require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                        "test register width must match ${mode.bits}-bit target mode"
+                    }
+                }
+                require(destination is X86Operand.Register || destination is X86Operand.Memory) {
+                    "test destination must be a register or memory operand"
+                }
+                encodeRm(0xF7, 0, destination, output)
+                appendInt(output, immediate.toInt())
+            }
+            else -> error("test source must be a register or immediate: $source")
+        }
     }
 
     private fun encodeImmediateMove(destination: IrRegister, immediate: Long, output: MutableList<Byte>) {
