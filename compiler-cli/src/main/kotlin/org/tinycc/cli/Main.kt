@@ -70,7 +70,7 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
             }
             val outputBytes = if (options.numericPreprocessing && options.outputType == CompilerOutputType.PREPROCESSED) {
                 results.joinToString(separator = "") { result ->
-                    renderNumericPreprocessed(result.preprocessedSource, result.tokens)
+                    renderNumericPreprocessed(result.preprocessedSource, result.tokens, options.target)
                         .let { if (it.isNotEmpty() && !it.endsWith('\n')) "$it\n" else it }
                 }.encodeToByteArray()
             } else if (results.size == 1) {
@@ -119,7 +119,11 @@ private fun aggregateOutput(
         .encodeToByteArray()
 }
 
-private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.core.lexer.Token>): String = buildString {
+private fun renderNumericPreprocessed(
+    source: String,
+    tokens: List<org.tinycc.core.lexer.Token>,
+    target: String,
+): String = buildString {
     var cursor = 0
     tokens.forEach { token ->
         if (token.kind != org.tinycc.core.lexer.TokenKind.INTEGER_LITERAL &&
@@ -146,7 +150,11 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
                 org.tinycc.core.lexer.TokenKind.CHARACTER_LITERAL -> {
                     val literal = token.literal as? org.tinycc.core.lexer.LiteralValue.Character
                         ?: return@forEach
-                    val value = literal.value
+                    val value = if (literal.wide && isWindowsTarget(target) && literal.value > Char.MAX_VALUE.code) {
+                        Character.toChars(literal.value).last().code
+                    } else {
+                        literal.value
+                    }
                     val escaped = when {
                         value == '\n'.code -> "\\n"
                         value in 32..126 && value != '\''.code && value != '\\'.code -> value.toChar().toString()
@@ -159,7 +167,14 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
                     val literal = token.literal as? org.tinycc.core.lexer.LiteralValue.StringValue
                         ?: return@forEach
                     val wide = literal.prefix == "L"
-                    val body = literal.codeUnits.joinToString(separator = "") { value -> escapeTinyCcStringCharacter(value) }
+                    val units = if (wide && isWindowsTarget(target)) {
+                        literal.codeUnits.flatMap { value ->
+                            if (value > Char.MAX_VALUE.code) Character.toChars(value).map(Char::code) else listOf(value)
+                        }
+                    } else {
+                        literal.codeUnits
+                    }
+                    val body = units.joinToString(separator = "") { value -> escapeTinyCcStringCharacter(value) }
                     "${if (wide) "L" else ""}\"$body\""
                 }
                 else -> token.lexeme
@@ -169,6 +184,11 @@ private fun renderNumericPreprocessed(source: String, tokens: List<org.tinycc.co
     }
     append(source, cursor, source.length)
 }
+
+private fun isWindowsTarget(target: String): Boolean =
+    target.contains("windows", ignoreCase = true) ||
+        target.contains("win32", ignoreCase = true) ||
+        target.contains("mingw", ignoreCase = true)
 
 private fun escapeTinyCcStringCharacter(value: Int): String = when {
     value == '"'.code || value == '\\'.code -> "\\${value.toChar()}"

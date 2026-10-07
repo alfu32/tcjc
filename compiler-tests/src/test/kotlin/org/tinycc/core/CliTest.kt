@@ -255,7 +255,7 @@ class CliTest {
         val source = root.resolve("numbers.c")
         source.writeText("""#define HEX_VALUE 0x2a
 int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; char quote = '\'';
-const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"é";
+const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"é"; const wchar_t *supplementary = L"𝄞";
 const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn = "\u00e9"; const wchar_t *wide_byte = L"\xFF";
 """)
         val output = ByteArrayOutputStream()
@@ -276,8 +276,20 @@ const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn =
             assertTrue(text.contains("const char *truncated = \"\\000\";"), text)
             assertTrue(text.contains("const char *ucn = \"\\303\\251\";"), text)
             assertTrue(text.contains("const wchar_t *wide_byte = L\"\\377\";"), text)
-            assertTrue(!text.contains("# 1 \""), text)
+            assertTrue(text.contains("const wchar_t *supplementary = L\"\\436\";"), text)
+
+            output.reset()
+            assertEquals(
+                0,
+                execute(
+                    listOf("-E", "-P10", "--target", "x86_64-windows", source.toString()),
+                    PrintStream(output),
+                    PrintStream(errors),
+                ),
+            )
+            assertTrue(output.toString().contains("const wchar_t *supplementary = L\"\\064\\436\";"), output.toString())
             assertEquals("", errors.toString())
+            assertTrue(!text.contains("# 1 \""), text)
         } finally {
             root.toFile().deleteRecursively()
         }
