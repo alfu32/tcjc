@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 11/48
+Overall: 12/48
 
-[IN_PROGRESS] [2/9]  1. Language front-end
+[DONE]       [3/9]   1. Language front-end
 [IN_PROGRESS] [3/6]  2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
@@ -13,17 +13,17 @@ Overall: 11/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-4.3 Include resolution, pragmas, line directives, and preprocessor fixtures
+5.1 C type system and declaration model
 
 Current milestone:
-M1 — Language front-end
+M2 — Semantic model and modules
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
 
 ## Status
 
-- Overall migration: **NOT_STARTED** (3/16 implementation tasks; 9/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (4/16 implementation tasks; 12/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -54,11 +54,11 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 3.2 Implement source locations, include stacks, diagnostic severities, error recovery, and stable message formatting. — `DONE` (see `compiler-core/.../diagnostics`)
 - [x] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `DONE` (see `compiler-tests/.../CoreUtilitiesTest.kt`)
 
-### 4. Lexer, tokens, and preprocessor — `IN_PROGRESS` (2/3)
+### 4. Lexer, tokens, and preprocessor — `DONE` (3/3)
 
 - [x] 4.1 Port character decoding, token kinds, literals, comments, identifiers, escapes, and token location tracking. — `DONE` (see `compiler-core/.../io/SourceFiles.kt` and `lexer`)
 - [x] 4.2 Port macro definitions/expansion, conditional compilation, variadic macros, and predefined macros. — `DONE` (see `compiler-core/.../preprocessor` and `compiler-tests/.../PreprocessorTest.kt`)
-- [ ] 4.3 Port include resolution, pragma handling, line directives, and all `tests/pp` expected-output cases. — `TODO`
+- [x] 4.3 Port include resolution, pragma handling, line directives, and all `tests/pp` expected-output cases. — `DONE` (see `compiler-core/.../preprocessor` and `PreprocessorTest`)
 
 ### 5. C types, symbols, and declarations — `TODO` (0/3)
 

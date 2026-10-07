@@ -5,50 +5,80 @@ import java.time.Clock
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.ArrayDeque
+import java.io.IOException
 import org.tinycc.core.diagnostics.DiagnosticEngine
+import org.tinycc.core.diagnostics.IncludeStack
 import org.tinycc.core.diagnostics.LineMap
 import org.tinycc.core.diagnostics.SourceLocation
+import org.tinycc.core.io.SourceFile
+import org.tinycc.core.io.SourceFileLoader
 
 data class PreprocessorOptions(
     val predefined: Map<String, String> = emptyMap(),
     val clock: Clock = Clock.systemUTC(),
+    val includePaths: List<Path> = emptyList(),
+    val systemIncludePaths: List<Path> = emptyList(),
+    val sourceLoader: SourceFileLoader = SourceFileLoader(),
 )
 
 data class PreprocessedSource(val text: String, val macros: List<MacroDefinition>)
 
 /** Handles macro definitions, expansion, and conditional compilation. */
-class Preprocessor(
+class Preprocessor private constructor(
     private val source: String,
     private val path: Path? = null,
     private val diagnostics: DiagnosticEngine = DiagnosticEngine(),
     private val options: PreprocessorOptions = PreprocessorOptions(),
+    private val state: SharedState = SharedState(),
+    private val includeSearchIndex: Int = -1,
 ) {
     private val lineMap = LineMap(source)
-    private val macros = MacroTable()
-    private var counter = 0L
+    private var lineDelta = 0
+    private var logicalFile: String? = null
 
     constructor(
-        sourceFile: org.tinycc.core.io.SourceFile,
+        source: String,
+        path: Path? = null,
+        diagnostics: DiagnosticEngine = DiagnosticEngine(),
+        options: PreprocessorOptions = PreprocessorOptions(),
+    ) : this(source, path, diagnostics, options, SharedState(), -1)
+
+    constructor(
+        sourceFile: SourceFile,
         diagnostics: DiagnosticEngine = DiagnosticEngine(),
         options: PreprocessorOptions = PreprocessorOptions(),
     ) : this(sourceFile.text, sourceFile.path, diagnostics, options)
 
     fun process(): PreprocessedSource {
+        val normalizedPath = path?.toAbsolutePath()?.normalize()
+        if (normalizedPath != null && !state.activeFiles.add(normalizedPath)) {
+            report(1, "recursive include of '$normalizedPath'")
+            return PreprocessedSource("", state.macros.snapshot())
+        }
+        try {
+            return processUnit()
+        } finally {
+            if (normalizedPath != null) state.activeFiles.remove(normalizedPath)
+        }
+    }
+
+    private fun processUnit(): PreprocessedSource {
         val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
         val output = StringBuilder(source.length)
         val conditionals = ArrayDeque<ConditionalFrame>()
         var lineIndex = 0
         while (lineIndex < lines.size) {
-            val startLine = lineIndex + 1
+            val physicalLine = lineIndex + 1
+            val logicalLine = physicalLine + lineDelta
             var line = lines[lineIndex]
             while (line.endsWith("\\") && lineIndex + 1 < lines.size) {
                 line = line.dropLast(1) + lines[++lineIndex]
             }
             val directive = parseDirective(line)
             if (directive != null) {
-                processDirective(directive, startLine, conditionals, output)
+                processDirective(directive, logicalLine, physicalLine, conditionals, output)
             } else if (conditionals.isActive()) {
-                output.append(expandText(line, emptySet(), startLine))
+                output.append(expandText(line, emptySet(), logicalLine))
                 if (lineIndex < lines.lastIndex) output.append('\n')
             }
             lineIndex++
@@ -56,44 +86,45 @@ class Preprocessor(
         if (conditionals.isNotEmpty()) {
             report(1, "unterminated conditional directive")
         }
-        return PreprocessedSource(output.toString(), macros.snapshot())
+        return PreprocessedSource(output.toString(), state.macros.snapshot())
     }
 
     private fun processDirective(
         directive: Directive,
-        line: Int,
+        logicalLine: Int,
+        physicalLine: Int,
         conditionals: ArrayDeque<ConditionalFrame>,
         output: StringBuilder,
     ) {
         when (directive.name) {
             "if" -> {
                 val parentActive = conditionals.isActive()
-                val branch = parentActive && evaluate(directive.body, line)
+                val branch = parentActive && evaluate(directive.body, logicalLine)
                 conditionals.addLast(ConditionalFrame(parentActive, branch, branch))
             }
             "ifdef", "ifndef" -> {
                 val parentActive = conditionals.isActive()
-                val defined = macros[directive.body.trim()] != null
+                val defined = state.macros[directive.body.trim()] != null
                 val branch = parentActive && if (directive.name == "ifdef") defined else !defined
                 conditionals.addLast(ConditionalFrame(parentActive, branch, branch))
             }
             "elif" -> {
                 val frame = conditionals.peekLast()
                 if (frame == null) {
-                    report(line, "#elif without matching #if")
+                    report(physicalLine, "#elif without matching #if")
                 } else if (frame.elseSeen) {
-                    report(line, "#elif after #else")
+                    report(physicalLine, "#elif after #else")
                 } else {
-                    frame.active = frame.parentActive && !frame.branchTaken && evaluate(directive.body, line)
+                    frame.active = frame.parentActive && !frame.branchTaken && evaluate(directive.body, logicalLine)
                     frame.branchTaken = frame.branchTaken || frame.active
                 }
             }
             "else" -> {
                 val frame = conditionals.peekLast()
                 if (frame == null) {
-                    report(line, "#else without matching #if")
+                    report(physicalLine, "#else without matching #if")
                 } else if (frame.elseSeen) {
-                    report(line, "duplicate #else")
+                    report(physicalLine, "duplicate #else")
                 } else {
                     frame.elseSeen = true
                     frame.active = frame.parentActive && !frame.branchTaken
@@ -101,13 +132,16 @@ class Preprocessor(
                 }
             }
             "endif" -> {
-                if (conditionals.pollLast() == null) report(line, "#endif without matching #if")
+                if (conditionals.pollLast() == null) report(physicalLine, "#endif without matching #if")
             }
             else -> if (conditionals.isActive()) when (directive.name) {
-                "define" -> define(directive.body, line)
-                "undef" -> macros.undef(directive.body.trim())
-                "error" -> report(line, directive.body.trim().ifEmpty { "#error" })
-                "warning" -> diagnostics.warning(location(line), directive.body.trim().ifEmpty { "#warning" })
+                "define" -> define(directive.body, physicalLine)
+                "undef" -> state.macros.undef(directive.body.trim())
+                "include", "include_next" -> include(directive.body, directive.name == "include_next", physicalLine, output)
+                "pragma" -> pragma(directive.body, physicalLine)
+                "line" -> lineDirective(directive.body, logicalLine, physicalLine)
+                "error" -> report(physicalLine, directive.body.trim().ifEmpty { "#error" })
+                "warning" -> diagnostics.warning(location(physicalLine), directive.body.trim().ifEmpty { "#warning" }, state.includeStack.snapshot())
                 else -> output.append(directive.original).append('\n')
             }
         }
@@ -135,10 +169,84 @@ class Preprocessor(
                 report(line, "invalid macro parameter list")
                 return
             }
-            macros.define(MacroDefinition(name, normalized, tail.substring(close + 1).trim(), variadic))
+            state.macros.define(MacroDefinition(name, normalized, tail.substring(close + 1).trim(), variadic))
         } else {
-            macros.define(MacroDefinition(name, null, tail.trim()))
+            state.macros.define(MacroDefinition(name, null, tail.trim()))
         }
+    }
+
+    private fun include(body: String, next: Boolean, line: Int, output: StringBuilder) {
+        val expanded = expandText(body.trim(), emptySet(), line).trim()
+        val angled = expanded.startsWith('<') && expanded.endsWith('>')
+        val quoted = expanded.startsWith('"') && expanded.endsWith('"')
+        if ((!angled && !quoted) || expanded.length < 2) {
+            report(line, "#include expects \"FILENAME\" or <FILENAME>")
+            return
+        }
+        val filename = expanded.substring(1, expanded.length - 1)
+        val resolved = resolveInclude(filename, !angled, next)
+        if (resolved == null) {
+            report(line, "include file '$filename' not found")
+            return
+        }
+        val normalized = resolved.path.toAbsolutePath().normalize()
+        if (normalized in state.onceFiles) return
+        try {
+            val sourceFile = options.sourceLoader.read(normalized)
+            val child = Preprocessor(sourceFile.text, sourceFile.path, diagnostics, options, state, resolved.searchIndex)
+            state.includeStack.withFrame(sourceFile.path, location(line)) {
+                output.append(child.process().text)
+            }
+            if (output.isNotEmpty() && output.last() != '\n') output.append('\n')
+        } catch (error: IOException) {
+            report(line, "unable to read include file '$filename': ${error.message ?: "I/O error"}")
+        }
+    }
+
+    private fun resolveInclude(filename: String, quoted: Boolean, next: Boolean): ResolvedInclude? {
+        val candidate = Path.of(filename)
+        if (candidate.isAbsolute()) return if (options.sourceLoader.exists(candidate)) ResolvedInclude(candidate, -1) else null
+        val search = ArrayList<Path>()
+        if (quoted) path?.parent?.let(search::add)
+        search += options.includePaths
+        search += options.systemIncludePaths
+        val start = if (next) (includeSearchIndex + 1).coerceAtLeast(0) else 0
+        for (index in start until search.size) {
+            val resolved = search[index].resolve(filename)
+            if (options.sourceLoader.exists(resolved)) return ResolvedInclude(resolved, index)
+        }
+        return null
+    }
+
+    private fun pragma(body: String, line: Int) {
+        val trimmed = body.trim()
+        when {
+            trimmed == "once" -> path?.toAbsolutePath()?.normalize()?.let(state.onceFiles::add)
+            trimmed.startsWith("push_macro") -> pragmaMacro(trimmed, line, push = true)
+            trimmed.startsWith("pop_macro") -> pragmaMacro(trimmed, line, push = false)
+            else -> Unit
+        }
+    }
+
+    private fun pragmaMacro(text: String, line: Int, push: Boolean) {
+        val match = Regex("^[a-z_]+\\s*\\(\\s*\"([^\"]+)\"\\s*\\)$").find(text)
+        if (match == null) {
+            report(line, "malformed #pragma macro directive")
+        } else if (push) {
+            state.macros.push(match.groupValues[1])
+        } else if (!state.macros.pop(match.groupValues[1])) {
+            report(line, "unbalanced #pragma pop_macro")
+        }
+    }
+
+    private fun lineDirective(body: String, logicalLine: Int, physicalLine: Int) {
+        val match = Regex("^(\\d+)(?:\\s+\"([^\"]*)\")?$").find(body.trim())
+        if (match == null) {
+            report(physicalLine, "invalid #line directive")
+            return
+        }
+        lineDelta = match.groupValues[1].toInt() - (logicalLine + 1)
+        logicalFile = match.groupValues[2].ifEmpty { logicalFile }
     }
 
     private fun evaluate(expression: String, line: Int): Boolean {
@@ -153,7 +261,7 @@ class Preprocessor(
             .replace(expression) { match ->
                 val name = match.groupValues[1].ifEmpty { match.groupValues[2] }
                 val marker = "__TCC_DEFINED_${values.size}__"
-                values[marker] = if (macros[name] != null) 1 else 0
+                values[marker] = if (state.macros[name] != null) 1 else 0
                 marker
             }
         return ProtectedExpression(result, values)
@@ -184,7 +292,7 @@ class Preprocessor(
                 val begin = index++
                 while (index < text.length && isIdentifierPart(text[index])) index++
                 val name = text.substring(begin, index)
-                val definition = macros[name]
+                val definition = state.macros[name]
                 val builtin = builtinValue(name, line)
                 if (name in disabled) {
                     append(name)
@@ -269,8 +377,8 @@ class Preprocessor(
 
     private fun builtinValue(name: String, line: Int): String? = options.predefined[name] ?: when (name) {
         "__LINE__" -> line.toString()
-        "__FILE__" -> stringize(path?.toString() ?: "<input>")
-        "__COUNTER__" -> (counter++).toString()
+        "__FILE__" -> stringize(logicalFile ?: path?.toString() ?: "<input>")
+        "__COUNTER__" -> (state.counter++).toString()
         "__DATE__" -> stringize(LocalDateTime.now(options.clock).format(DateTimeFormatter.ofPattern("MMM dd yyyy")))
         "__TIME__" -> stringize(LocalDateTime.now(options.clock).format(DateTimeFormatter.ofPattern("HH:mm:ss")))
         "__STDC__", "__TINYC__" -> "1"
@@ -345,11 +453,21 @@ class Preprocessor(
         return offset.coerceAtMost(source.length)
     }
 
-    private fun report(line: Int, message: String) = diagnostics.error(location(line), message)
+    private fun report(line: Int, message: String) = diagnostics.error(location(line), message, state.includeStack.snapshot())
 
     private data class Directive(val name: String, val body: String, val original: String)
     private data class ProtectedExpression(val text: String, val values: Map<String, Long>)
     private data class Invocation(val end: Int, val arguments: List<String>)
+
+    private data class ResolvedInclude(val path: Path, val searchIndex: Int)
+
+    private class SharedState {
+        val macros = MacroTable()
+        var counter = 0L
+        val onceFiles = HashSet<Path>()
+        val activeFiles = HashSet<Path>()
+        val includeStack = IncludeStack()
+    }
 
     private data class ConditionalFrame(
         val parentActive: Boolean,

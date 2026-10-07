@@ -3,6 +3,7 @@ package org.tinycc.core
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
@@ -79,5 +80,36 @@ class PreprocessorTest {
 
         assertTrue(diagnostics.render().contains("expects 1 argument"))
         assertTrue(diagnostics.render().contains("unterminated conditional"))
+    }
+
+    @Test
+    fun resolvesIncludesOncePragmasMacroStackAndLineDirectives() {
+        val directory = Files.createTempDirectory("tinycc-pp")
+        Files.writeString(directory.resolve("header.h"), "#pragma once\n#define HEADER_VALUE 9\n")
+        val source = """
+            #include "header.h"
+            #include "header.h"
+            #define VALUE 1
+            #pragma push_macro("VALUE")
+            #undef VALUE
+            #define VALUE 2
+            #pragma pop_macro("VALUE")
+            #line 100 "virtual.c"
+            int header = HEADER_VALUE;
+            int value = VALUE;
+            int line = __LINE__;
+            const char *file = __FILE__;
+        """.trimIndent()
+
+        val result = Preprocessor(
+            source,
+            directory.resolve("main.c"),
+            options = PreprocessorOptions(includePaths = listOf(directory)),
+        ).process().text
+
+        assertEquals(1, result.split("int header = 9;").size - 1)
+        assertTrue(result.contains("int value = 1;"))
+        assertTrue(result.contains("int line = 102;"))
+        assertTrue(result.contains("const char *file = \"virtual.c\";"))
     }
 }
