@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 36/48
+Overall: 37/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
 [DONE]       [12/12] 4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
-[IN_PROGRESS] [1/3] 6. Runtime, SDK and platform ABI
+[IN_PROGRESS] [2/3] 6. Runtime, SDK and platform ABI
 
 Current task:
-13.1 `-run`, temporary executable handling, dynamic library loading, environment propagation, and exit behavior
+13.2 bounds checking, backtraces, debug information, profiling hooks, and sanitizer-friendly diagnostics
 
 Current milestone:
 M6 — Runtime, SDK and platform ABI
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (12/16 implementation tasks; 36/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (12/16 implementation tasks; 37/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -108,9 +108,9 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 12.2 Port PE/COFF and Mach-O writers/linking paths, import/export handling, and Windows runtime integration. — `DONE` (see `compiler-backends/.../portable/PortableObjectWriters.kt` and `PortableObjectWriterTest`)
 - [x] 12.3 Port `libtcc1` and assembly/C runtime helpers, then verify static, shared, PIC, and cross-linked programs. — `DONE` (see `compiler-runtime/.../Runtime.kt` and `RuntimeTest`; native dependencies are rejected)
 
-### 13. Execution, bounds checking, debugging, and embedding — `TODO` (0/3)
+### 13. Execution, bounds checking, debugging, and embedding — `IN_PROGRESS` (1/3)
 
-- [ ] 13.1 Port `-run`, temporary executable handling, dynamic library loading, environment propagation, and exit behavior. — `TODO`
+- [x] 13.1 Port `-run`, temporary executable handling, dynamic library loading, environment propagation, and exit behavior. — `DONE` (see `compiler-api/.../execution/Execution.kt` and `ExecutionTest`; native libraries are rejected by the pure Kotlin/JVM boundary)
 - [ ] 13.2 Port bounds checking, backtraces, debug information, profiling hooks, and sanitizer-friendly diagnostics. — `TODO`
 - [ ] 13.3 Implement and test the Kotlin/JVM embedding API equivalent to `libtcc`, including callbacks and resource ownership. — `TODO`
 
