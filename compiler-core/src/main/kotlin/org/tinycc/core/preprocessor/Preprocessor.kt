@@ -232,7 +232,7 @@ class Preprocessor private constructor(
         val candidate = Path.of(filename)
         if (candidate.isAbsolute()) return if (options.sourceLoader.exists(candidate)) ResolvedInclude(candidate, -1) else null
         val search = ArrayList<Path>()
-        if (quoted) path?.parent?.let(search::add)
+        if (quoted) (path?.parent ?: if (path?.toString() == "-") Path.of(".") else null)?.let(search::add)
         search += options.includePaths
         search += options.systemIncludePaths
         val start = if (next) (includeSearchIndex + 1).coerceAtLeast(0) else 0

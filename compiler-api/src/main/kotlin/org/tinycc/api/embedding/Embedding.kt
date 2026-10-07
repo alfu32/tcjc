@@ -115,7 +115,8 @@ class KotlinCompilerSession(
     fun compileString(sourceName: String, source: String): CompilationResult {
         checkOpen()
         require(sourceName.isNotEmpty()) { "source name must not be empty" }
-        val path = Path.of(sourceName).toAbsolutePath().normalize()
+        val sourcePath = Path.of(sourceName)
+        val path = if (sourceName == "-") sourcePath else sourcePath.toAbsolutePath().normalize()
         val diagnostics = DiagnosticEngine(
             sink = DiagnosticSink { diagnostic -> diagnosticCallback?.onDiagnostic(diagnostic) },
         )

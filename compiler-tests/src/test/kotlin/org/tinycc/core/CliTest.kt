@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.io.path.writeText
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -109,8 +110,36 @@ class CliTest {
             "#define ANSWER 42\nconst char *input_name = __FILE__;\nint answer = ANSWER;\n".encodeToByteArray(),
         )
 
-        assertEquals(0, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
+        val status = execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin)
+        assertEquals(0, status, "stderr=${errors}; stdout=${output}")
         assertEquals("const char *input_name = \"-\";\nint answer = 42;\n", output.toString())
         assertEquals("", errors.toString())
+    }
+
+    @Test
+    fun reportsStdinDiagnosticsUsingDashAsTheFilename() {
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+        val stdin = ByteArrayInputStream("int value = @;\n".encodeToByteArray())
+
+        assertEquals(1, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
+        assertTrue(errors.toString().startsWith("-:1:13: error: unrecognized character"))
+    }
+
+    @Test
+    fun resolvesQuotedIncludesFromStdinAgainstTheWorkingDirectory() {
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+        val include = Files.createTempFile(Path.of("").toAbsolutePath(), "tcjc-stdin-include-", ".h")
+        include.writeText("int from_stdin_include;\n")
+        val stdin = ByteArrayInputStream("#include \"${include.fileName}\"\n".encodeToByteArray())
+
+        try {
+            assertEquals(0, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
+            assertTrue(output.toString().contains("int from_stdin_include;"))
+            assertEquals("", errors.toString())
+        } finally {
+            Files.deleteIfExists(include)
+        }
     }
 }
