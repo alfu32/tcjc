@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 16/48
+Overall: 17/48
 
-[IN_PROGRESS] [4/9]  1. Language front-end
+[IN_PROGRESS] [5/9]  1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
@@ -13,7 +13,7 @@ Overall: 16/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-6.2 Expression conversions, lvalues, pointers, and diagnostics
+6.3 Constant evaluation and relocation-aware compile-time values
 
 Current milestone:
 M1 — Language front-end
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (5/16 implementation tasks; 16/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (5/16 implementation tasks; 17/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -32,7 +32,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Scope and Compatibility Contract
 
-The end state is a Kotlin/JVM implementation that can be built and tested entirely through Gradle, with no C compiler sources required at build or runtime. Preserve the current TinyCC command-line behavior, `libtcc`-style embedding API, diagnostics, C language behavior, and native output targets unless a compatibility change is explicitly documented. The JVM is the host for the compiler; native target generation remains part of the migration rather than being silently replaced by JVM-only output.
+The end state is a pure Kotlin/JVM implementation that can be built and tested entirely through Gradle, with no C compiler sources, TinyCC DLL/SO files, native bridge, Make target, or shell configuration required or packaged. Preserve the current TinyCC command-line behavior, `libtcc`-style embedding API, diagnostics, C language behavior, and native output targets unless a compatibility change is explicitly documented. The JVM is the host for the compiler; native target generation remains part of the migration rather than being silently replaced by JVM-only output. The original C tree is a temporary parity oracle only and is removed at Task 16.
 
 ## Implementation Tasks
 
@@ -66,10 +66,10 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 5.2 Port symbol scopes, namespaces, storage classes, linkage, visibility, and declaration merging. — `DONE` (see `compiler-core/.../symbols` and `SymbolsTest`)
 - [x] 5.3 Add type compatibility, layout/alignment, ABI metadata, and diagnostics tests for declaration edge cases. — `DONE` (see `compiler-core/.../types/Layout.kt` and `LayoutTest`)
 
-### 6. Expressions and constant evaluation — `IN_PROGRESS` (1/3)
+### 6. Expressions and constant evaluation — `IN_PROGRESS` (2/3)
 
 - [x] 6.1 Port expression parsing with precedence, casts, compound literals, initializer expressions, and GNU-compatible extensions in scope. — `DONE` (see `compiler-core/.../expressions` and `ExpressionParserTest`)
-- [ ] 6.2 Implement conversions, lvalues, pointer arithmetic, qualifiers, overload-free operator typing, and diagnostics. — `TODO`
+- [x] 6.2 Implement conversions, lvalues, pointer arithmetic, qualifiers, overload-free operator typing, and diagnostics. — `DONE` (see `compiler-core/.../semantics/ExpressionSemantics.kt` and `ExpressionSemanticsTest`)
 - [ ] 6.3 Port integer, floating-point, address, relocation, and compile-time constant evaluation with golden tests. — `TODO`
 
 ### 7. Statements, functions, and control flow — `TODO` (0/3)
@@ -134,4 +134,4 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 
 ## Completion Gate
 
-The migration is complete only when all 16 tasks and 48 subtasks are `DONE`, a clean checkout builds with `./gradlew`, the ported test suites pass on every supported environment, the CLI and embedding API parity gates pass, and no runtime or build path depends on the original C implementation.
+The migration is complete only when all 16 tasks and 48 subtasks are `DONE`, a clean checkout builds with `./gradlew`, the ported test suites pass on every supported environment, the CLI and embedding API parity gates pass, and a clean-artifact audit proves that no runtime or build path depends on C sources or native TinyCC libraries.
