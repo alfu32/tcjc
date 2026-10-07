@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 15/48
+Overall: 16/48
 
-[IN_PROGRESS] [3/9]  1. Language front-end
+[IN_PROGRESS] [4/9]  1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
@@ -13,7 +13,7 @@ Overall: 15/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-6.1 Expression parsing and compile-time expression model
+6.2 Expression conversions, lvalues, pointers, and diagnostics
 
 Current milestone:
 M1 — Language front-end
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (5/16 implementation tasks; 15/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (5/16 implementation tasks; 16/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -66,9 +66,9 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 5.2 Port symbol scopes, namespaces, storage classes, linkage, visibility, and declaration merging. — `DONE` (see `compiler-core/.../symbols` and `SymbolsTest`)
 - [x] 5.3 Add type compatibility, layout/alignment, ABI metadata, and diagnostics tests for declaration edge cases. — `DONE` (see `compiler-core/.../types/Layout.kt` and `LayoutTest`)
 
-### 6. Expressions and constant evaluation — `TODO` (0/3)
+### 6. Expressions and constant evaluation — `IN_PROGRESS` (1/3)
 
-- [ ] 6.1 Port expression parsing with precedence, casts, compound literals, initializer expressions, and GNU-compatible extensions in scope. — `TODO`
+- [x] 6.1 Port expression parsing with precedence, casts, compound literals, initializer expressions, and GNU-compatible extensions in scope. — `DONE` (see `compiler-core/.../expressions` and `ExpressionParserTest`)
 - [ ] 6.2 Implement conversions, lvalues, pointer arithmetic, qualifiers, overload-free operator typing, and diagnostics. — `TODO`
 - [ ] 6.3 Port integer, floating-point, address, relocation, and compile-time constant evaluation with golden tests. — `TODO`
 
