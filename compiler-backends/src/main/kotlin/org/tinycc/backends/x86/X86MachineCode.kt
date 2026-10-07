@@ -13,6 +13,25 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
     private data class ZeroOperandEncoding(val bytes: List<Int>, val mode: X86Mode? = null)
     private data class BranchFixup(val label: String, val displacementOffset: Int, val nextInstructionOffset: Int)
 
+    private val conditionalBranchCodes = mapOf(
+        X86Opcode.JO to 0x0,
+        X86Opcode.JNO to 0x1,
+        X86Opcode.JB to 0x2,
+        X86Opcode.JAE to 0x3,
+        X86Opcode.JE to 0x4,
+        X86Opcode.JNE to 0x5,
+        X86Opcode.JBE to 0x6,
+        X86Opcode.JA to 0x7,
+        X86Opcode.JS to 0x8,
+        X86Opcode.JNS to 0x9,
+        X86Opcode.JP to 0xA,
+        X86Opcode.JNP to 0xB,
+        X86Opcode.JL to 0xC,
+        X86Opcode.JGE to 0xD,
+        X86Opcode.JLE to 0xE,
+        X86Opcode.JG to 0xF,
+    )
+
     private val zeroOperandEncodings = mapOf(
         X86Opcode.RET to ZeroOperandEncoding(listOf(0xC3)),
         X86Opcode.SYSCALL to ZeroOperandEncoding(listOf(0x0F, 0x05), X86Mode.X86_64),
@@ -84,7 +103,8 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             require(labels.putIfAbsent(name, output.size) == null) { "duplicate x86 code label: $name" }
             return
         }
-        if (instruction.opcode == X86Opcode.JMP || instruction.opcode == X86Opcode.JNE) {
+        val conditionCode = conditionalBranchCodes[instruction.opcode]
+        if (instruction.opcode == X86Opcode.JMP || conditionCode != null) {
             require(instruction.operands.size == 1 && instruction.operands.single() is X86Operand.Label) {
                 "${instruction.opcode.name.lowercase()} requires one code-label operand"
             }
@@ -92,7 +112,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             if (instruction.opcode == X86Opcode.JMP) output += 0xE9.toByte()
             else {
                 output += 0x0F
-                output += 0x85.toByte()
+                output += (0x80 + conditionCode!!).toByte()
             }
             val displacementOffset = output.size
             repeat(4) { output += 0 }

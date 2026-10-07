@@ -221,6 +221,43 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesEveryNearConditionalBranchConditionForBothModes() {
+        val conditions = listOf(
+            X86Opcode.JO to 0x0,
+            X86Opcode.JNO to 0x1,
+            X86Opcode.JB to 0x2,
+            X86Opcode.JAE to 0x3,
+            X86Opcode.JE to 0x4,
+            X86Opcode.JNE to 0x5,
+            X86Opcode.JBE to 0x6,
+            X86Opcode.JA to 0x7,
+            X86Opcode.JS to 0x8,
+            X86Opcode.JNS to 0x9,
+            X86Opcode.JP to 0xA,
+            X86Opcode.JNP to 0xB,
+            X86Opcode.JL to 0xC,
+            X86Opcode.JGE to 0xD,
+            X86Opcode.JLE to 0xE,
+            X86Opcode.JG to 0xF,
+        )
+        listOf(X86Mode.I386, X86Mode.X86_64).forEach { mode ->
+            val encoder = X86MachineCodeEncoder(mode)
+            conditions.forEach { (opcode, condition) ->
+                assertContentEquals(
+                    byteArrayOf(0x0F, (0x80 + condition).toByte(), 0, 0, 0, 0),
+                    encoder.encode(
+                        listOf(
+                            X86Instruction(opcode, listOf(X86Operand.Label("next"))),
+                            X86Instruction(X86Opcode.LABEL, listOf(X86Operand.Label("next"))),
+                        ),
+                    ),
+                    "$mode $opcode",
+                )
+            }
+        }
+    }
+
+    @Test
     fun constructsRunnableElf64ImageWithoutExternalToolchain() {
         val image = X86LinuxElf64.image(byteArrayOf(0xC3.toByte()))
 
