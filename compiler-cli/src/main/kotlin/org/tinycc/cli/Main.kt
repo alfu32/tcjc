@@ -1,5 +1,6 @@
 package org.tinycc.cli
 
+import java.io.InputStream
 import java.io.PrintStream
 import java.nio.file.Files
 import org.tinycc.core.BuildInfo
@@ -11,7 +12,7 @@ fun main(args: Array<String>) {
     execute(args.toList(), System.out, System.err)
 }
 
-fun execute(args: List<String>, output: PrintStream, error: PrintStream): Int {
+fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: InputStream = System.`in`): Int {
     val options = try {
         CommandLineParser().parse(args)
     } catch (failure: CliParseException) {
@@ -51,14 +52,17 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream): Int {
             ),
         ).use { compiler ->
             compiler.setDiagnosticCallback { diagnostic -> error.println(DiagnosticFormatter.DEFAULT.format(diagnostic)) }
-            val results = inputs.map { input ->
-                require(input.toString() != "-") { "stdin input is not implemented yet" }
-                require(Files.isRegularFile(input)) { "input file does not exist: $input" }
-                val source = Files.readString(input)
+            val results = inputs.map { inputPath ->
+                val source = if (inputPath.toString() == "-") {
+                    inputStreamText(input)
+                } else {
+                    require(Files.isRegularFile(inputPath)) { "input file does not exist: $inputPath" }
+                    Files.readString(inputPath)
+                }
                 val prefix = options.forcedIncludes.joinToString(separator = "\n") { forced ->
                     "#include \"${forced.toAbsolutePath().normalize()}\""
                 }
-                compiler.compileString(input.toString(), if (prefix.isEmpty()) source else "$prefix\n$source")
+                compiler.compileString(inputPath.toString(), if (prefix.isEmpty()) source else "$prefix\n$source")
             }
             if (results.any { !it.success }) return 1
             if (options.run) {
@@ -77,3 +81,5 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream): Int {
         1
     }
 }
+
+private fun inputStreamText(stream: InputStream): String = stream.readBytes().decodeToString()

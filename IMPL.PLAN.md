@@ -15,11 +15,11 @@ Overall: 3/36
 [TODO]        [0/3]  8. RISC-V and C67 instruction and ABI support
 [TODO]        [0/3]  9. Object formats, linker, and relocations
 [TODO]        [0/3] 10. Runtime, execution, debugging, and bounds support
-[TODO]        [0/3] 11. CLI, embedding API, configuration, and distributions
+[IN_PROGRESS] [0/3] 11. CLI, embedding API, configuration, and distributions
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-2.1 — achieve exact TinyCC token/lexer parity across the historical token tables and lexer tests
+11.1 — implement complete TinyCC CLI behavior (stdin input now works; remaining options and modes are open)
 
 Current milestone:
 M1 — establish complete lexical, preprocessing, and type-system parity
@@ -216,10 +216,13 @@ run the relevant checks, commit using Conventional Commits, and push to
 - [ ] 10.3 Implement bounds checking, backtraces, debug metadata, profiling,
   sanitizer diagnostics, and resource ownership with parity tests. — `TODO`
 
-### 11. CLI, embedding API, configuration, and distributions — `TODO` (0/3)
+### 11. CLI, embedding API, configuration, and distributions — `IN_PROGRESS` (0/3)
 
 - [ ] 11.1 Implement every historical command-line option, response-file rule,
-  search path, target flag, output mode, warning, and diagnostic format. — `TODO`
+  search path, target flag, output mode, warning, and diagnostic format. — `IN_PROGRESS`
+  (dash input now reads UTF-8 stdin for currently supported preprocess/token
+  output modes; source-name fidelity, multiple translation units, remaining
+  options, compilation/linking outputs, and full diagnostics remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
   source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`
 - [ ] 11.3 Produce reproducible Gradle/JVM distributions and verify that no

@@ -182,6 +182,7 @@ class CommandLineParser(
                 argument.startsWith("--script=") -> scriptFiles.add(argument.substringAfter('=').toPath())
                 argument.startsWith("-Wl,") -> linkerOptions.add(argument.substring(4))
                 argument.startsWith("-Wp,") -> preprocessorOptions.add(argument.substring(4))
+                argument == "-" -> inputFiles.add(Path.of("-"))
                 argument.startsWith("-") -> throw CliParseException("unknown option: $argument")
                 else -> inputFiles.add(argument.toPath())
             }

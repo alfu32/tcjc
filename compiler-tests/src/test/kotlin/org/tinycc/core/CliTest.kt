@@ -1,5 +1,6 @@
 package org.tinycc.core
 
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
@@ -98,5 +99,16 @@ class CliTest {
             Files.deleteIfExists(source)
             Files.deleteIfExists(destination)
         }
+    }
+
+    @Test
+    fun preprocessesStandardInputWhenDashIsTheInputFile() {
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+        val stdin = ByteArrayInputStream("#define ANSWER 42\nint answer = ANSWER;\n".encodeToByteArray())
+
+        assertEquals(0, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
+        assertEquals("int answer = 42;\n", output.toString())
+        assertEquals("", errors.toString())
     }
 }
