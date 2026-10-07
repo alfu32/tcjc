@@ -52,6 +52,10 @@ win32/include/tccdefs.h
 win32/include/stdatomic.h
 win32/include/tgmath.h
 
+.gradle/
+build/
+*/build/
+
 tests/tcctest[1234]
 tests/tcctest.gcc
 tests/*.out*

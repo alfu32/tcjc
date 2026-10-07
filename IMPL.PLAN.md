@@ -2,7 +2,7 @@
 
 ## Status
 
-- Overall migration: **NOT_STARTED** (1/16 implementation tasks; 3/48 subtasks complete)
+- Overall migration: **NOT_STARTED** (1/16 implementation tasks; 4/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - A task is `DONE` only when all three subtasks are `DONE`; its aggregate is shown as `x/3`.
@@ -20,9 +20,9 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 1.2 Capture current `make`, `make test`, examples, preprocessor fixtures, and representative compiler outputs as migration goldens. — `DONE` (see [baseline/README.md](baseline/README.md))
 - [x] 1.3 Define supported JDK/toolchain versions, Gradle coordinates, compatibility boundaries, and measurable parity gates. — `DONE` (see [MIGRATION.CONTRACT.md](MIGRATION.CONTRACT.md))
 
-### 2. Gradle/Kotlin project foundation — `TODO` (0/3)
+### 2. Gradle/Kotlin project foundation — `TODO` (1/3)
 
-- [ ] 2.1 Add `gradlew`, wrapper metadata, `settings.gradle.kts`, and a reproducible Kotlin/JVM toolchain. — `TODO`
+- [x] 2.1 Add `gradlew`, wrapper metadata, `settings.gradle.kts`, and a reproducible Kotlin/JVM toolchain. — `DONE` (Gradle 9.2.1, Kotlin 2.2.20, JDK 17 target)
 - [ ] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `TODO`
 - [ ] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `TODO`
 

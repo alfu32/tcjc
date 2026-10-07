@@ -3,8 +3,8 @@
 ## Toolchain and artifacts
 
 - Minimum supported runtime and compilation target: JDK 17 LTS. JDK 21 is the current verification environment.
-- Gradle is consumed only through the checked-in wrapper; the wrapper version will be pinned during Task 2.1 and must support JDK 17 and 21.
-- Kotlin/JVM is pinned through the Gradle version catalog/plugin management. The initial implementation baseline is Kotlin 2.0.x, with upgrades allowed only through a green parity run.
+- Gradle is consumed only through the checked-in wrapper; Task 2.1 pins Gradle 9.2.1, which supports JDK 17 and 21.
+- Kotlin/JVM is pinned through plugin management at Kotlin 2.2.20, with upgrades allowed only through a green parity run.
 - Proposed Maven coordinates are `org.tinycc:tcc-jvm` for the embedding library and `org.tinycc:tcc-cli` for the command-line distribution. Versioning follows `VERSION` until the first Kotlin-only release.
 - Compiler core has no native runtime dependency. Test-only dependencies may use JUnit 5 through Gradle's Kotlin test support.
 
