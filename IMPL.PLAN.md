@@ -125,7 +125,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   specific atomic and variadic lowering, global asm, and full
   declarator-aware expression coverage remain open; GNU elvis conditionals,
   adjacent string concatenation, and complex scalar type parsing, promotion,
-  and layout are also covered)
+  and layout are also covered; abstract array/function-pointer declarators and
+  calls through function-pointer expressions are now covered)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

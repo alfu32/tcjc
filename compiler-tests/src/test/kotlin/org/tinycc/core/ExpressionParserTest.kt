@@ -9,8 +9,11 @@ import org.tinycc.core.expressions.BinaryOperator
 import org.tinycc.core.expressions.Expression
 import org.tinycc.core.expressions.ExpressionParser
 import org.tinycc.core.expressions.Initializer
+import org.tinycc.core.expressions.SizeOperand
 import org.tinycc.core.lexer.Lexer
 import org.tinycc.core.lexer.TokenKind
+import org.tinycc.core.types.CType
+import org.tinycc.core.types.CTypes
 
 class ExpressionParserTest {
     @Test
@@ -86,5 +89,23 @@ class ExpressionParserTest {
         assertEquals(org.tinycc.core.types.CTypes.floatComplex, complex.type)
         val string = assertIs<Expression.StringLiteral>(ExpressionParser(Lexer("\"a\" \"b\"").tokenize()).parse())
         assertEquals("ab", string.value)
+    }
+
+    @Test
+    fun parsesFunctionPointerAndArrayAbstractDeclarators() {
+        val sizeof = assertIs<Expression.SizeOf>(
+            ExpressionParser(Lexer("sizeof(int (*)(long))").tokenize()).parse(),
+        )
+        val pointer = assertIs<CType.Pointer>(assertIs<SizeOperand.Type>(sizeof.operand).value)
+        val function = assertIs<CType.Function>(pointer.pointee)
+        assertEquals(CTypes.long, function.parameters.single().type)
+
+        val array = assertIs<Expression.SizeOf>(
+            ExpressionParser(Lexer("sizeof(int (*[3])(long))").tokenize()).parse(),
+        )
+        val arrayType = assertIs<SizeOperand.Type>(array.operand).value
+        val elements = assertIs<CType.Array>(arrayType)
+        assertEquals(org.tinycc.core.types.ArrayBound.Constant(3), elements.bound)
+        assertIs<CType.Pointer>(elements.element)
     }
 }

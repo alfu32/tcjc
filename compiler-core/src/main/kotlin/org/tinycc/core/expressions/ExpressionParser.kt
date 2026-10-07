@@ -13,6 +13,8 @@ import org.tinycc.core.types.ArrayBound
 import org.tinycc.core.types.PrimitiveKind
 import org.tinycc.core.types.TypeQualifiers
 
+private typealias TypeTransform = (CType) -> CType
+
 /** Recursive-descent expression parser with C operator precedence. */
 class ExpressionParser(
     private val tokens: List<Token>,
@@ -320,8 +322,13 @@ class ExpressionParser(
     }
 
     private fun parseTypeName(): CType {
-        var qualifiers = parseQualifiers()
-        val base = when (take().kind) {
+        val qualifiers = parseQualifiers()
+        val base = parseTypeSpecifier()
+        val qualifiedBase = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
+        return parseAbstractDeclarator()(qualifiedBase)
+    }
+
+    private fun parseTypeSpecifier(): CType = when (take().kind) {
             TokenKind.VOID -> CTypes.void
             TokenKind.CHAR -> CTypes.char
             TokenKind.BOOL -> CTypes.bool
@@ -356,28 +363,83 @@ class ExpressionParser(
             TokenKind.INT -> CTypes.int
             else -> CType.Error
         }
-        var result: CType = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
-        while (match(TokenKind.STAR) != null) {
-            result = CTypes.pointer(result, parseQualifiers())
+
+    /** Parses C's abstract-declarator grammar, retaining pointer/function/array binding. */
+    private fun parseAbstractDeclarator(): TypeTransform {
+        val pointerQualifiers = ArrayList<TypeQualifiers>()
+        while (match(TokenKind.STAR) != null) pointerQualifiers += parseQualifiers()
+        val pointerTransform: TypeTransform = { base ->
+            pointerQualifiers.fold(base) { current, qualifiers -> CTypes.pointer(current, qualifiers) }
         }
-        while (match(TokenKind.LEFT_BRACKET) != null) {
-            val bound = when {
-                match(TokenKind.RIGHT_BRACKET) != null -> ArrayBound.Unspecified
-                current().literal is LiteralValue.Integer -> {
-                    val length = (take().literal as LiteralValue.Integer).value.longValueExact()
-                    expect(TokenKind.RIGHT_BRACKET, "']'")
-                    ArrayBound.Constant(length)
+
+        val grouped = match(TokenKind.LEFT_PAREN) != null
+        val directTransform = if (grouped) {
+            val nested = if (at(TokenKind.RIGHT_PAREN)) ({ type: CType -> type }) else parseAbstractDeclarator()
+            expect(TokenKind.RIGHT_PAREN, "')'")
+            nested
+        } else {
+            { type: CType -> type }
+        }
+
+        var transform: TypeTransform = if (grouped) directTransform else pointerTransform
+        while (true) {
+            transform = when {
+                match(TokenKind.LEFT_BRACKET) != null -> {
+                    val bound = parseArrayBound()
+                    val suffix: TypeTransform = { type -> CType.Array(type, bound) }
+                    if (grouped) compose(transform, suffix) else compose(suffix, transform)
                 }
-                else -> {
-                    val expression = parseExpression()
-                    expect(TokenKind.RIGHT_BRACKET, "']'")
-                    ArrayBound.Variable(expression.toString())
+                match(TokenKind.LEFT_PAREN) != null -> {
+                    val parameters = parseFunctionParameters()
+                    val suffix: TypeTransform = { type ->
+                        CType.Function(type, parameters.first, parameters.second, parameters.third)
+                    }
+                    if (grouped) compose(transform, suffix) else compose(suffix, transform)
                 }
+                else -> break
             }
-            result = CType.Array(result, bound)
         }
-        return result
+        return if (grouped) compose(pointerTransform, transform) else transform
     }
+
+    private fun parseArrayBound(): ArrayBound {
+        if (match(TokenKind.RIGHT_BRACKET) != null) return ArrayBound.Unspecified
+        val bound = if (current().literal is LiteralValue.Integer) {
+            ArrayBound.Constant((take().literal as LiteralValue.Integer).value.longValueExact())
+        } else {
+            ArrayBound.Variable(parseExpression().toString())
+        }
+        expect(TokenKind.RIGHT_BRACKET, "']'")
+        return bound
+    }
+
+    private fun parseFunctionParameters(): Triple<List<CType.Parameter>, Boolean, Boolean> {
+        if (match(TokenKind.RIGHT_PAREN) != null) return Triple(emptyList(), false, true)
+        if (at(TokenKind.VOID) && peek(1).kind == TokenKind.RIGHT_PAREN) {
+            take()
+            expect(TokenKind.RIGHT_PAREN, "')'")
+            return Triple(emptyList(), false, false)
+        }
+        val parameters = ArrayList<CType.Parameter>()
+        var variadic = false
+        while (!at(TokenKind.RIGHT_PAREN) && !at(TokenKind.EOF)) {
+            if (match(TokenKind.ELLIPSIS) != null) {
+                variadic = true
+                expect(TokenKind.RIGHT_PAREN, "')'")
+                break
+            }
+            val type = parseTypeName()
+            val name = if (at(TokenKind.IDENTIFIER)) take().lexeme else null
+            parameters += CType.Parameter(name, type)
+            if (match(TokenKind.COMMA) == null) {
+                expect(TokenKind.RIGHT_PAREN, "')'")
+                break
+            }
+        }
+        return Triple(parameters, variadic, false)
+    }
+
+    private fun compose(outer: TypeTransform, inner: TypeTransform): TypeTransform = { base -> outer(inner(base)) }
 
     private fun parseQualifiers(): TypeQualifiers {
         var qualifiers = TypeQualifiers()
@@ -441,6 +503,8 @@ class ExpressionParser(
     }
 
     private fun current(): Token = tokens.getOrElse(index) { tokens.last() }
+
+    private fun peek(distance: Int): Token = tokens.getOrElse(index + distance) { tokens.last() }
 
     private fun previous(): Token = tokens[(index - 1).coerceAtLeast(0)]
 

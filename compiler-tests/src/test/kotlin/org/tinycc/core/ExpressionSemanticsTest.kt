@@ -163,4 +163,21 @@ class ExpressionSemanticsTest {
         assertEquals(CTypes.doubleComplex, result.type)
         assertEquals(0, diagnostics.errorCount)
     }
+
+    @Test
+    fun callsThroughFunctionPointerTypeNames() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(
+            ObjectDeclaration(
+                "callback",
+                CTypes.pointer(CTypes.function(CTypes.long, listOf(CTypes.int))),
+            ),
+        )
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+        val result = analyzer.analyze(ExpressionParser(Lexer("callback(1)").tokenize()).parse())
+
+        assertEquals(CTypes.long, result.type)
+        assertEquals(0, diagnostics.errorCount)
+    }
 }
