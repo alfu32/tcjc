@@ -14,6 +14,9 @@ import org.tinycc.core.types.PrimitiveKind
 import org.tinycc.core.types.RecordKind
 import org.tinycc.core.types.StorageClass
 import org.tinycc.core.types.TypeQualifiers
+import org.tinycc.core.types.TypeAttributes
+import org.tinycc.core.types.TypeRules
+import org.tinycc.core.types.TypeUse
 
 class TypesTest {
     @Test
@@ -62,5 +65,36 @@ class TypesTest {
         assertTrue(declaration.type.parameters.single().type is CType.Pointer)
         assertTrue(declaration.attributes.storage == StorageClass.EXTERN)
         assertTrue(PrimitiveKind.INT == (declaration.type.returnType as CType.Primitive).kind)
+    }
+
+    @Test
+    fun coversDeclaratorAttributesParameterAdjustmentAndTypeConstraints() {
+        val array = CTypes.arrayOf(
+            CTypes.int,
+            8,
+            qualifiers = TypeQualifiers(isConst = true),
+            isStaticParameter = true,
+        )
+        val function = CTypes.functionOf(
+            CTypes.void,
+            listOf(CType.Parameter("values", array)),
+            callingConvention = org.tinycc.core.types.CallingConvention.SYSV64,
+            attributes = TypeAttributes(aligned = 16, nonnull = true),
+        ) as CType.Function
+
+        assertTrue(function.parameters.single().type is CType.Pointer)
+        assertTrue(function.parameters.single().type.let { it as CType.Pointer }.pointee is CType.Primitive)
+        assertTrue(CTypes.unalias(CTypes.annotated(CTypes.int, TypeAttributes(packed = true))) is CType.Qualified)
+        assertTrue(CTypes.compatible(function, function.copy(parameters = function.parameters)))
+
+        val diagnostics = org.tinycc.core.diagnostics.DiagnosticEngine()
+        val rules = TypeRules(diagnostics)
+        val invalid = CType.Record(RecordKind.STRUCT, "Invalid")
+        invalid.completeWith(listOf(
+            org.tinycc.core.types.Field("tail", CType.Array(CTypes.int, ArrayBound.Flexible)),
+            org.tinycc.core.types.Field("after", CTypes.int),
+        ))
+        assertTrue(!rules.validate(invalid, TypeUse.TYPEDEF))
+        assertTrue(diagnostics.render().contains("flexible array must be the last field"))
     }
 }

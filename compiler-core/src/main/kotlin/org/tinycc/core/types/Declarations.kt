@@ -10,7 +10,19 @@ data class DeclarationAttributes(
     val isInline: Boolean = false,
     val isWeak: Boolean = false,
     val section: String? = null,
+    val visibility: Visibility = Visibility.DEFAULT,
+    val alias: String? = null,
+    val asmName: String? = null,
+    val alignment: Long? = null,
+    val isPacked: Boolean = false,
+    val isDeprecated: Boolean = false,
+    val isUsed: Boolean = false,
+    val isNoReturn: Boolean = false,
+    val callingConvention: CallingConvention = CallingConvention.CDECL,
+    val addressSpace: Int? = null,
 )
+
+enum class Visibility { DEFAULT, HIDDEN, PROTECTED, INTERNAL }
 
 sealed interface Declaration {
     val name: String?

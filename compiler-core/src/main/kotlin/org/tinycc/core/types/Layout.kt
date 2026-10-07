@@ -5,8 +5,6 @@ import org.tinycc.core.diagnostics.SourceLocation
 
 enum class TargetArchitecture { I386, X86_64, ARM, ARM64, RISCV64, C67 }
 
-enum class CallingConvention { CDECL, STDCALL, FASTCALL, SYSV64, WIN64 }
-
 data class TargetDataModel(
     val architecture: TargetArchitecture,
     val pointerBytes: Long,
@@ -75,7 +73,7 @@ object AbiMetadataCatalog {
 class TypeLayout(private val model: TargetDataModel) {
     fun sizeOf(type: CType): Long? = when (val unaliased = CTypes.unalias(type)) {
         is CType.Primitive -> primitiveSize(unaliased.kind)
-        is CType.Qualified -> sizeOf(unaliased.base)
+        is CType.Qualified -> unaliased.attributes.vectorBytes ?: sizeOf(unaliased.base)
         is CType.Pointer -> model.pointerBytes
         is CType.Array -> when (val bound = unaliased.bound) {
             is ArrayBound.Constant -> sizeOf(unaliased.element)?.times(bound.length)
@@ -90,7 +88,11 @@ class TypeLayout(private val model: TargetDataModel) {
 
     fun alignmentOf(type: CType): Long? = when (val unaliased = CTypes.unalias(type)) {
         is CType.Primitive -> primitiveAlignment(unaliased.kind)
-        is CType.Qualified -> alignmentOf(unaliased.base)
+        is CType.Qualified -> maxOf(
+            alignmentOf(unaliased.base) ?: 1L,
+            unaliased.attributes.aligned ?: 1L,
+            unaliased.attributes.vectorBytes ?: 1L,
+        )
         is CType.Pointer -> model.pointerAlignment
         is CType.Array -> alignmentOf(unaliased.element)
         is CType.Function -> null
@@ -107,15 +109,24 @@ class TypeLayout(private val model: TargetDataModel) {
         var alignment = 1L
         var unionSize = 0L
         record.fields.forEach { field ->
-            val size = sizeOf(field.type) ?: return null
-            val fieldAlignment = if (record.packed) 1L else alignmentOf(field.type) ?: return null
+            val isFlexibleTail = field === record.fields.lastOrNull() &&
+                CTypes.unalias(field.type) is CType.Array &&
+                (CTypes.unalias(field.type) as CType.Array).bound == ArrayBound.Flexible
+            val size = sizeOf(field.type) ?: if (isFlexibleTail) 0L else return null
+            val fieldAlignment = if (record.packed || record.attributes.packed || field.attributes.packed) 1L
+            else field.attributes.aligned ?: alignmentOf(field.type) ?: return null
             alignment = maxOf(alignment, fieldAlignment)
             val fieldOffset = if (record.kind == RecordKind.UNION) 0 else alignUp(offset, fieldAlignment)
             fieldLayouts += FieldLayout(field.name, fieldOffset, size, fieldAlignment)
             if (record.kind == RecordKind.UNION) unionSize = maxOf(unionSize, size) else offset = fieldOffset + size
         }
         val size = if (record.kind == RecordKind.UNION) unionSize else offset
-        val recordAlignment = if (record.packed) 1 else alignment.coerceAtMost(model.maxAlignment)
+        val recordAlignment = when {
+            record.packed || record.attributes.packed -> 1L
+            record.alignment != null -> record.alignment.coerceAtLeast(1).coerceAtMost(model.maxAlignment)
+            record.attributes.aligned != null -> record.attributes.aligned.coerceAtLeast(1).coerceAtMost(model.maxAlignment)
+            else -> alignment.coerceAtMost(model.maxAlignment)
+        }
         return RecordLayout(alignUp(size, recordAlignment), recordAlignment, fieldLayouts)
     }
 
