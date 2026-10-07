@@ -228,6 +228,54 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesStackRegisterMemoryAndImmediateForms() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x50, 0x58, 0x41, 0x50, 0x41, 0x59,
+                0x6A, 5, 0x68, 0x80.toByte(), 0, 0, 0,
+                0xFF.toByte(), 0x75, 0xF8.toByte(),
+                0x41, 0x8F.toByte(), 0x44, 0x24, 8,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.PUSH, listOf(r64("rax"))),
+                    X86Instruction(X86Opcode.POP, listOf(r64("rax"))),
+                    X86Instruction(X86Opcode.PUSH, listOf(r64("r8"))),
+                    X86Instruction(X86Opcode.POP, listOf(r64("r9"))),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Immediate(5))),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Immediate(128))),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Memory(r64("rbp").value, -8))),
+                    X86Instruction(X86Opcode.POP, listOf(X86Operand.Memory(r64("r12").value, 8))),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Immediate(Int.MAX_VALUE.toLong() + 1)))))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.POP, listOf(X86Operand.Immediate(1)))))
+        }
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ebp = physical(X86Mode.I386, "ebp")
+        assertContentEquals(
+            byteArrayOf(0x50, 0x58, 0x6A, 0x7F, 0x68, 0x80.toByte(), 0, 0, 0, 0xFF.toByte(), 0x75, 0xFC.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.PUSH, listOf(eax)),
+                    X86Instruction(X86Opcode.POP, listOf(eax)),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Immediate(127))),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Immediate(128))),
+                    X86Instruction(X86Opcode.PUSH, listOf(X86Operand.Memory(ebp.value, -4))),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }

@@ -145,8 +145,8 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
             X86Opcode.CALL -> encodeIndirectCall(instruction.operands, output)
-            X86Opcode.PUSH -> encodeStackRegister(instruction.operands, output, push = true)
-            X86Opcode.POP -> encodeStackRegister(instruction.operands, output, push = false)
+            X86Opcode.PUSH -> encodeStackOperand(instruction.operands, output, push = true)
+            X86Opcode.POP -> encodeStackOperand(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
         }
     }
@@ -292,20 +292,32 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
     }
 
     /** Encodes an instruction with an opcode-extension/register field and a register-or-memory r/m operand. */
-    private fun encodeRm(opcode: Int, registerField: Int, operand: X86Operand, output: MutableList<Byte>) {
+    private fun encodeRm(
+        opcode: Int,
+        registerField: Int,
+        operand: X86Operand,
+        output: MutableList<Byte>,
+        w: Boolean = mode == X86Mode.X86_64,
+    ) {
         when (operand) {
             is X86Operand.Register -> {
                 val base = physicalRegister(operand)
-                rex(output, w = mode == X86Mode.X86_64, register = registerField, base = base.number)
+                rex(output, w = w, register = registerField, base = base.number)
                 output += opcode.toByte()
                 output += modRm(3, registerField, base.number)
             }
-            is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output)
+            is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output, w)
             else -> error("expected register or memory operand, got $operand")
         }
     }
 
-    private fun encodeMemoryRm(opcode: Int, registerField: Int, memory: X86Operand.Memory, output: MutableList<Byte>) {
+    private fun encodeMemoryRm(
+        opcode: Int,
+        registerField: Int,
+        memory: X86Operand.Memory,
+        output: MutableList<Byte>,
+        w: Boolean,
+    ) {
         require(memory.symbol == null && memory.relocation == X86RelocationSyntax.DIRECT) {
             "symbolic memory operands require relocation support"
         }
@@ -328,7 +340,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         } else {
             require(base == null || base.bits == 64) { "x86_64 memory addressing requires 64-bit registers" }
         }
-        rex(output, w = mode == X86Mode.X86_64, register = registerField, base = base?.number ?: 0)
+        rex(output, w = w, register = registerField, base = base?.number ?: 0)
         output += opcode.toByte()
         val rm = if (needsSib) 4 else base!!.number
         output += modRm(mod, registerField, rm)
@@ -354,11 +366,37 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         }
     }
 
-    private fun encodeStackRegister(operands: List<X86Operand>, output: MutableList<Byte>, push: Boolean) {
-        require(operands.size == 1) { "stack register operation requires one operand" }
-        val register = physicalRegister(operands.single())
-        if (mode == X86Mode.X86_64 && register.number >= 8) output += 0x41.toByte()
-        output += ((if (push) 0x50 else 0x58) + (register.number and 7)).toByte()
+    private fun encodeStackOperand(operands: List<X86Operand>, output: MutableList<Byte>, push: Boolean) {
+        require(operands.size == 1) { "stack operation requires one operand" }
+        when (val operand = operands.single()) {
+            is X86Operand.Register -> {
+                val register = physicalRegister(operand)
+                require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER &&
+                    register.bits == mode.bits && register.number < if (mode == X86Mode.X86_64) 16 else 8
+                ) { "stack register must be a target-width general-purpose register" }
+                if (mode == X86Mode.X86_64 && register.number >= 8) output += 0x41.toByte()
+                output += ((if (push) 0x50 else 0x58) + (register.number and 7)).toByte()
+            }
+            is X86Operand.Memory -> encodeRm(if (push) 0xFF else 0x8F, if (push) 6 else 0, operand, output, w = false)
+            is X86Operand.Immediate -> {
+                require(push) { "pop does not accept an immediate operand" }
+                val immediate = operand.value
+                val valid = if (mode == X86Mode.X86_64) {
+                    immediate == immediate.toInt().toLong()
+                } else {
+                    immediate in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL
+                }
+                require(valid) { "push immediate must fit the target's sign-extended 32-bit encoding" }
+                if (immediate in -128L..127L) {
+                    output += 0x6A
+                    output += immediate.toByte()
+                } else {
+                    output += 0x68
+                    appendInt(output, immediate.toInt())
+                }
+            }
+            else -> error("unsupported stack operand: $operand")
+        }
     }
 
     private fun physicalRegister(operand: X86Operand): IrRegister = when (operand) {
