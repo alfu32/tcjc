@@ -19,6 +19,7 @@ private typealias TypeTransform = (CType) -> CType
 class ExpressionParser(
     private val tokens: List<Token>,
     private val diagnostics: DiagnosticEngine = DiagnosticEngine(),
+    private val typeNames: Map<String, CType> = emptyMap(),
 ) {
     private var index = 0
 
@@ -328,7 +329,9 @@ class ExpressionParser(
         return parseAbstractDeclarator()(qualifiedBase)
     }
 
-    private fun parseTypeSpecifier(): CType = when (take().kind) {
+    private fun parseTypeSpecifier(): CType {
+        val token = take()
+        return when (token.kind) {
             TokenKind.VOID -> CTypes.void
             TokenKind.CHAR -> CTypes.char
             TokenKind.BOOL -> CTypes.bool
@@ -361,8 +364,28 @@ class ExpressionParser(
                 else -> CTypes.int
             }
             TokenKind.INT -> CTypes.int
+            TokenKind.STRUCT -> parseTaggedType(token, "struct", org.tinycc.core.types.RecordKind.STRUCT)
+            TokenKind.UNION -> parseTaggedType(token, "union", org.tinycc.core.types.RecordKind.UNION)
+            TokenKind.ENUM -> {
+                val tag = expect(TokenKind.IDENTIFIER, "enum tag")
+                typeNames["enum ${tag.lexeme}"] ?: typeNames[tag.lexeme]
+                    ?: org.tinycc.core.types.CType.Enumeration(tag.lexeme)
+            }
+            TokenKind.IDENTIFIER -> typeNames[token.lexeme] ?: run {
+                error(token, "unknown type name '${token.lexeme}'")
+                CType.Error
+            }
             else -> CType.Error
         }
+    }
+
+    private fun parseTaggedType(keyword: Token, prefix: String, kind: org.tinycc.core.types.RecordKind): CType {
+        val tag = expect(TokenKind.IDENTIFIER, "$prefix tag")
+        return typeNames["$prefix ${tag.lexeme}"] ?: typeNames[tag.lexeme]
+            ?: org.tinycc.core.types.CType.Record(kind, tag.lexeme).also {
+                diagnostics.warning(keyword.span.start, "using incomplete $prefix ${tag.lexeme}")
+            }
+    }
 
     /** Parses C's abstract-declarator grammar, retaining pointer/function/array binding. */
     private fun parseAbstractDeclarator(): TypeTransform {
@@ -462,8 +485,8 @@ class ExpressionParser(
     private fun isTypeStart(kind: TokenKind): Boolean = kind in setOf(
         TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT, TokenKind.FLOAT, TokenKind.DOUBLE,
         TokenKind.SHORT, TokenKind.LONG, TokenKind.SIGNED, TokenKind.UNSIGNED, TokenKind.COMPLEX, TokenKind.CONST,
-        TokenKind.VOLATILE, TokenKind.RESTRICT, TokenKind.ATOMIC,
-    )
+        TokenKind.VOLATILE, TokenKind.RESTRICT, TokenKind.ATOMIC, TokenKind.STRUCT, TokenKind.UNION, TokenKind.ENUM,
+    ) || current().kind == TokenKind.IDENTIFIER && current().lexeme in typeNames
 
     private fun assignmentOperator(kind: TokenKind): AssignmentOperator? = when (kind) {
         TokenKind.ASSIGN -> AssignmentOperator.ASSIGN

@@ -14,6 +14,8 @@ import org.tinycc.core.lexer.Lexer
 import org.tinycc.core.lexer.TokenKind
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.CTypes
+import org.tinycc.core.types.Field
+import org.tinycc.core.types.RecordKind
 
 class ExpressionParserTest {
     @Test
@@ -107,5 +109,24 @@ class ExpressionParserTest {
         val elements = assertIs<CType.Array>(arrayType)
         assertEquals(org.tinycc.core.types.ArrayBound.Constant(3), elements.bound)
         assertIs<CType.Pointer>(elements.element)
+    }
+
+    @Test
+    fun parsesTypedefAndTaggedTypeNames() {
+        val record = CType.Record(RecordKind.STRUCT, "Pair")
+        record.completeWith(listOf(Field("left", CTypes.int), Field("right", CTypes.long)))
+        val aliases = mapOf(
+            "Count" to CTypes.typedef("Count", CTypes.unsignedLong),
+            "struct Pair" to record,
+        )
+        val cast = assertIs<Expression.Cast>(
+            ExpressionParser(Lexer("(Count)1").tokenize(), typeNames = aliases).parse(),
+        )
+        assertEquals(CTypes.typedef("Count", CTypes.unsignedLong), cast.type)
+
+        val size = assertIs<Expression.SizeOf>(
+            ExpressionParser(Lexer("sizeof(struct Pair)").tokenize(), typeNames = aliases).parse(),
+        )
+        assertEquals(record, assertIs<SizeOperand.Type>(size.operand).value)
     }
 }
