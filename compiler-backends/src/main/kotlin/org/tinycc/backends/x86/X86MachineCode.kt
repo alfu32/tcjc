@@ -74,36 +74,127 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
 
     private fun encodeMov(operands: List<X86Operand>, output: MutableList<Byte>) {
         require(operands.size == 2) { "mov requires two operands" }
-        val destination = physicalRegister(operands[0])
-        when (val source = operands[1]) {
-            is X86Operand.Immediate -> {
-                if (mode == X86Mode.X86_64) {
-                    rex(output, w = true, register = destination.number)
-                    output += (0xB8 + (destination.number and 7)).toByte()
-                    appendLong(output, source.value)
-                } else {
-                    require(destination.bits == 32) { "i386 immediate mov requires a 32-bit register" }
-                    output += (0xB8 + destination.number).toByte()
-                    appendInt(output, source.value.toInt())
+        when (val destination = operands[0]) {
+            is X86Operand.Register -> {
+                val destinationRegister = physicalRegister(destination)
+                when (val source = operands[1]) {
+                    is X86Operand.Immediate -> encodeImmediateMove(destinationRegister, source.value, output)
+                    is X86Operand.Register -> encodeRm(0x89, physicalRegister(source).number, destination, output)
+                    is X86Operand.Memory -> encodeRm(0x8B, destinationRegister.number, source, output)
+                    else -> error("unsupported mov source: $source")
                 }
             }
-            is X86Operand.Register -> {
-                val sourceRegister = physicalRegister(source)
-                rex(output, w = mode == X86Mode.X86_64, register = sourceRegister.number, base = destination.number)
-                output += 0x89.toByte()
-                output += modRm(3, sourceRegister.number, destination.number)
+            is X86Operand.Memory -> when (val source = operands[1]) {
+                is X86Operand.Register -> encodeRm(0x89, physicalRegister(source).number, destination, output)
+                is X86Operand.Immediate -> encodeMemoryImmediate(destination, source.value, output)
+                else -> error("unsupported mov source for memory destination: $source")
             }
-            else -> error("encoder only supports register and immediate mov sources")
+            else -> error("unsupported mov destination: $destination")
         }
     }
 
     private fun encodeBinary(operands: List<X86Operand>, output: MutableList<Byte>, opcode: Int) {
         require(operands.size == 2) { "binary operation requires two operands" }
-        val destination = physicalRegister(operands[0])
-        val source = physicalRegister(operands[1])
-        rex(output, w = mode == X86Mode.X86_64, register = source.number, base = destination.number)
+        when (val destination = operands[0]) {
+            is X86Operand.Register -> {
+                val register = physicalRegister(destination)
+                when (val source = operands[1]) {
+                    is X86Operand.Register -> encodeRm(opcode, physicalRegister(source).number, destination, output)
+                    is X86Operand.Memory -> encodeRm(opcode + 2, register.number, source, output)
+                    else -> error("unsupported binary source: $source")
+                }
+            }
+            is X86Operand.Memory -> {
+                val source = physicalRegister(operands[1])
+                encodeRm(opcode, source.number, destination, output)
+            }
+            else -> error("unsupported binary destination: $destination")
+        }
+    }
+
+    private fun encodeImmediateMove(destination: IrRegister, immediate: Long, output: MutableList<Byte>) {
+        if (mode == X86Mode.X86_64) {
+            rex(output, w = true, base = destination.number)
+            output += (0xB8 + (destination.number and 7)).toByte()
+            appendLong(output, immediate)
+        } else {
+            require(destination.bits == 32) { "i386 immediate mov requires a 32-bit register" }
+            output += (0xB8 + destination.number).toByte()
+            appendInt(output, immediate.toInt())
+        }
+    }
+
+    private fun encodeMemoryImmediate(destination: X86Operand.Memory, immediate: Long, output: MutableList<Byte>) {
+        if (mode == X86Mode.X86_64) {
+            require(immediate == immediate.toInt().toLong()) { "x86_64 memory mov immediate must fit signed 32 bits" }
+        } else {
+            require(immediate in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL) { "i386 memory mov immediate must fit 32 bits" }
+        }
+        encodeRm(0xC7, 0, destination, output)
+        appendInt(output, immediate.toInt())
+    }
+
+    /** Encodes an instruction with an opcode-extension/register field and a register-or-memory r/m operand. */
+    private fun encodeRm(opcode: Int, registerField: Int, operand: X86Operand, output: MutableList<Byte>) {
+        when (operand) {
+            is X86Operand.Register -> {
+                val base = physicalRegister(operand)
+                rex(output, w = mode == X86Mode.X86_64, register = registerField, base = base.number)
+                output += opcode.toByte()
+                output += modRm(3, registerField, base.number)
+            }
+            is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output)
+            else -> error("expected register or memory operand, got $operand")
+        }
+    }
+
+    private fun encodeMemoryRm(opcode: Int, registerField: Int, memory: X86Operand.Memory, output: MutableList<Byte>) {
+        require(memory.symbol == null && memory.relocation == X86RelocationSyntax.DIRECT) {
+            "symbolic memory operands require relocation support"
+        }
+        val base = memory.base?.let { reference ->
+            when (reference) {
+                is X86RegisterRef.Physical -> reference.value
+                is X86RegisterRef.Virtual -> error("machine-code encoding requires allocated base registers")
+            }
+        }
+        val displacement = memory.displacement
+        val needsSib = base == null || (base.number and 7) == 4
+        val mod = when {
+            base == null -> 0
+            displacement == 0L && (base.number and 7) != 5 -> 0
+            displacement in -128L..127L -> 1
+            else -> 2
+        }
+        if (mode == X86Mode.I386) {
+            require(base == null || base.bits == 32) { "i386 memory addressing requires 32-bit registers" }
+        } else {
+            require(base == null || base.bits == 64) { "x86_64 memory addressing requires 64-bit registers" }
+        }
+        rex(output, w = mode == X86Mode.X86_64, register = registerField, base = base?.number ?: 0)
         output += opcode.toByte()
-        output += modRm(3, source.number, destination.number)
+        val rm = if (needsSib) 4 else base!!.number
+        output += modRm(mod, registerField, rm)
+        if (needsSib) {
+            val sibBase = base?.number?.and(7) ?: 5
+            output += ((4 shl 3) or sibBase).toByte() // no index, scale 1
+        }
+        when (mod) {
+            1 -> output += displacement.toByte()
+            2 -> {
+                require(displacement == displacement.toInt().toLong()) { "x86 displacement must fit signed 32 bits" }
+                appendInt(output, displacement.toInt())
+            }
+            0 -> if (base == null) {
+                val validAddress = if (mode == X86Mode.I386) {
+                    displacement in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL
+                } else {
+                    displacement == displacement.toInt().toLong()
+                }
+                require(validAddress) { "absolute x86 address must fit the target address encoding" }
+                appendInt(output, displacement.toInt())
+            }
+        }
     }
 
     private fun encodeStackRegister(operands: List<X86Operand>, output: MutableList<Byte>, push: Boolean) {

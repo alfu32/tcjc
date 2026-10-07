@@ -176,8 +176,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   — `TODO`
 - [ ] 6.2 Implement instruction selection/encoding, x87/SSE/atomics, PIC/PIE,
   TLS, relocations, register allocation, and both i386 and SysV/Win64 ABIs. —
-  `TODO` (selected zero-operand scalar, control, fence, and CET instructions now
-  have byte-exact Kotlin encodings; full tables and operand/addressing support
+  `TODO` (selected zero-operand scalar/control/fence/CET instructions and
+  register, base-displacement, SIB, and absolute memory forms for MOV/ADD/SUB
+  now have byte-exact Kotlin encodings; full tables and addressing support
   remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`

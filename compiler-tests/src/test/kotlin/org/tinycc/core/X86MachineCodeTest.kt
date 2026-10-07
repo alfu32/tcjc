@@ -82,6 +82,49 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesRegisterBasedAndAbsoluteMemoryOperands() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r = { name: String -> physical(X86Mode.X86_64, name) }
+        val encoded = x64.encode(
+            listOf(
+                X86Instruction(X86Opcode.MOV, listOf(r("rax"), r("rbx"))),
+                X86Instruction(X86Opcode.ADD, listOf(r("rax"), r("rbx"))),
+                X86Instruction(X86Opcode.SUB, listOf(r("rax"), r("rbx"))),
+                X86Instruction(X86Opcode.MOV, listOf(X86Operand.Memory(r("rbp").value, -8), r("rax"))),
+                X86Instruction(X86Opcode.MOV, listOf(r("rax"), X86Operand.Memory(r("rbp").value, -8))),
+                X86Instruction(X86Opcode.ADD, listOf(X86Operand.Memory(r("rsp").value, 16), r("rbx"))),
+                X86Instruction(X86Opcode.ADD, listOf(r("rax"), X86Operand.Memory(r("r12").value, 128))),
+                X86Instruction(X86Opcode.SUB, listOf(X86Operand.Memory(r("r13").value), r("r8"))),
+                X86Instruction(X86Opcode.MOV, listOf(X86Operand.Memory(r("rbp").value, -8), X86Operand.Immediate(1))),
+                X86Instruction(X86Opcode.MOV, listOf(r("rax"), X86Operand.Memory(displacement = 0x12345678))),
+            ),
+        )
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0x89.toByte(), 0xD8.toByte(),
+                0x48, 0x01, 0xD8.toByte(),
+                0x48, 0x29, 0xD8.toByte(),
+                0x48, 0x89.toByte(), 0x45, 0xF8.toByte(),
+                0x48, 0x8B.toByte(), 0x45, 0xF8.toByte(),
+                0x48, 0x01, 0x5C, 0x24, 0x10,
+                0x49, 0x03, 0x84.toByte(), 0x24, 0x80.toByte(), 0, 0, 0,
+                0x4D, 0x29, 0x45, 0,
+                0x48, 0xC7.toByte(), 0x45, 0xF8.toByte(), 1, 0, 0, 0,
+                0x48, 0x8B.toByte(), 0x04, 0x25, 0x78, 0x56, 0x34, 0x12,
+            ),
+            encoded,
+        )
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        val ebp = physical(X86Mode.I386, "ebp")
+        assertContentEquals(
+            byteArrayOf(0x8B.toByte(), 0x45, 0xFC.toByte()),
+            i386.encode(listOf(X86Instruction(X86Opcode.MOV, listOf(eax, X86Operand.Memory(ebp.value, -4))))),
+        )
+    }
+
+    @Test
     fun constructsRunnableElf64ImageWithoutExternalToolchain() {
         val image = X86LinuxElf64.image(byteArrayOf(0xC3.toByte()))
 
@@ -92,4 +135,8 @@ class X86MachineCodeTest {
         assertEquals(64 + 56 + 1, image.size)
         assertTrue(X86LinuxElf64.runExitCode(7) == 7)
     }
+
+    private fun physical(mode: X86Mode, name: String): X86Operand.Register = X86Operand.Register(
+        X86RegisterRef.Physical(X86Registers.bank(mode).find(name)!!),
+    )
 }
