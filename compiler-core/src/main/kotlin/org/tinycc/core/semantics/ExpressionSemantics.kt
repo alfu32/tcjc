@@ -312,9 +312,14 @@ class ExpressionSemanticAnalyzer(
             requireArgumentCount(expression, 2, name)
             expression.arguments.firstOrNull()?.let(::analyze)
             val result = expression.arguments.getOrNull(1) as? Expression.TypeOperand
-            if (result == null) invalid(expression, "$name requires a type name") else typed(expression, result.type)
+            if (result == null) invalid(expression, "$name requires a type name")
+            else if (!CTypes.isComplete(result.type) || canonical(result.type) == CTypes.void || canonical(result.type) is CType.Function) {
+                invalid(expression, "$name requires a complete object type")
+            } else typed(expression, result.type)
         }
-        "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy" -> typed(expression, CTypes.void)
+        "__builtin_va_start" -> analyzeVaListBuiltin(expression, name, 2, requireMatchingSourceType = false)
+        "__builtin_va_end" -> analyzeVaListBuiltin(expression, name, 1, requireMatchingSourceType = false)
+        "__builtin_va_copy" -> analyzeVaListBuiltin(expression, name, 2, requireMatchingSourceType = true)
         "__builtin_offsetof" -> {
             requireArgumentCount(expression, 2, name)
             val record = (expression.arguments.getOrNull(0) as? Expression.TypeOperand)?.type?.let(::canonical)
@@ -376,6 +381,28 @@ class ExpressionSemanticAnalyzer(
             }
         }
         return typed(expression, if (signature.kind == AtomicBuiltinKind.STORE) CTypes.void else if (signature.kind == AtomicBuiltinKind.COMPARE_EXCHANGE) CTypes.int else valueType)
+    }
+
+    private fun analyzeVaListBuiltin(
+        expression: Expression.Call,
+        name: String,
+        argumentCount: Int,
+        requireMatchingSourceType: Boolean,
+    ): TypedExpression {
+        if (expression.arguments.size != argumentCount) {
+            return invalid(expression, "$name expects $argumentCount argument(s)")
+        }
+        val destination = analyze(expression.arguments.first())
+        if (destination.category != ValueCategory.LVALUE) {
+            error(expression.arguments.first(), "$name destination must be an lvalue")
+        }
+        expression.arguments.drop(1).forEachIndexed { offset, argument ->
+            val value = analyze(argument)
+            if (requireMatchingSourceType && offset == 0 && !CTypes.compatible(decay(destination), decay(value))) {
+                error(argument, "$name source must have the same type as its destination")
+            }
+        }
+        return typed(expression, CTypes.void)
     }
 
     private fun validateAtomicOrder(expression: Expression.Call, index: Int, arguments: List<TypedExpression>) {

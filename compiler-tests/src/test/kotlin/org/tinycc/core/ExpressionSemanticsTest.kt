@@ -97,6 +97,9 @@ class ExpressionSemanticsTest {
         val unreachable = analyzer.analyze(ExpressionParser(Lexer("__builtin_unreachable()").tokenize()).parse())
         val typeCompatible = analyzer.analyze(ExpressionParser(Lexer("__builtin_types_compatible_p(int, int)").tokenize()).parse())
         val vaArg = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_arg(value, long)").tokenize()).parse())
+        val vaStart = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_start(value, value)").tokenize()).parse())
+        val vaEnd = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_end(value)").tokenize()).parse())
+        val vaCopy = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_copy(value, value)").tokenize()).parse())
         val atomic = analyzer.analyze(ExpressionParser(Lexer("__atomic_fetch_add(&value, 1, 0)").tokenize()).parse())
         val labelAddress = analyzer.analyze(ExpressionParser(Lexer("&&done").tokenize()).parse())
 
@@ -107,6 +110,9 @@ class ExpressionSemanticsTest {
         assertEquals(CTypes.void, unreachable.type)
         assertEquals(CTypes.int, typeCompatible.type)
         assertEquals(CTypes.long, vaArg.type)
+        assertEquals(CTypes.void, vaStart.type)
+        assertEquals(CTypes.void, vaEnd.type)
+        assertEquals(CTypes.void, vaCopy.type)
         assertEquals(CTypes.int, atomic.type)
         assertEquals(CTypes.pointer(CTypes.void), labelAddress.type)
         assertEquals(0, diagnostics.errorCount)
@@ -213,5 +219,25 @@ class ExpressionSemanticsTest {
         assertTrue(diagnostics.render().contains("expects 2 argument(s)"))
         assertTrue(diagnostics.render().contains("operand must be an integer"))
         assertTrue(diagnostics.render().contains("expected-value argument must point"))
+    }
+
+    @Test
+    fun validatesVariadicBuiltinArityAndRequestedTypes() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("ap", CTypes.arrayOf(CTypes.unsignedLong, 1)))
+        symbols.declare(ObjectDeclaration("last", CTypes.int))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+        val start = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_start(ap, last)").tokenize()).parse())
+        val copy = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_copy(ap, ap)").tokenize()).parse())
+        val value = analyzer.analyze(ExpressionParser(Lexer("__builtin_va_arg(ap, long)").tokenize()).parse())
+        analyzer.analyze(ExpressionParser(Lexer("__builtin_va_end()").tokenize()).parse())
+        analyzer.analyze(ExpressionParser(Lexer("__builtin_va_arg(ap, void)").tokenize()).parse())
+
+        assertEquals(CTypes.void, start.type)
+        assertEquals(CTypes.void, copy.type)
+        assertEquals(CTypes.long, value.type)
+        assertTrue(diagnostics.render().contains("expects 1 argument(s)"))
+        assertTrue(diagnostics.render().contains("complete object type"))
     }
 }
