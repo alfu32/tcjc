@@ -398,6 +398,8 @@ class X86MachineCodeTest {
         assertContentEquals(
             byteArrayOf(
                 0x0F, 0x94.toByte(), 0xC0.toByte(),
+                0x0F, 0x9A.toByte(), 0xC0.toByte(),
+                0x40, 0x0F, 0x9B.toByte(), 0xC4.toByte(),
                 0x41, 0x0F, 0x9C.toByte(), 0xC4.toByte(),
                 0x40, 0x0F, 0x93.toByte(), 0xC4.toByte(),
                 0x0F, 0x95.toByte(), 0x45, 0xFF.toByte(),
@@ -407,6 +409,8 @@ class X86MachineCodeTest {
             x64.encode(
                 listOf(
                     X86Instruction(X86Opcode.SETCC, listOf(r64("rax"), X86Operand.Condition("equal"))),
+                    X86Instruction(X86Opcode.SETCC, listOf(r64("rax"), X86Operand.Condition("parity"))),
+                    X86Instruction(X86Opcode.SETCC, listOf(r64("rsp"), X86Operand.Condition("not_parity"))),
                     X86Instruction(X86Opcode.SETCC, listOf(r64("r12"), X86Operand.Condition("signed_less"))),
                     X86Instruction(X86Opcode.SETCC, listOf(r64("rsp"), X86Operand.Condition("unsigned_greater_equal"))),
                     X86Instruction(

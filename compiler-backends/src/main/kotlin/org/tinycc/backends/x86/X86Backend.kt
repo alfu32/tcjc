@@ -5,6 +5,7 @@ import org.tinycc.core.ir.CallingConventionDescriptor
 import org.tinycc.core.ir.CallingConventionPlanner
 import org.tinycc.core.ir.IrArchitecture
 import org.tinycc.core.ir.IrBinaryOp
+import org.tinycc.core.ir.IrCompareCondition
 import org.tinycc.core.ir.IrFunction
 import org.tinycc.core.ir.IrInstruction
 import org.tinycc.core.ir.IrRegister
@@ -12,6 +13,7 @@ import org.tinycc.core.ir.IrRegisterBank
 import org.tinycc.core.ir.IrRegisterClass
 import org.tinycc.core.ir.IrTerminator
 import org.tinycc.core.ir.IrType
+import org.tinycc.core.ir.IrTypes
 import org.tinycc.core.ir.IrValue
 import org.tinycc.core.ir.StackFrame
 import org.tinycc.core.ir.StackFrameBuilder
@@ -216,8 +218,11 @@ class X86InstructionSelector(
             }
             is IrInstruction.Compare -> {
                 output += X86Instruction(compareOpcode(instruction.left.type), listOf(value(instruction.left), value(instruction.right)))
-                output += X86Instruction(X86Opcode.SETCC, listOf(register(instruction.result), X86Operand.Condition(instruction.condition.name.lowercase())))
-                output += X86Instruction(X86Opcode.MOVZX, listOf(register(instruction.result), register(instruction.result)))
+                if (instruction.left.type is IrType.Floating) {
+                    selectFloatingComparison(instruction.result, instruction.condition, output)
+                } else {
+                    emitSetCondition(register(instruction.result), instruction.condition.name.lowercase(), output)
+                }
             }
             is IrInstruction.Cast -> output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.value)))
             is IrInstruction.GetElementPointer -> output += X86Instruction(X86Opcode.LEA, listOf(register(instruction.result), memory(instruction.base)))
@@ -238,6 +243,48 @@ class X86InstructionSelector(
                 if (instruction.memoryOrder == org.tinycc.core.ir.IrMemoryOrder.SEQ_CST) output += X86Instruction(X86Opcode.MFENCE)
             }
         }
+    }
+
+    private fun selectFloatingComparison(
+        result: IrValue.Local,
+        condition: IrCompareCondition,
+        output: MutableList<X86Instruction>,
+    ) {
+        val destination = register(result)
+        val directCondition = when (condition) {
+            IrCompareCondition.FLOAT_ORDERED_GREATER -> "unsigned_greater"
+            IrCompareCondition.FLOAT_ORDERED_GREATER_EQUAL -> "unsigned_greater_equal"
+            IrCompareCondition.FLOAT_ORDERED_LESS -> "unsigned_less"
+            IrCompareCondition.FLOAT_ORDERED_LESS_EQUAL -> "unsigned_less_equal"
+            IrCompareCondition.EQUAL -> "equal"
+            IrCompareCondition.NOT_EQUAL -> "not_equal"
+            else -> error("unsupported floating comparison condition: $condition")
+        }
+        emitSetCondition(destination, directCondition, output)
+        when (condition) {
+            IrCompareCondition.EQUAL,
+            IrCompareCondition.FLOAT_ORDERED_LESS,
+            IrCompareCondition.FLOAT_ORDERED_LESS_EQUAL -> {
+                val ordered = X86Operand.Register(virtual("compare:${result.id}:ordered", IrTypes.i1))
+                emitSetCondition(ordered, "not_parity", output)
+                output += X86Instruction(X86Opcode.AND, listOf(destination, ordered))
+            }
+            IrCompareCondition.NOT_EQUAL -> {
+                val unordered = X86Operand.Register(virtual("compare:${result.id}:unordered", IrTypes.i1))
+                emitSetCondition(unordered, "parity", output)
+                output += X86Instruction(X86Opcode.OR, listOf(destination, unordered))
+            }
+            else -> Unit
+        }
+    }
+
+    private fun emitSetCondition(
+        destination: X86Operand.Register,
+        condition: String,
+        output: MutableList<X86Instruction>,
+    ) {
+        output += X86Instruction(X86Opcode.SETCC, listOf(destination, X86Operand.Condition(condition)))
+        output += X86Instruction(X86Opcode.MOVZX, listOf(destination, destination))
     }
 
     private fun selectTerminator(terminator: IrTerminator, function: IrFunction, output: MutableList<X86Instruction>) {
@@ -524,6 +571,8 @@ class X86AssemblyEmitter {
         "unsigned_less_equal" -> "be"
         "unsigned_greater" -> "a"
         "unsigned_greater_equal" -> "ae"
+        "parity" -> "p"
+        "not_parity" -> "np"
         else -> error("unsupported x86 setcc condition: $condition")
     }
 

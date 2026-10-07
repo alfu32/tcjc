@@ -108,6 +108,51 @@ class X86BackendTest {
     }
 
     @Test
+    fun guardsFloatingComparisonsAgainstUnorderedNanFlags() {
+        val floating = IrTypes.f64
+        val bool = IrTypes.i1
+        val guarded = listOf(
+            IrCompareCondition.EQUAL,
+            IrCompareCondition.FLOAT_ORDERED_LESS,
+            IrCompareCondition.FLOAT_ORDERED_LESS_EQUAL,
+        )
+        val conditions = guarded + listOf(
+            IrCompareCondition.NOT_EQUAL,
+            IrCompareCondition.FLOAT_ORDERED_GREATER,
+            IrCompareCondition.FLOAT_ORDERED_GREATER_EQUAL,
+        )
+        conditions.forEachIndexed { index, condition ->
+            val result = IrValue.Local(1, bool, "comparison")
+            val function = IrFunction(
+                IrSymbol("floatCompare$index", IrType.Function(bool, listOf(floating, floating))),
+                listOf(IrParameter("left", floating), IrParameter("right", floating)),
+                listOf(
+                    IrBasicBlock(
+                        "entry",
+                        listOf(
+                            IrInstruction.Compare(
+                                result,
+                                condition,
+                                IrValue.Parameter(0, floating, "left"),
+                                IrValue.Parameter(1, floating, "right"),
+                            ),
+                        ),
+                        IrTerminator.Return(result),
+                    ),
+                ),
+            )
+            val compiled = X86CodeGenerator(X86Mode.X86_64).compile(function)
+            val instructions = compiled.function.blocks.single().instructions
+            assertTrue(instructions.any { it.opcode == X86Opcode.UCOMISD })
+            assertTrue(instructions.count { it.opcode == X86Opcode.SETCC } == if (condition in guarded || condition == IrCompareCondition.NOT_EQUAL) 2 else 1)
+            if (condition in guarded) assertTrue(instructions.any { it.opcode == X86Opcode.AND })
+            if (condition == IrCompareCondition.NOT_EQUAL) assertTrue(instructions.any { it.opcode == X86Opcode.OR })
+            val assembly = X86AssemblyEmitter().emit(compiled)
+            assertTrue(assembly.contains("setp ") || assembly.contains("setnp ") || condition !in guarded && condition != IrCompareCondition.NOT_EQUAL)
+        }
+    }
+
+    @Test
     fun selectsSseFloatingPointOperationsIntoXmmRegisters() {
         val floating = IrTypes.f64
         val type = IrType.Function(floating, listOf(floating, floating))

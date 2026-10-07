@@ -40,6 +40,8 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         "unsigned_less_equal" to 0x6, "be" to 0x6,
         "unsigned_greater" to 0x7, "a" to 0x7,
         "unsigned_greater_equal" to 0x3, "ae" to 0x3,
+        "parity" to 0xA, "p" to 0xA,
+        "not_parity" to 0xB, "np" to 0xB,
     )
 
     private val zeroOperandEncodings = mapOf(
