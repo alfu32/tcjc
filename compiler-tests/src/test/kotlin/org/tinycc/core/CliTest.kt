@@ -93,7 +93,7 @@ class CliTest {
             source.writeText("#define ANSWER 42\nint answer = ANSWER;\n")
             assertEquals(
                 0,
-                execute(listOf("-E", "-o", destination.toString(), source.toString()), PrintStream(output), PrintStream(errors)),
+                execute(listOf("-E", "-P", "-o", destination.toString(), source.toString()), PrintStream(output), PrintStream(errors)),
             )
             assertEquals("int answer = 42;\n", destination.toFile().readText())
         } finally {
@@ -110,7 +110,7 @@ class CliTest {
             "#define ANSWER 42\nconst char *input_name = __FILE__;\nint answer = ANSWER;\n".encodeToByteArray(),
         )
 
-        val status = execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin)
+        val status = execute(listOf("-E", "-P", "-"), PrintStream(output), PrintStream(errors), stdin)
         assertEquals(0, status, "stderr=${errors}; stdout=${output}")
         assertEquals("const char *input_name = \"-\";\nint answer = 42;\n", output.toString())
         assertEquals("", errors.toString())
@@ -135,7 +135,7 @@ class CliTest {
         val stdin = ByteArrayInputStream("#include \"${include.fileName}\"\n".encodeToByteArray())
 
         try {
-            assertEquals(0, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
+            assertEquals(0, execute(listOf("-E", "-P", "-"), PrintStream(output), PrintStream(errors), stdin))
             assertTrue(output.toString().contains("int from_stdin_include;"))
             assertEquals("", errors.toString())
         } finally {
@@ -156,7 +156,7 @@ class CliTest {
         try {
             assertEquals(
                 0,
-                execute(listOf("-E", first.toString(), second.toString()), PrintStream(output), PrintStream(errors)),
+                execute(listOf("-E", "-P", first.toString(), second.toString()), PrintStream(output), PrintStream(errors)),
             )
             assertEquals("int first_value;\nint second_value;\n", output.toString())
 
@@ -183,7 +183,7 @@ class CliTest {
         try {
             assertEquals(
                 0,
-                execute(listOf("-E", "-o", "-", source.toString()), PrintStream(output), PrintStream(errors)),
+                execute(listOf("-E", "-P", "-o", "-", source.toString()), PrintStream(output), PrintStream(errors)),
             )
             assertEquals("int stdout_value;\n", output.toString())
             assertEquals("", errors.toString())
@@ -191,11 +191,67 @@ class CliTest {
             output.reset()
             assertEquals(
                 0,
-                execute(listOf("-E", "--output=-", source.toString()), PrintStream(output), PrintStream(errors)),
+                execute(listOf("-E", "-P", "--output=-", source.toString()), PrintStream(output), PrintStream(errors)),
             )
             assertEquals("int stdout_value;\n", output.toString())
         } finally {
             root.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    fun emitsHistoricalPreprocessorLineMarkerModesAndIncludeTransitions() {
+        val root = Files.createTempDirectory("tcjc-cli-line-markers-")
+        val header = root.resolve("included.h")
+        val source = root.resolve("source.c")
+        header.writeText("int included_value;\n")
+        source.writeText("#include \"${header.fileName}\"\nint source_value;\n")
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+
+        try {
+            assertEquals(
+                0,
+                execute(listOf("-E", "-I", root.toString(), source.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            val gccOutput = output.toString()
+            assertTrue(gccOutput.startsWith("# 1 \"${source.toAbsolutePath()}\"\n"))
+            assertTrue(gccOutput.contains("# 1 \"${header.toAbsolutePath()}\" 1\n"))
+            assertTrue(gccOutput.contains("# 2 \"${source.toAbsolutePath()}\" 2\n"))
+            assertTrue(gccOutput.contains("int source_value;"))
+
+            output.reset()
+            val relativeSource = Path.of("").toAbsolutePath().relativize(source.toAbsolutePath()).toString()
+            assertEquals(
+                0,
+                execute(listOf("-E", relativeSource), PrintStream(output), PrintStream(errors)),
+            )
+            assertTrue(output.toString().startsWith("# 1 \"$relativeSource\"\n"))
+
+            output.reset()
+            assertEquals(
+                0,
+                execute(listOf("-E", "-P1", "-I", root.toString(), source.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertTrue(output.toString().startsWith("#line 1 \"${source.toAbsolutePath()}\"\n"))
+            assertTrue(output.toString().contains("#line 1 \"${header.toAbsolutePath()}\"\n"))
+
+            output.reset()
+            assertEquals(
+                0,
+                execute(listOf("-E", "-P", "-I", root.toString(), source.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertTrue(!output.toString().contains("# 1 \""))
+            assertTrue(!output.toString().contains("#line"))
+            assertEquals("", errors.toString())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun rejectsUnimplementedNumericOnlyPreprocessingModeExplicitly() {
+        val error = assertFailsWith<CliParseException> { CommandLineParser().parse(listOf("-P10")) }
+        assertTrue(error.message.orEmpty().contains("numeric-only preprocessing is not implemented"))
     }
 }

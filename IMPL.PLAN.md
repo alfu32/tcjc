@@ -224,8 +224,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   output modes, `__FILE__` expands to `"-"`, stdin diagnostics retain the `-`
   filename, and quoted includes search the working directory; multiple
   source files aggregate in token/preprocess output modes and `-o -` routes
-  output to stdout; multi-unit compilation/linking, remaining options, and full
-  diagnostic parity remain open)
+  output to stdout; default GCC, `-P`, and `-P1` preprocessing line-marker
+  modes now preserve source/include transitions; unsupported numeric-only
+  `-P10`, multi-unit compilation/linking, remaining options, and full diagnostic
+  parity remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
   source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`
 - [ ] 11.3 Produce reproducible Gradle/JVM distributions and verify that no

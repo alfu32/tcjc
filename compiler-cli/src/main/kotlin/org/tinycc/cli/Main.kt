@@ -47,6 +47,7 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
                 systemIncludePaths = options.systemIncludePaths,
                 predefined = predefined,
                 outputType = options.outputType,
+                lineMarkerMode = options.lineMarkerMode,
             ),
         ).use { compiler ->
             compiler.setDiagnosticCallback { diagnostic -> error.println(DiagnosticFormatter.DEFAULT.format(diagnostic)) }

@@ -17,6 +17,7 @@ import org.tinycc.core.lexer.Token
 import org.tinycc.core.lexer.TccTokenIds
 import org.tinycc.core.preprocessor.Preprocessor
 import org.tinycc.core.preprocessor.PreprocessorOptions
+import org.tinycc.core.preprocessor.LineMarkerMode
 
 enum class CompilerOutputType { PREPROCESSED, TOKENS }
 
@@ -27,6 +28,7 @@ data class CompilerOptions(
     val predefined: Map<String, String> = emptyMap(),
     val outputType: CompilerOutputType = CompilerOutputType.TOKENS,
     val boundsCheckTokens: Boolean = false,
+    val lineMarkerMode: LineMarkerMode = LineMarkerMode.GCC,
 )
 
 fun interface CompilerDiagnosticCallback {
@@ -115,8 +117,7 @@ class KotlinCompilerSession(
     fun compileString(sourceName: String, source: String): CompilationResult {
         checkOpen()
         require(sourceName.isNotEmpty()) { "source name must not be empty" }
-        val sourcePath = Path.of(sourceName)
-        val path = if (sourceName == "-") sourcePath else sourcePath.toAbsolutePath().normalize()
+        val path = Path.of(sourceName)
         val diagnostics = DiagnosticEngine(
             sink = DiagnosticSink { diagnostic -> diagnosticCallback?.onDiagnostic(diagnostic) },
         )
@@ -129,10 +130,15 @@ class KotlinCompilerSession(
                 includePaths = options.includePaths,
                 systemIncludePaths = options.systemIncludePaths,
                 sourceLoader = sourceLoader,
+                lineMarkerMode = if (options.outputType == CompilerOutputType.PREPROCESSED) {
+                    options.lineMarkerMode
+                } else {
+                    LineMarkerMode.NONE
+                },
             ),
         ).process()
         val tokens = Lexer(
-            preprocessed.text,
+            preprocessed.tokenText,
             path,
             diagnostics,
             options = org.tinycc.core.lexer.LexerOptions(

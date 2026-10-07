@@ -13,18 +13,22 @@ import org.tinycc.core.diagnostics.SourceLocation
 import org.tinycc.core.io.SourceFile
 import org.tinycc.core.io.SourceFileLoader
 
+enum class LineMarkerMode { NONE, GCC, STANDARD }
+
 data class PreprocessorOptions(
     val predefined: Map<String, String> = emptyMap(),
     val clock: Clock = Clock.systemUTC(),
     val includePaths: List<Path> = emptyList(),
     val systemIncludePaths: List<Path> = emptyList(),
     val sourceLoader: SourceFileLoader = SourceFileLoader(),
+    val lineMarkerMode: LineMarkerMode = LineMarkerMode.NONE,
 )
 
 data class PreprocessedSource(
     val text: String,
     val macros: List<MacroDefinition>,
     val pragmas: List<PreprocessorPragma> = emptyList(),
+    val tokenText: String = text,
 )
 
 /** Handles macro definitions, expansion, and conditional compilation. */
@@ -39,6 +43,7 @@ class Preprocessor private constructor(
     private val lineMap = LineMap(source)
     private var lineDelta = 0
     private var logicalFile: String? = null
+    private var lastMarkedLine: Int? = null
 
     constructor(
         source: String,
@@ -69,8 +74,13 @@ class Preprocessor private constructor(
     private fun processUnit(): PreprocessedSource {
         val lines = stripComments(source.replace("\r\n", "\n").replace('\r', '\n')).split('\n')
         val output = StringBuilder(source.length)
+        val tokenOutput = StringBuilder(source.length)
+        if (options.lineMarkerMode != LineMarkerMode.NONE) {
+            appendLineMarker(output, 1, if (state.includeStack.snapshot().isEmpty()) 0 else 1)
+        }
         val conditionals = ArrayDeque<ConditionalFrame>()
         val pending = StringBuilder()
+        var pendingLine = 1
         var lineIndex = 0
         while (lineIndex < lines.size) {
             val physicalLine = lineIndex + 1
@@ -83,25 +93,28 @@ class Preprocessor private constructor(
             if (directive != null) {
                 val conditionalDirective = directive.name in setOf("if", "ifdef", "ifndef", "elif", "else", "endif")
                 if (pending.isNotEmpty() && !conditionalDirective) {
-                    output.append(expandText(pending.toString(), emptySet(), logicalLine))
+                    appendPreprocessed(output, tokenOutput, expandText(pending.toString(), emptySet(), pendingLine), pendingLine)
                     pending.clear()
                 }
-                processDirective(directive, logicalLine, physicalLine, conditionals, output)
+                processDirective(directive, logicalLine, physicalLine, conditionals, output, tokenOutput)
             } else if (conditionals.isActive()) {
+                if (pending.isEmpty()) pendingLine = logicalLine
                 pending.append(line)
                 if (lineIndex < lines.lastIndex) pending.append('\n')
                 if (balancedParentheses(pending.toString()) && !endsWithFunctionMacroName(line)) {
-                    output.append(expandText(pending.toString(), emptySet(), logicalLine))
+                    appendPreprocessed(output, tokenOutput, expandText(pending.toString(), emptySet(), pendingLine), pendingLine)
                     pending.clear()
                 }
             }
             lineIndex++
         }
-        if (pending.isNotEmpty()) output.append(expandText(pending.toString(), emptySet(), lines.size))
+        if (pending.isNotEmpty()) {
+            appendPreprocessed(output, tokenOutput, expandText(pending.toString(), emptySet(), pendingLine), pendingLine)
+        }
         if (conditionals.isNotEmpty()) {
             report(1, "unterminated conditional directive")
         }
-        return PreprocessedSource(output.toString(), state.macros.snapshot(), state.pragmas.toList())
+        return PreprocessedSource(output.toString(), state.macros.snapshot(), state.pragmas.toList(), tokenOutput.toString())
     }
 
     private fun processDirective(
@@ -110,6 +123,7 @@ class Preprocessor private constructor(
         physicalLine: Int,
         conditionals: ArrayDeque<ConditionalFrame>,
         output: StringBuilder,
+        tokenOutput: StringBuilder,
     ) {
         when (directive.name) {
             "if" -> {
@@ -152,7 +166,8 @@ class Preprocessor private constructor(
             else -> if (conditionals.isActive()) when (directive.name) {
                 "define" -> define(directive.body, physicalLine)
                 "undef" -> state.macros.undef(directive.body.trim())
-                "include", "include_next" -> include(directive.body, directive.name == "include_next", physicalLine, output)
+                "include", "include_next" ->
+                    include(directive.body, directive.name == "include_next", physicalLine, output, tokenOutput)
                 "pragma" -> pragma(directive.body, physicalLine)
                 "line" -> lineDirective(directive.body, logicalLine, physicalLine)
                 "error" -> report(physicalLine, directive.body.trim().ifEmpty { "#error" })
@@ -200,7 +215,7 @@ class Preprocessor private constructor(
         }
     }
 
-    private fun include(body: String, next: Boolean, line: Int, output: StringBuilder) {
+    private fun include(body: String, next: Boolean, line: Int, output: StringBuilder, tokenOutput: StringBuilder) {
         val expanded = expandText(body.trim(), emptySet(), line).trim()
         val angled = expanded.startsWith('<') && expanded.endsWith('>')
         val quoted = expanded.startsWith('"') && expanded.endsWith('"')
@@ -220,9 +235,14 @@ class Preprocessor private constructor(
             val sourceFile = options.sourceLoader.read(normalized)
             val child = Preprocessor(sourceFile.text, sourceFile.path, diagnostics, options, state, resolved.searchIndex)
             state.includeStack.withFrame(sourceFile.path, location(line)) {
-                output.append(child.process().text)
+                val included = child.process()
+                output.append(included.text)
+                tokenOutput.append(included.tokenText)
             }
             if (output.isNotEmpty() && output.last() != '\n') output.append('\n')
+            if (options.lineMarkerMode != LineMarkerMode.NONE) {
+                appendLineMarker(output, line + 1 + lineDelta, 2)
+            }
         } catch (error: IOException) {
             report(line, "unable to read include file '$filename': ${error.message ?: "I/O error"}")
         }
@@ -315,6 +335,32 @@ class Preprocessor private constructor(
         }
         lineDelta = match.groupValues[1].toInt() - (physicalLine + 1)
         logicalFile = match.groupValues[2].ifEmpty { logicalFile }
+    }
+
+    private fun appendPreprocessed(output: StringBuilder, tokenOutput: StringBuilder, text: String, line: Int) {
+        if (text.isEmpty()) return
+        if (options.lineMarkerMode != LineMarkerMode.NONE && lastMarkedLine != line) {
+            appendLineMarker(output, line, 0)
+        }
+        output.append(text)
+        tokenOutput.append(text)
+    }
+
+    private fun appendLineMarker(output: StringBuilder, line: Int, includeFlag: Int) {
+        if (output.isNotEmpty() && output.last() != '\n') output.append('\n')
+        val filename = (logicalFile ?: path?.toString() ?: "<input>")
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        when (options.lineMarkerMode) {
+            LineMarkerMode.NONE -> return
+            LineMarkerMode.STANDARD -> output.append("#line $line \"$filename\"\n")
+            LineMarkerMode.GCC -> {
+                output.append("# $line \"$filename\"")
+                if (includeFlag != 0) output.append(" $includeFlag")
+                output.append('\n')
+            }
+        }
+        lastMarkedLine = line
     }
 
     private fun evaluate(expression: String, line: Int): Boolean {

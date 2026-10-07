@@ -9,12 +9,15 @@ import org.junit.jupiter.api.Test
 import org.tinycc.api.embedding.CompilerOutputType
 import org.tinycc.api.embedding.CompilerOptions
 import org.tinycc.api.embedding.KotlinCompilerSession
+import org.tinycc.core.preprocessor.LineMarkerMode
 
 class EmbeddingTest {
     @Test
     fun compilesPreprocessedUnitsAndOwnsOutputLifecycle() {
         val diagnostics = mutableListOf<String>()
-        KotlinCompilerSession(CompilerOptions(outputType = CompilerOutputType.PREPROCESSED)).use { compiler ->
+        KotlinCompilerSession(
+            CompilerOptions(outputType = CompilerOutputType.PREPROCESSED, lineMarkerMode = LineMarkerMode.NONE),
+        ).use { compiler ->
             compiler
                 .define("ANSWER", "42")
                 .setDiagnosticCallback { diagnostics += it.message }

@@ -4,6 +4,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.isRegularFile
+import org.tinycc.core.preprocessor.LineMarkerMode
 
 enum class CliAction { COMPILE, HELP, VERSION }
 
@@ -11,6 +12,7 @@ data class CliOptions(
     val action: CliAction = CliAction.COMPILE,
     val run: Boolean = false,
     val outputType: org.tinycc.api.embedding.CompilerOutputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS,
+    val lineMarkerMode: LineMarkerMode = LineMarkerMode.GCC,
     val outputPath: Path? = null,
     val target: String = "x86_64-linux",
     val includePaths: List<Path> = emptyList(),
@@ -133,6 +135,7 @@ class CommandLineParser(
         var action = CliAction.COMPILE
         var run = false
         var outputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS
+        var lineMarkerMode = LineMarkerMode.GCC
         var outputPath: Path? = null
         var target = "x86_64-linux"
         var runtimeArguments = emptyList<String>()
@@ -155,6 +158,17 @@ class CommandLineParser(
                 argument == "--version" -> action = CliAction.VERSION
                 argument == "-run" || argument == "--run" -> run = true
                 argument == "-E" -> outputType = org.tinycc.api.embedding.CompilerOutputType.PREPROCESSED
+                argument.startsWith("-P") -> {
+                    val format = argument.removePrefix("-P")
+                    val formatNumber = if (format.isEmpty()) 0 else format.toIntOrNull()
+                        ?: throw CliParseException("invalid line marker format: $argument")
+                    lineMarkerMode = when (formatNumber) {
+                        0 -> LineMarkerMode.NONE
+                        1 -> LineMarkerMode.STANDARD
+                        10 -> throw CliParseException("-P10 numeric-only preprocessing is not implemented")
+                        else -> LineMarkerMode.GCC
+                    }
+                }
                 argument == "-c" -> outputType = org.tinycc.api.embedding.CompilerOutputType.TOKENS
                 argument == "-m32" -> target = target.replace(Regex("^[^-]+"), "i386")
                 argument == "-m64" -> target = target.replace(Regex("^[^-]+"), "x86_64")
@@ -198,6 +212,7 @@ class CommandLineParser(
             action = action,
             run = run,
             outputType = outputType,
+            lineMarkerMode = lineMarkerMode,
             outputPath = outputPath,
             target = target,
             includePaths = includePaths.map(Path::toAbsolutePath).map(Path::normalize),
@@ -246,6 +261,7 @@ fun cliHelp(): String = """
 
     Actions:
       -E, -c                 emit preprocessed text or deterministic token output
+      -P, -P1                suppress line markers or use #line markers with -E
       -run, --run            request execution after compilation
       -o, --output FILE      write output to FILE
       -h, --help             show this help
