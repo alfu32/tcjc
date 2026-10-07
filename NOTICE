@@ -1,0 +1,3 @@
+tinycc-jvm preserves the TinyCC compatibility contract and retains historical TinyCC attribution and licensing materials. See `COPYING` for the project license and `RELICENSING` for contributor attribution and relicensing records.
+
+The Kotlin/JVM implementation, build logic, tests, and migration documentation are maintained in this repository. Do not remove the historical attribution files when deleting the temporary C parity oracle.

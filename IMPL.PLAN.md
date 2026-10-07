@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 46/48
+Overall: 47/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
 [DONE]       [12/12] 4. Lowering and native target backends
-[IN_PROGRESS] [13/15] 5. Tooling, integration and quality
+[IN_PROGRESS] [14/15] 5. Tooling, integration and quality
 [DONE]       [3/3] 6. Runtime, SDK and platform ABI
 
 Current task:
-16.2 update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata
+16.3 remove obsolete C build paths after parity gates pass; perform a clean-checkout build and final repository audit
 
 Current milestone:
 M5 — Tooling, integration and quality
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (15/16 implementation tasks; 46/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (15/16 implementation tasks; 47/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -126,10 +126,10 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 15.2 Add differential testing against the captured C implementation across supported hosts, targets, and optimization/configuration modes. — `DONE` (see `compiler-tests/.../DifferentialParityTest.kt` and `ArtifactDifferential`; captured preprocessing and object metadata are replayed deterministically)
 - [x] 15.3 Run coverage, sanitization-equivalent JVM checks, fuzzing, performance comparisons, and fix all release-blocking discrepancies. — `DONE` (see `compiler-tests/.../HardeningTest.kt`, JaCoCo configuration, and `verifyPureKotlinArtifact`)
 
-### 16. Cutover, documentation, and C removal — `IN_PROGRESS` (1/3)
+### 16. Cutover, documentation, and C removal — `IN_PROGRESS` (2/3)
 
 - [x] 16.1 Switch default build, tests, examples, CI configuration, and contributor instructions to Gradle/Kotlin/JVM. — `DONE` (see `README`, `.github/workflows/build.yml`, and Gradle/JaCoCo configuration; pre-existing `AGENTS.md` was preserved per repository instruction)
-- [ ] 16.2 Update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata. — `TODO`
+- [x] 16.2 Update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata. — `DONE` (see `ARCHITECTURE.md`, `MIGRATION.md`, `RELEASE-METADATA.md`, and `NOTICE`)
 - [ ] 16.3 Remove obsolete C build paths only after parity gates pass; perform a clean checkout build and final repository audit. — `TODO`
 
 ## Completion Gate
