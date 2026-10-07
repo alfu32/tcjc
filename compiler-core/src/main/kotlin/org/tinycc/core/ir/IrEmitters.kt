@@ -134,6 +134,8 @@ private fun IrInstruction.format(): String = when (this) {
         prefix + "call ${functionType.returnType.format()} ${callee.format()}(" +
             arguments.joinToString(", ") { "${it.type.format()} ${it.format()}" } + ")"
     }
+    is IrInstruction.AtomicRmw -> "${result.format()} = atomic-${operation.name.lowercase()} ${memoryOrder.name.lowercase()} ${value.type.format()} ${value.format()}, ${address.type.format()} ${address.format()}"
+    is IrInstruction.CompareExchange -> "${result.format()} = cmpxchg ${memoryOrder.name.lowercase()} ${expected.type.format()} ${expected.format()}, ${replacement.format()}, ${address.type.format()} ${address.format()}"
 }
 
 private fun IrTerminator.format(): String = when (this) {

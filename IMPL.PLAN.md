@@ -3,7 +3,7 @@
 ## Dashboard
 
 ```text
-Overall: 25/48
+Overall: 26/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
@@ -13,7 +13,7 @@ Overall: 25/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-9.2 x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations
+9.3 Native i386/x86_64 compile, link, run, ABI, assembler, and self-hosting parity tests
 
 Current milestone:
 M4 — Lowering and native target backends
@@ -84,10 +84,10 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts. — `DONE` (see `compiler-core/.../ir/IrBackendContracts.kt` and `BackendContractsTest`)
 - [x] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `DONE` (see `compiler-core/.../ir/IrEmitters.kt` and `EmissionTest`)
 
-### 9. i386 and x86_64 backends — `IN_PROGRESS` (1/3)
+### 9. i386 and x86_64 backends — `IN_PROGRESS` (2/3)
 
 - [x] 9.1 Port instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support. — `DONE` (see `compiler-backends/.../x86/X86Backend.kt` and `X86BackendTest`)
-- [ ] 9.2 Port x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations. — `TODO`
+- [x] 9.2 Port x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `compiler-backends/.../x86/X86Backend.kt`, and expanded `X86BackendTest`)
 - [ ] 9.3 Pass native i386/x86_64 compile, link, run, ABI, assembler, and self-hosting parity tests. — `TODO`
 
 ### 10. ARM and ARM64 backends — `TODO` (0/3)

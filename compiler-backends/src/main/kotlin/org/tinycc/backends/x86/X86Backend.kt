@@ -30,6 +30,8 @@ object X86Registers {
                 register("ecx", 2, 32, callerSaved = true), register("edx", 3, 32, callerSaved = true),
                 register("esi", 4, 32, callerSaved = false), register("edi", 5, 32, callerSaved = false),
                 register("ebp", 6, 32, callerSaved = false), register("esp", 7, 32, callerSaved = false),
+                floatRegister("xmm0", 8, callerSaved = true), floatRegister("xmm1", 9, callerSaved = true),
+                floatRegister("xmm2", 10, callerSaved = true), floatRegister("xmm3", 11, callerSaved = true),
             ),
         )
         X86Mode.X86_64 -> IrRegisterBank(
@@ -51,10 +53,16 @@ object X86Registers {
         )
     }
 
-    fun allocatable(mode: X86Mode): List<IrRegister> = when (mode) {
-        X86Mode.I386 -> listOf("eax", "ecx", "edx", "esi", "edi").mapNotNull { bank(mode).find(it) }
-        X86Mode.X86_64 -> listOf("rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "rbx")
-            .mapNotNull { bank(mode).find(it) }
+    fun allocatable(mode: X86Mode, registerClass: IrRegisterClass = IrRegisterClass.INTEGER): List<IrRegister> = when (registerClass) {
+        IrRegisterClass.FLOAT, IrRegisterClass.VECTOR -> when (mode) {
+            X86Mode.I386 -> listOf("xmm0", "xmm1", "xmm2", "xmm3").mapNotNull { bank(mode).find(it) }
+            X86Mode.X86_64 -> (0..7).mapNotNull { bank(mode).find("xmm$it") }
+        }
+        else -> when (mode) {
+            X86Mode.I386 -> listOf("eax", "ecx", "edx", "esi", "edi").mapNotNull { bank(mode).find(it) }
+            X86Mode.X86_64 -> listOf("rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "rbx")
+                .mapNotNull { bank(mode).find(it) }
+        }
     }
 
     fun calleeSaved(mode: X86Mode): List<IrRegister> = when (mode) {
@@ -62,7 +70,9 @@ object X86Registers {
         X86Mode.X86_64 -> listOf("rbx", "r12", "r13", "r14", "r15").mapNotNull { bank(mode).find(it) }
     }
 
-    fun returnRegister(mode: X86Mode): IrRegister = bank(mode).find(if (mode == X86Mode.I386) "eax" else "rax")!!
+    fun returnRegister(mode: X86Mode, type: IrType? = null): IrRegister = bank(mode).find(
+        if (type is IrType.Floating) "xmm0" else if (mode == X86Mode.I386) "eax" else "rax",
+    )!!
 
     fun callingConvention(mode: X86Mode): CallingConventionDescriptor {
         val registers = bank(mode)
@@ -94,6 +104,20 @@ data class X86VirtualRegister(
     val registerClass: IrRegisterClass = IrRegisterClass.INTEGER,
 )
 
+enum class X86RelocationSyntax { DIRECT, GOTPCREL, PLT32, TLSGD, TPOFF }
+
+data class X86TargetOptions(
+    val mode: X86Mode,
+    val pic: Boolean = false,
+    val pie: Boolean = false,
+    val sse2: Boolean = true,
+    val threadLocalStorage: Boolean = true,
+) {
+    init {
+        require(!pie || pic) { "PIE requires PIC addressing" }
+    }
+}
+
 sealed interface X86RegisterRef {
     data class Virtual(val value: X86VirtualRegister) : X86RegisterRef
     data class Physical(val value: IrRegister) : X86RegisterRef
@@ -106,8 +130,9 @@ sealed interface X86Operand {
         val base: X86RegisterRef? = null,
         val displacement: Long = 0,
         val symbol: String? = null,
+        val relocation: X86RelocationSyntax = X86RelocationSyntax.DIRECT,
     ) : X86Operand
-    data class Symbol(val name: String) : X86Operand
+    data class Symbol(val name: String, val relocation: X86RelocationSyntax = X86RelocationSyntax.DIRECT) : X86Operand
     data class Label(val name: String) : X86Operand
     data class Condition(val name: String) : X86Operand
     data class StackSlotRef(val slot: Int) : X86Operand
@@ -115,7 +140,9 @@ sealed interface X86Operand {
 
 enum class X86Opcode {
     MOV, LEA, ADD, SUB, IMUL, IDIV, AND, OR, XOR, SHL, SHR,
-    CMP, SETCC, CALL, JMP, JNE, PUSH, POP, SUB_STACK, ADD_STACK,
+    MOVSS, MOVSD, ADDSS, ADDSD, SUBSS, SUBSD, MULSS, MULSD, DIVSS, DIVSD,
+    CMP, UCOMISS, UCOMISD, SETCC, CALL, JMP, JNE, PUSH, POP, SUB_STACK, ADD_STACK,
+    XCHG, LOCK_XADD, LOCK_ADD, LOCK_SUB, LOCK_AND, LOCK_OR, LOCK_XOR, CMPXCHG, MFENCE,
     ALLOCA, UD2, RET,
 }
 
@@ -134,7 +161,10 @@ data class X86MachineFunction(
     val virtualRegisters: Set<X86VirtualRegister>,
 )
 
-class X86InstructionSelector(private val mode: X86Mode) {
+class X86InstructionSelector(
+    private val mode: X86Mode,
+    private val options: X86TargetOptions = X86TargetOptions(mode),
+) {
     private val valueRegisters = LinkedHashMap<String, X86VirtualRegister>()
     private val virtuals = LinkedHashSet<X86VirtualRegister>()
     private var nextVirtual = 0
@@ -178,20 +208,30 @@ class X86InstructionSelector(private val mode: X86Mode) {
             is IrInstruction.Load -> output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), memory(instruction.address)))
             is IrInstruction.Store -> output += X86Instruction(X86Opcode.MOV, listOf(memory(instruction.address), value(instruction.value)))
             is IrInstruction.Binary -> {
-                output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.left)))
-                output += X86Instruction(binaryOpcode(instruction.operation), listOf(register(instruction.result), value(instruction.right)))
+                output += X86Instruction(moveOpcode(instruction.left.type), listOf(register(instruction.result), value(instruction.left)))
+                output += X86Instruction(binaryOpcode(instruction.operation, instruction.left.type), listOf(register(instruction.result), value(instruction.right)))
             }
             is IrInstruction.Compare -> {
-                output += X86Instruction(X86Opcode.CMP, listOf(value(instruction.left), value(instruction.right)))
+                output += X86Instruction(compareOpcode(instruction.left.type), listOf(value(instruction.left), value(instruction.right)))
                 output += X86Instruction(X86Opcode.SETCC, listOf(register(instruction.result), X86Operand.Condition(instruction.condition.name.lowercase())))
             }
             is IrInstruction.Cast -> output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.value)))
             is IrInstruction.GetElementPointer -> output += X86Instruction(X86Opcode.LEA, listOf(register(instruction.result), memory(instruction.base)))
             is IrInstruction.Call -> {
-                output += X86Instruction(X86Opcode.CALL, listOf(value(instruction.callee)))
+                output += X86Instruction(X86Opcode.CALL, listOf(callValue(instruction.callee)))
                 instruction.result?.let {
-                    output += X86Instruction(X86Opcode.MOV, listOf(register(it), X86Operand.Register(X86RegisterRef.Physical(X86Registers.returnRegister(mode)))))
+                    output += X86Instruction(X86Opcode.MOV, listOf(register(it), X86Operand.Register(X86RegisterRef.Physical(X86Registers.returnRegister(mode, instruction.functionType.returnType)))))
                 }
+            }
+            is IrInstruction.AtomicRmw -> {
+                output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.value)))
+                output += X86Instruction(atomicOpcode(instruction.operation), listOf(memory(instruction.address), register(instruction.result)))
+                if (instruction.memoryOrder == org.tinycc.core.ir.IrMemoryOrder.SEQ_CST) output += X86Instruction(X86Opcode.MFENCE)
+            }
+            is IrInstruction.CompareExchange -> {
+                output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.expected)))
+                output += X86Instruction(X86Opcode.CMPXCHG, listOf(memory(instruction.address), value(instruction.replacement)))
+                if (instruction.memoryOrder == org.tinycc.core.ir.IrMemoryOrder.SEQ_CST) output += X86Instruction(X86Opcode.MFENCE)
             }
         }
     }
@@ -206,7 +246,7 @@ class X86InstructionSelector(private val mode: X86Mode) {
             }
             is IrTerminator.Switch -> output += X86Instruction(X86Opcode.JMP, listOf(X86Operand.Label(terminator.defaultTarget)), "switch cases lowered by target expansion")
             is IrTerminator.Return -> {
-                terminator.value?.let { output += X86Instruction(X86Opcode.MOV, listOf(X86Operand.Register(X86RegisterRef.Physical(X86Registers.returnRegister(mode))), value(it))) }
+                terminator.value?.let { output += X86Instruction(X86Opcode.MOV, listOf(X86Operand.Register(X86RegisterRef.Physical(X86Registers.returnRegister(mode, it.type))), value(it))) }
                 output += X86Instruction(X86Opcode.RET)
             }
             is IrTerminator.Unreachable -> output += X86Instruction(X86Opcode.UD2)
@@ -222,7 +262,12 @@ class X86InstructionSelector(private val mode: X86Mode) {
         is IrValue.FloatingConstant -> X86Operand.Immediate(value.value?.toRawBits() ?: 0L)
         is IrValue.NullPointer -> X86Operand.Immediate(0)
         is IrValue.Undef -> X86Operand.Immediate(0)
-        is IrValue.SymbolAddress -> X86Operand.Symbol(value.symbol.name)
+        is IrValue.SymbolAddress -> X86Operand.Symbol(value.symbol.name, addressRelocation(value.symbol))
+    }
+
+    private fun callValue(value: IrValue): X86Operand = when (value) {
+        is IrValue.SymbolAddress -> X86Operand.Symbol(value.symbol.name, callRelocation(value.symbol))
+        else -> value(value)
     }
 
     private fun immediate(value: IrValue): X86Operand = when (value) {
@@ -232,8 +277,20 @@ class X86InstructionSelector(private val mode: X86Mode) {
 
     private fun memory(value: IrValue): X86Operand.Memory = when (val operand = value(value)) {
         is X86Operand.Register -> X86Operand.Memory(base = operand.value)
-        is X86Operand.Symbol -> X86Operand.Memory(symbol = operand.name)
+        is X86Operand.Symbol -> X86Operand.Memory(symbol = operand.name, relocation = operand.relocation)
         else -> X86Operand.Memory()
+    }
+
+    private fun addressRelocation(symbol: org.tinycc.core.ir.IrSymbol): X86RelocationSyntax = when {
+        symbol.threadLocal && options.threadLocalStorage -> X86RelocationSyntax.TPOFF
+        options.pic || options.pie -> X86RelocationSyntax.GOTPCREL
+        else -> X86RelocationSyntax.DIRECT
+    }
+
+    private fun callRelocation(symbol: org.tinycc.core.ir.IrSymbol): X86RelocationSyntax = when {
+        symbol.threadLocal && options.threadLocalStorage -> X86RelocationSyntax.TLSGD
+        options.pic || options.pie -> X86RelocationSyntax.PLT32
+        else -> X86RelocationSyntax.DIRECT
     }
 
     private fun virtual(key: String, type: IrType): X86RegisterRef.Virtual {
@@ -249,7 +306,13 @@ class X86InstructionSelector(private val mode: X86Mode) {
         else -> error("only local and parameter values can have registers")
     }
 
-    private fun binaryOpcode(operation: IrBinaryOp): X86Opcode = when (operation) {
+    private fun binaryOpcode(operation: IrBinaryOp, type: IrType): X86Opcode = if (type is IrType.Floating) when (operation) {
+        IrBinaryOp.ADD -> if (type.bits == 32) X86Opcode.ADDSS else X86Opcode.ADDSD
+        IrBinaryOp.SUBTRACT -> if (type.bits == 32) X86Opcode.SUBSS else X86Opcode.SUBSD
+        IrBinaryOp.MULTIPLY -> if (type.bits == 32) X86Opcode.MULSS else X86Opcode.MULSD
+        IrBinaryOp.DIVIDE -> if (type.bits == 32) X86Opcode.DIVSS else X86Opcode.DIVSD
+        else -> error("unsupported floating-point operation $operation")
+    } else when (operation) {
         IrBinaryOp.ADD -> X86Opcode.ADD
         IrBinaryOp.SUBTRACT -> X86Opcode.SUB
         IrBinaryOp.MULTIPLY -> X86Opcode.IMUL
@@ -260,6 +323,23 @@ class X86InstructionSelector(private val mode: X86Mode) {
         IrBinaryOp.BITWISE_AND -> X86Opcode.AND
         IrBinaryOp.BITWISE_OR -> X86Opcode.OR
         IrBinaryOp.BITWISE_XOR -> X86Opcode.XOR
+    }
+
+    private fun moveOpcode(type: IrType): X86Opcode = if (type is IrType.Floating) {
+        if (type.bits == 32) X86Opcode.MOVSS else X86Opcode.MOVSD
+    } else X86Opcode.MOV
+
+    private fun compareOpcode(type: IrType): X86Opcode = if (type is IrType.Floating) {
+        if (type.bits == 32) X86Opcode.UCOMISS else X86Opcode.UCOMISD
+    } else X86Opcode.CMP
+
+    private fun atomicOpcode(operation: org.tinycc.core.ir.IrAtomicOperation): X86Opcode = when (operation) {
+        org.tinycc.core.ir.IrAtomicOperation.EXCHANGE -> X86Opcode.XCHG
+        org.tinycc.core.ir.IrAtomicOperation.ADD -> X86Opcode.LOCK_XADD
+        org.tinycc.core.ir.IrAtomicOperation.SUBTRACT -> X86Opcode.LOCK_SUB
+        org.tinycc.core.ir.IrAtomicOperation.AND -> X86Opcode.LOCK_AND
+        org.tinycc.core.ir.IrAtomicOperation.OR -> X86Opcode.LOCK_OR
+        org.tinycc.core.ir.IrAtomicOperation.XOR -> X86Opcode.LOCK_XOR
     }
 }
 
@@ -276,13 +356,13 @@ data class X86Allocation(
 class X86LinearScanAllocator(private val mode: X86Mode) {
     fun allocate(function: X86MachineFunction): X86Allocation {
         val intervals = intervals(function)
-        val available = X86Registers.allocatable(mode)
         val active = ArrayList<ActiveInterval>()
         val locations = LinkedHashMap<X86VirtualRegister, X86Location>()
         val frame = StackFrameBuilder(if (mode == X86Mode.I386) 4 else 16)
         intervals.forEach { interval ->
             active.removeAll { it.end < interval.start }
             val used = active.mapNotNull { (locations[it.register] as? X86Location.Register)?.value }.toSet()
+            val available = X86Registers.allocatable(mode, interval.register.registerClass)
             val register = available.firstOrNull { it !in used && it.bits >= interval.register.bits }
             if (register != null) {
                 locations[interval.register] = X86Location.Register(register)
@@ -345,9 +425,12 @@ data class X86CompiledFunction(
     val frame: X86FramePlan,
 )
 
-class X86CodeGenerator(private val mode: X86Mode) {
+class X86CodeGenerator(
+    private val mode: X86Mode,
+    private val options: X86TargetOptions = X86TargetOptions(mode),
+) {
     fun compile(function: IrFunction): X86CompiledFunction {
-        val machine = X86InstructionSelector(mode).select(function)
+        val machine = X86InstructionSelector(mode, options).select(function)
         val allocation = X86LinearScanAllocator(mode).allocate(machine)
         return X86CompiledFunction(machine, allocation, X86FramePlanner(mode).plan(allocation))
     }
@@ -378,7 +461,7 @@ class X86AssemblyEmitter {
 
     private fun format(instruction: X86Instruction, compiled: X86CompiledFunction): String {
         val operands = instruction.operands.joinToString(", ") { format(it, compiled) }
-        val mnemonic = instruction.opcode.name.lowercase()
+        val mnemonic = mnemonic(instruction.opcode)
         return listOfNotNull(mnemonic, operands.takeIf { it.isNotEmpty() }, instruction.comment?.let { "# $it" }).joinToString(" ")
     }
 
@@ -388,10 +471,14 @@ class X86AssemblyEmitter {
         is X86Operand.Memory -> {
             val base = operand.base?.let { format(it, compiled) }
             val displacement = if (operand.displacement == 0L) "" else operand.displacement.toString()
-            val symbol = operand.symbol.orEmpty()
-            "[${listOfNotNull(base, symbol, displacement).joinToString(" + ")}]"
+            val symbol = operand.symbol?.let { formatSymbol(it, operand.relocation, compiled.function.mode) }
+            if (base == null && operand.relocation != X86RelocationSyntax.DIRECT && symbol != null) {
+                symbol
+            } else {
+                "[${listOfNotNull(base, symbol, displacement).joinToString(" + ")}]"
+            }
         }
-        is X86Operand.Symbol -> operand.name
+        is X86Operand.Symbol -> formatSymbol(operand.name, operand.relocation, compiled.function.mode)
         is X86Operand.Label -> operand.name
         is X86Operand.Condition -> operand.name
         is X86Operand.StackSlotRef -> "[stack+${operand.slot}]"
@@ -404,6 +491,24 @@ class X86AssemblyEmitter {
             is X86Location.Spill -> "[spill${location.slot}]"
             null -> "[unallocated${register.value.id}]"
         }
+    }
+
+    private fun mnemonic(opcode: X86Opcode): String = when (opcode) {
+        X86Opcode.LOCK_XADD -> "lock xadd"
+        X86Opcode.LOCK_ADD -> "lock add"
+        X86Opcode.LOCK_SUB -> "lock sub"
+        X86Opcode.LOCK_AND -> "lock and"
+        X86Opcode.LOCK_OR -> "lock or"
+        X86Opcode.LOCK_XOR -> "lock xor"
+        else -> opcode.name.lowercase()
+    }
+
+    private fun formatSymbol(name: String, relocation: X86RelocationSyntax, mode: X86Mode): String = when (relocation) {
+        X86RelocationSyntax.DIRECT -> name
+        X86RelocationSyntax.GOTPCREL -> "$name@GOTPCREL(%rip)"
+        X86RelocationSyntax.PLT32 -> "$name@PLT"
+        X86RelocationSyntax.TLSGD -> if (mode == X86Mode.X86_64) "$name@TLSGD(%rip)" else "$name@TLSGD"
+        X86RelocationSyntax.TPOFF -> if (mode == X86Mode.X86_64) "%fs:$name@TPOFF" else "$name@TPOFF"
     }
 
     private fun frameRegister(mode: X86Mode): String = if (mode == X86Mode.I386) "ebp" else "rbp"

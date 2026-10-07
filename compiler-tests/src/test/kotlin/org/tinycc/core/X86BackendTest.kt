@@ -6,12 +6,16 @@ import org.junit.jupiter.api.Test
 import org.tinycc.backends.x86.X86AssemblyEmitter
 import org.tinycc.backends.x86.X86CodeGenerator
 import org.tinycc.backends.x86.X86InstructionSelector
+import org.tinycc.backends.x86.X86Location
 import org.tinycc.backends.x86.X86Mode
+import org.tinycc.backends.x86.X86Opcode
 import org.tinycc.backends.x86.X86Registers
+import org.tinycc.backends.x86.X86TargetOptions
 import org.tinycc.core.ir.IrBasicBlock
 import org.tinycc.core.ir.IrBinaryOp
 import org.tinycc.core.ir.IrFunction
 import org.tinycc.core.ir.IrInstruction
+import org.tinycc.core.ir.IrMemoryOrder
 import org.tinycc.core.ir.IrParameter
 import org.tinycc.core.ir.IrSymbol
 import org.tinycc.core.ir.IrTerminator
@@ -68,6 +72,90 @@ class X86BackendTest {
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.CALL))
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.JNE))
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.JMP))
+    }
+
+    @Test
+    fun selectsSseFloatingPointOperationsIntoXmmRegisters() {
+        val floating = IrTypes.f64
+        val type = IrType.Function(floating, listOf(floating, floating))
+        val result = IrValue.Local(1, floating, "result")
+        val function = IrFunction(
+            IrSymbol("sumDouble", type),
+            listOf(IrParameter("left", floating), IrParameter("right", floating)),
+            listOf(
+                IrBasicBlock(
+                    "entry",
+                    listOf(IrInstruction.Binary(result, IrBinaryOp.ADD, IrValue.Parameter(0, floating), IrValue.Parameter(1, floating))),
+                    IrTerminator.Return(result),
+                ),
+            ),
+        )
+        val compiled = X86CodeGenerator(X86Mode.X86_64).compile(function)
+        val opcodes = compiled.function.blocks.flatMap { it.instructions }.map { it.opcode }
+
+        assertTrue(opcodes.contains(X86Opcode.MOVSD))
+        assertTrue(opcodes.contains(X86Opcode.ADDSD))
+        assertTrue(compiled.allocation.locations.values.any { it is X86Location.Register && it.value.name.startsWith("xmm") })
+    }
+
+    @Test
+    fun lowersAtomicRmwAndCompareExchangeWithOrderingFence() {
+        val int = IrTypes.i32
+        val pointer = IrType.Pointer(int)
+        val type = IrType.Function(int, listOf(pointer))
+        val result = IrValue.Local(1, int, "old")
+        val function = IrFunction(
+            IrSymbol("atomicAdd", type),
+            listOf(IrParameter("address", pointer)),
+            listOf(
+                IrBasicBlock(
+                    "entry",
+                    listOf(
+                        IrInstruction.AtomicRmw(
+                            result,
+                            org.tinycc.core.ir.IrAtomicOperation.ADD,
+                            IrValue.Parameter(0, pointer),
+                            IrValue.IntegerConstant(java.math.BigInteger.ONE, 32, signed = true),
+                            IrMemoryOrder.SEQ_CST,
+                        ),
+                    ),
+                    IrTerminator.Return(result),
+                ),
+            ),
+        )
+        val opcodes = X86InstructionSelector(X86Mode.X86_64).select(function).blocks.flatMap { it.instructions }.map { it.opcode }
+
+        assertTrue(opcodes.contains(X86Opcode.LOCK_XADD))
+        assertTrue(opcodes.contains(X86Opcode.MFENCE))
+    }
+
+    @Test
+    fun emitsPicPltAndThreadLocalRelocationSyntax() {
+        val void = IrType.Void
+        val calleeType = IrType.Function(void, emptyList())
+        val tls = IrSymbol("tlsValue", IrTypes.i32, threadLocal = true)
+        val function = IrFunction(
+            IrSymbol("getTls", IrType.Function(IrTypes.i32, emptyList())),
+            emptyList(),
+            listOf(
+                IrBasicBlock(
+                    "entry",
+                    listOf(
+                        IrInstruction.Call(null, IrValue.SymbolAddress(IrSymbol("external", calleeType)), calleeType, emptyList()),
+                        IrInstruction.Load(IrValue.Local(1, IrTypes.i32), IrValue.SymbolAddress(tls), IrTypes.i32),
+                    ),
+                    IrTerminator.Return(IrValue.Local(1, IrTypes.i32)),
+                ),
+            ),
+        )
+        val compiled = X86CodeGenerator(
+            X86Mode.X86_64,
+            X86TargetOptions(X86Mode.X86_64, pic = true, pie = true),
+        ).compile(function)
+        val assembly = X86AssemblyEmitter().emit(compiled)
+
+        assertTrue(assembly.contains("external@PLT"))
+        assertTrue(assembly.contains("tlsValue@TPOFF"))
     }
 
     private fun addFunction(): IrFunction {

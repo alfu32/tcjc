@@ -113,6 +113,7 @@ data class IrSymbol(
     val type: IrType,
     val linkage: IrLinkage = IrLinkage.EXTERNAL,
     val section: String? = null,
+    val threadLocal: Boolean = false,
 )
 
 data class IrGlobal(
@@ -139,6 +140,10 @@ enum class IrCompareCondition {
 enum class IrCastKind { BITCAST, INTEGER_EXTEND, INTEGER_TRUNCATE, SIGN_EXTEND, ZERO_EXTEND, FLOAT_EXTEND, FLOAT_TRUNCATE, INT_TO_FLOAT, FLOAT_TO_INT }
 
 enum class IrCallingConvention { C, FAST, TARGET }
+
+enum class IrAtomicOperation { EXCHANGE, ADD, SUBTRACT, AND, OR, XOR }
+
+enum class IrMemoryOrder { RELAXED, ACQUIRE, RELEASE, ACQ_REL, SEQ_CST }
 
 sealed interface IrInstruction {
     val result: IrValue.Local?
@@ -206,6 +211,24 @@ sealed interface IrInstruction {
         val functionType: IrType.Function,
         val arguments: List<IrValue>,
         val callingConvention: IrCallingConvention = IrCallingConvention.C,
+        override val debugLocation: IrDebugLocation? = null,
+    ) : IrInstruction
+
+    data class AtomicRmw(
+        override val result: IrValue.Local,
+        val operation: IrAtomicOperation,
+        val address: IrValue,
+        val value: IrValue,
+        val memoryOrder: IrMemoryOrder = IrMemoryOrder.SEQ_CST,
+        override val debugLocation: IrDebugLocation? = null,
+    ) : IrInstruction
+
+    data class CompareExchange(
+        override val result: IrValue.Local,
+        val address: IrValue,
+        val expected: IrValue,
+        val replacement: IrValue,
+        val memoryOrder: IrMemoryOrder = IrMemoryOrder.SEQ_CST,
         override val debugLocation: IrDebugLocation? = null,
     ) : IrInstruction
 }

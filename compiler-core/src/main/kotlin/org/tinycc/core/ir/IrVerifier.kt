@@ -124,6 +124,20 @@ class IrVerifier {
                     errors += error("call result type does not match return type", instruction.debugLocation)
                 }
             }
+            is IrInstruction.AtomicRmw -> {
+                requirePointerTo(instruction.address, instruction.value.type, "atomic address", instruction.debugLocation, errors)
+                if (!sameType(instruction.result.type, instruction.value.type)) {
+                    errors += error("atomic result type must match its value type", instruction.debugLocation)
+                }
+            }
+            is IrInstruction.CompareExchange -> {
+                requirePointerTo(instruction.address, instruction.expected.type, "compare-exchange address", instruction.debugLocation, errors)
+                if (!sameType(instruction.expected.type, instruction.replacement.type) ||
+                    !sameType(instruction.result.type, instruction.expected.type)
+                ) {
+                    errors += error("compare-exchange operands and result must have one type", instruction.debugLocation)
+                }
+            }
         }
     }
 
