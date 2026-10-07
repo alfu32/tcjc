@@ -133,7 +133,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   and constant-evaluation semantics; atomic builtin signatures, pointer/value
   constraints, and memory-order operand checks are now validated; variadic
   builtin arity, va_list lvalues, compatible va_copy operands, and va_arg result
-  type constraints are now checked)
+  type constraints are now checked; duplicate and incompatible type specifiers
+  now diagnose instead of silently selecting a fallback type)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

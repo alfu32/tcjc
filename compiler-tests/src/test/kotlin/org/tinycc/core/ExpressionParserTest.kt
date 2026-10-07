@@ -143,4 +143,14 @@ class ExpressionParserTest {
         val atomicType = assertIs<SizeOperand.Type>(atomic.operand).value
         assertTrue(atomicType is CType.Qualified && atomicType.qualifiers.isAtomic)
     }
+
+    @Test
+    fun rejectsInvalidAndDuplicateTypeSpecifierCombinations() {
+        for (source in listOf("sizeof(unsigned float)", "sizeof(long long double)", "sizeof(int int)")) {
+            val diagnostics = org.tinycc.core.diagnostics.DiagnosticEngine()
+            val expression = ExpressionParser(Lexer(source, diagnostics = diagnostics).tokenize(), diagnostics).parse()
+            assertIs<Expression.SizeOf>(expression)
+            assertTrue(diagnostics.hasErrors, "expected a type-specifier diagnostic for $source")
+        }
+    }
 }

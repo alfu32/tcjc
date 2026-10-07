@@ -338,6 +338,11 @@ class ExpressionParser(
         var longCount = 0
         var complex = false
         var scalar: TokenKind? = null
+        var invalid = false
+        fun duplicate(token: Token, description: String) {
+            error(token, "duplicate $description type specifier")
+            invalid = true
+        }
         while (true) {
             when (current().kind) {
                 TokenKind.CONST -> {
@@ -362,29 +367,36 @@ class ExpressionParser(
                     qualifiers = qualifiers.copy(isAtomic = true)
                 }
                 TokenKind.SIGNED -> {
-                    take()
+                    val token = take()
+                    if (signed) duplicate(token, "signed")
                     signed = true
                 }
                 TokenKind.UNSIGNED -> {
-                    take()
+                    val token = take()
+                    if (unsigned) duplicate(token, "unsigned")
                     unsigned = true
                 }
                 TokenKind.SHORT -> {
-                    take()
+                    val token = take()
+                    if (short) duplicate(token, "short")
                     short = true
                 }
                 TokenKind.LONG -> {
-                    take()
+                    val token = take()
                     longCount++
+                    if (longCount > 2) duplicate(token, "long")
                 }
                 TokenKind.COMPLEX -> {
-                    take()
+                    val token = take()
+                    if (complex) duplicate(token, "complex")
                     complex = true
                 }
                 TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT,
                 TokenKind.FLOAT, TokenKind.DOUBLE,
                 -> {
-                    scalar = take().kind
+                    val token = take()
+                    if (scalar != null) duplicate(token, token.lexeme)
+                    scalar = token.kind
                 }
                 TokenKind.STRUCT -> {
                     take()
@@ -425,6 +437,19 @@ class ExpressionParser(
                 else -> break
             }
         }
+        val invalidCombination = signed && unsigned || short && longCount > 0 || longCount > 2 ||
+            when (scalar) {
+                TokenKind.VOID, TokenKind.BOOL -> signed || unsigned || short || longCount > 0 || complex
+                TokenKind.CHAR -> short || longCount > 0 || complex
+                TokenKind.FLOAT -> signed || unsigned || short || longCount > 0
+                TokenKind.DOUBLE -> signed || unsigned || short || longCount > 1
+                else -> false
+            } || complex && (signed || unsigned || short || scalar !in setOf(null, TokenKind.FLOAT, TokenKind.DOUBLE))
+        if (invalidCombination) {
+            error(previous(), "invalid combination of C type specifiers")
+            invalid = true
+        }
+        if (invalid) return ParsedTypeSpecifiers(CType.Error, qualifiers)
         val base = when {
             complex -> when {
                 scalar == TokenKind.FLOAT -> CTypes.floatComplex
