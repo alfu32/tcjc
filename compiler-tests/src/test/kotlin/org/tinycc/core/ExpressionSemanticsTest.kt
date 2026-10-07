@@ -163,10 +163,13 @@ class ExpressionSemanticsTest {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)
         symbols.declare(ObjectDeclaration("z", CTypes.doubleComplex))
+        symbols.declare(ObjectDeclaration("f", CTypes.floatComplex))
         val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
         val result = analyzer.analyze(ExpressionParser(Lexer("z + 1.0").tokenize()).parse())
+        val widest = analyzer.analyze(ExpressionParser(Lexer("f + 1.0L").tokenize()).parse())
 
         assertEquals(CTypes.doubleComplex, result.type)
+        assertEquals(CTypes.longDoubleComplex, widest.type)
         assertEquals(0, diagnostics.errorCount)
     }
 

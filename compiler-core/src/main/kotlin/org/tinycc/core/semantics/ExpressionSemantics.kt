@@ -37,7 +37,12 @@ class ExpressionSemanticAnalyzer(
         is Expression.Integer -> typed(expression, CTypes.int)
         is Expression.Floating -> typed(
             expression,
-            if (expression.raw.uppercase() in setOf("NAN", "SNAN", "INF")) CTypes.float else CTypes.double,
+            when {
+                expression.raw.uppercase() in setOf("NAN", "SNAN", "INF") -> CTypes.float
+                expression.raw.endsWith('f', ignoreCase = true) -> CTypes.float
+                expression.raw.endsWith('l', ignoreCase = true) -> CTypes.longDouble
+                else -> CTypes.double
+            },
         )
         is Expression.Character -> typed(expression, CTypes.int)
         is Expression.StringLiteral -> typed(expression, CTypes.arrayOf(CTypes.char, expression.value.length.toLong() + 1), ValueCategory.LVALUE)
@@ -505,17 +510,46 @@ class ExpressionSemanticAnalyzer(
 
     private fun commonArithmetic(left: CType, right: CType): CType {
         if (left is CType.Primitive && right is CType.Primitive) {
-            if (left.kind == PrimitiveKind.LONG_DOUBLE_COMPLEX || right.kind == PrimitiveKind.LONG_DOUBLE_COMPLEX) return CTypes.longDoubleComplex
-            if (left.kind == PrimitiveKind.DOUBLE_COMPLEX || right.kind == PrimitiveKind.DOUBLE_COMPLEX) return CTypes.doubleComplex
-            if (left.kind == PrimitiveKind.FLOAT_COMPLEX || right.kind == PrimitiveKind.FLOAT_COMPLEX) return CTypes.floatComplex
-            if (left.kind == PrimitiveKind.LONG_DOUBLE || right.kind == PrimitiveKind.LONG_DOUBLE) return CType.Primitive(PrimitiveKind.LONG_DOUBLE)
-            if (left.kind == PrimitiveKind.DOUBLE || right.kind == PrimitiveKind.DOUBLE) return CTypes.double
-            if (left.kind == PrimitiveKind.FLOAT || right.kind == PrimitiveKind.FLOAT) return CTypes.float
+            val leftComplexRank = complexRank(left.kind)
+            val rightComplexRank = complexRank(right.kind)
+            val leftRealRank = realRank(left.kind)
+            val rightRealRank = realRank(right.kind)
+            if (leftComplexRank > 0 || rightComplexRank > 0) {
+                return complexType(maxOf(leftComplexRank, rightComplexRank, leftRealRank, rightRealRank))
+            }
+            val floatingRank = maxOf(leftRealRank, rightRealRank)
+            if (floatingRank > 0) return realType(floatingRank)
             val rank = maxOf(rank(left.kind), rank(right.kind))
             val unsigned = isUnsigned(left.kind) || isUnsigned(right.kind)
             return CType.Primitive(if (unsigned) unsignedKind(rank) else signedKind(rank))
         }
         return CTypes.int
+    }
+
+    private fun complexRank(kind: PrimitiveKind): Int = when (kind) {
+        PrimitiveKind.FLOAT_COMPLEX -> 1
+        PrimitiveKind.DOUBLE_COMPLEX -> 2
+        PrimitiveKind.LONG_DOUBLE_COMPLEX -> 3
+        else -> 0
+    }
+
+    private fun realRank(kind: PrimitiveKind): Int = when (kind) {
+        PrimitiveKind.FLOAT -> 1
+        PrimitiveKind.DOUBLE -> 2
+        PrimitiveKind.LONG_DOUBLE -> 3
+        else -> 0
+    }
+
+    private fun complexType(rank: Int): CType = when (rank) {
+        1 -> CTypes.floatComplex
+        2 -> CTypes.doubleComplex
+        else -> CTypes.longDoubleComplex
+    }
+
+    private fun realType(rank: Int): CType = when (rank) {
+        1 -> CTypes.float
+        2 -> CTypes.double
+        else -> CTypes.longDouble
     }
 
     private fun comparable(left: CType, right: CType): Boolean =

@@ -129,7 +129,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   calls through function-pointer expressions are now covered; parser-provided
   typedef and tagged-record/enum type names are now accepted in type names;
   specifier permutations, `_Atomic(type)`, and GNU `typeof(type)` type forms
-  are now parsed; TinyCC special floating constants now retain float typing
+  are now parsed; complex arithmetic promotions now use the widest real
+  component type; TinyCC special floating constants now retain float typing
   and constant-evaluation semantics; atomic builtin signatures, pointer/value
   constraints, and memory-order operand checks are now validated; variadic
   builtin arity, va_list lvalues, compatible va_copy operands, and va_arg result
