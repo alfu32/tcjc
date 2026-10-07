@@ -144,6 +144,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
+            X86Opcode.IMUL -> encodeImul(instruction.operands, output)
             X86Opcode.SHL -> encodeShift(instruction.operands, output, 4)
             X86Opcode.SHR -> encodeShift(instruction.operands, output, 5)
             X86Opcode.SAR -> encodeShift(instruction.operands, output, 7)
@@ -189,6 +190,34 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
                 encodeRm(0xD3, extension, destination, output)
             }
             else -> error("x86 shift count must be an immediate or CL register: $count")
+        }
+    }
+
+    private fun encodeImul(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 2) { "two-operand imul requires a register destination and source" }
+        val destination = physicalRegister(operands[0])
+        require(destination.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && destination.bits == mode.bits) {
+            "imul destination width must match ${mode.bits}-bit target mode"
+        }
+        when (val source = operands[1]) {
+            is X86Operand.Register -> {
+                val register = physicalRegister(source)
+                require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                    "imul source width must match ${mode.bits}-bit target mode"
+                }
+                encodeRm(listOf(0x0F, 0xAF), destination.number, source, output)
+            }
+            is X86Operand.Memory -> encodeRm(listOf(0x0F, 0xAF), destination.number, source, output)
+            is X86Operand.Immediate -> {
+                val immediate = source.value
+                require(immediate == immediate.toInt().toLong() ||
+                    (mode == X86Mode.I386 && immediate in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL)
+                ) { "imul immediate must fit the target's signed 32-bit encoding" }
+                val compact = immediate in -128L..127L
+                encodeRm(if (compact) 0x6B else 0x69, destination.number, operands[0], output)
+                if (compact) output += immediate.toByte() else appendInt(output, immediate.toInt())
+            }
+            else -> error("unsupported imul source: $source")
         }
     }
 
@@ -331,12 +360,20 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         operand: X86Operand,
         output: MutableList<Byte>,
         w: Boolean = mode == X86Mode.X86_64,
+    ) = encodeRm(listOf(opcode), registerField, operand, output, w)
+
+    private fun encodeRm(
+        opcode: List<Int>,
+        registerField: Int,
+        operand: X86Operand,
+        output: MutableList<Byte>,
+        w: Boolean = mode == X86Mode.X86_64,
     ) {
         when (operand) {
             is X86Operand.Register -> {
                 val base = physicalRegister(operand)
                 rex(output, w = w, register = registerField, base = base.number)
-                output += opcode.toByte()
+                output += opcode.map(Int::toByte)
                 output += modRm(3, registerField, base.number)
             }
             is X86Operand.Memory -> encodeMemoryRm(opcode, registerField, operand, output, w)
@@ -345,7 +382,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
     }
 
     private fun encodeMemoryRm(
-        opcode: Int,
+        opcode: List<Int>,
         registerField: Int,
         memory: X86Operand.Memory,
         output: MutableList<Byte>,
@@ -374,7 +411,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             require(base == null || base.bits == 64) { "x86_64 memory addressing requires 64-bit registers" }
         }
         rex(output, w = w, register = registerField, base = base?.number ?: 0)
-        output += opcode.toByte()
+        output += opcode.map(Int::toByte)
         val rm = if (needsSib) 4 else base!!.number
         output += modRm(mod, registerField, rm)
         if (needsSib) {
