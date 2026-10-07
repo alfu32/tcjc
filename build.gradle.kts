@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
+import org.gradle.jvm.tasks.Jar
 import java.util.zip.ZipFile
 
 plugins {
@@ -65,6 +68,16 @@ subprojects {
     }
 
     plugins.withId("org.jetbrains.kotlin.jvm") {
+        tasks.withType<AbstractArchiveTask>().configureEach {
+            isPreserveFileTimestamps = false
+            isReproducibleFileOrder = true
+        }
+
+        tasks.withType<Jar>().configureEach {
+            manifest.attributes["Implementation-Title"] = "tinycc-jvm"
+            manifest.attributes["Implementation-Version"] = project.version.toString()
+        }
+
         tasks.withType<KotlinJvmCompile>().configureEach {
             compilerOptions {
                 jvmTarget.set(JvmTarget.JVM_17)
@@ -76,6 +89,28 @@ subprojects {
             useJUnitPlatform()
             testLogging {
                 events("passed", "skipped", "failed")
+            }
+        }
+
+        if (name in setOf("compiler-core", "compiler-backends", "compiler-runtime", "compiler-api", "compiler-cli")) {
+            apply(plugin = "maven-publish")
+            extensions.configure<PublishingExtension> {
+                publications {
+                    create<MavenPublication>("kotlinJvm") {
+                        from(components["java"])
+                        pom {
+                            name.set("tinycc-jvm ${project.name}")
+                            description.set("Pure Kotlin/JVM TinyCC-compatible compiler component")
+                            url.set("https://github.com/alfu32/tcjc")
+                        }
+                    }
+                }
+                repositories {
+                    maven {
+                        name = "buildRepository"
+                        url = project.uri(project.layout.buildDirectory.dir("repository"))
+                    }
+                }
             }
         }
     }

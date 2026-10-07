@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 41/48
+Overall: 42/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
 [DONE]       [3/3]   3. Compile-time and IR system
 [DONE]       [12/12] 4. Lowering and native target backends
-[IN_PROGRESS] [8/15] 5. Tooling, integration and quality
+[IN_PROGRESS] [9/15] 5. Tooling, integration and quality
 [DONE]       [3/3] 6. Runtime, SDK and platform ABI
 
 Current task:
-14.3 reproducible JVM distributions, native launcher scripts, Maven-publishable artifacts, and Windows packages
+15.1 port the C, ABI, assembler, VLA, bounds, linker, runtime, and library tests to Gradle-managed Kotlin/JVM test execution
 
 Current milestone:
 M5 — Tooling, integration and quality
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **IN_PROGRESS** (13/16 implementation tasks; 41/48 subtasks complete)
+- Overall migration: **IN_PROGRESS** (14/16 implementation tasks; 42/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -114,11 +114,11 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 13.2 Port bounds checking, backtraces, debug information, profiling hooks, and sanitizer-friendly diagnostics. — `DONE` (see `compiler-runtime/.../RuntimeDiagnostics.kt` and `RuntimeTest`)
 - [x] 13.3 Implement and test the Kotlin/JVM embedding API equivalent to `libtcc`, including callbacks and resource ownership. — `DONE` (see `compiler-api/.../embedding/Embedding.kt` and `EmbeddingTest`; the session owns JVM libraries and rejects native loading)
 
-### 14. CLI, configuration, and distributions — `IN_PROGRESS` (2/3)
+### 14. CLI, configuration, and distributions — `DONE` (3/3)
 
 - [x] 14.1 Port command-line parsing, help/version output, response files, scripts, include/library search paths, and target selection. — `DONE` (see `compiler-cli/.../Cli.kt`, `Main.kt`, and `CliTest`; `-run` is represented as a typed request while backend executable handoff remains explicit)
 - [x] 14.2 Replace shell/Make configuration with typed Gradle and runtime configuration while preserving install and cross-build options. — `DONE` (see `compiler-api/.../config/BuildConfiguration.kt` and `build.gradle.kts`; `verifyPureKotlinArtifact` rejects C/native payloads in JVM archives)
-- [ ] 14.3 Produce reproducible JVM distributions, native launcher scripts, Maven-publishable artifacts, and Windows packages. — `TODO`
+- [x] 14.3 Produce reproducible JVM distributions, native launcher scripts, Maven-publishable artifacts, and Windows packages. — `DONE` (see reproducible archive settings in `build.gradle.kts` and `compiler-cli:windowsPackage`; generated launchers are JVM shell/`.bat` scripts)
 
 ### 15. Full test parity and migration hardening — `TODO` (0/3)
 
