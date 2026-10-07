@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 9/48
+Overall: 10/48
 
-[TODO]       [0/9]   1. Language front-end
+[IN_PROGRESS] [1/9]  1. Language front-end
 [IN_PROGRESS] [3/6]  2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
@@ -13,10 +13,10 @@ Overall: 9/48
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-4.1 Lexer token model and source decoding
+4.2 Macro definitions and conditional compilation
 
 Current milestone:
-M2 — Semantic model and modules
+M1 — Language front-end
 ```
 
 Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13. Each `completed/total` value counts terminal subtasks in that milestone subtree.
@@ -54,9 +54,9 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 3.2 Implement source locations, include stacks, diagnostic severities, error recovery, and stable message formatting. — `DONE` (see `compiler-core/.../diagnostics`)
 - [x] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `DONE` (see `compiler-tests/.../CoreUtilitiesTest.kt`)
 
-### 4. Lexer, tokens, and preprocessor — `TODO` (0/3)
+### 4. Lexer, tokens, and preprocessor — `IN_PROGRESS` (1/3)
 
-- [ ] 4.1 Port character decoding, token kinds, literals, comments, identifiers, escapes, and token location tracking. — `TODO`
+- [x] 4.1 Port character decoding, token kinds, literals, comments, identifiers, escapes, and token location tracking. — `DONE` (see `compiler-core/.../io/SourceFiles.kt` and `lexer`)
 - [ ] 4.2 Port macro definitions/expansion, conditional compilation, variadic macros, and predefined macros. — `TODO`
 - [ ] 4.3 Port include resolution, pragma handling, line directives, and all `tests/pp` expected-output cases. — `TODO`
 
