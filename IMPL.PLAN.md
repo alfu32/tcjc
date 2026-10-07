@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 6/48
+Overall: 7/48
 
 [TODO]       [0/9]   1. Language front-end
-[TODO]       [0/6]   2. Semantic model and modules
+[IN_PROGRESS] [1/6]  2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-3.1 Core utilities, diagnostics, and memory model
+3.2 Source locations, diagnostics, and include context
 
 Current milestone:
 M2 — Semantic model and modules
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **NOT_STARTED** (2/16 implementation tasks; 6/48 subtasks complete)
+- Overall migration: **NOT_STARTED** (2/16 implementation tasks; 7/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -48,9 +48,9 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `DONE` (see `compiler-*` projects)
 - [x] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `DONE` (direct Kotlin smoke compile; Gradle task execution is environment-blocked)
 
-### 3. Core utilities, diagnostics, and memory model — `TODO` (0/3)
+### 3. Core utilities, diagnostics, and memory model — `IN_PROGRESS` (1/3)
 
-- [ ] 3.1 Port strings, dynamic arrays, byte buffers, arenas, hash tables, and platform-neutral file utilities. — `TODO`
+- [x] 3.1 Port strings, dynamic arrays, byte buffers, arenas, hash tables, and platform-neutral file utilities. — `DONE` (see `compiler-core/.../collections` and `io`)
 - [ ] 3.2 Implement source locations, include stacks, diagnostic severities, error recovery, and stable message formatting. — `TODO`
 - [ ] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `TODO`
 
