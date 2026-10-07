@@ -79,6 +79,13 @@ class LexerTest {
     }
 
     @Test
+    fun preservesHistoricalPragmaAndRuntimeTokenOrder() {
+        val tokens = Lexer("pack comment option memcpy __divdi3 __fixunsdfdi __fixxfdi alloca").tokenize()
+
+        assertEquals(listOf(428, 429, 434, 435, 438, 450, 451, 452), tokens.dropLast(1).map { it.tccId })
+    }
+
+    @Test
     fun lexesHexadecimalFloatingConstantsLineSplicesAndDigraphs() {
         val diagnostics = DiagnosticEngine()
         val tokens = Lexer("0x1.8p+1\\\nvalue <: 2 :> %:%:", diagnostics = diagnostics).tokenize()

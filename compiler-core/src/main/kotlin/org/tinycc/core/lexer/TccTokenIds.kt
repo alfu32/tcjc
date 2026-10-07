@@ -182,9 +182,14 @@ object TccTokenIds {
         "__atomic_fetch_add", "__atomic_fetch_sub", "__atomic_fetch_or", "__atomic_fetch_xor",
         "__atomic_fetch_and", "__atomic_fetch_nand", "__atomic_add_fetch", "__atomic_sub_fetch",
         "__atomic_or_fetch", "__atomic_xor_fetch", "__atomic_and_fetch", "__atomic_nand_fetch",
-        "memcpy", "memmove", "memset", "alloca", "__divdi3", "__moddi3", "__udivdi3", "__umoddi3",
+    )
+
+    // In tcctok.h, runtime helper identifiers follow the pragma token block.
+    // The x86_64 token configuration has no intervening target-specific entries.
+    private val runtimeSpellings = listOf(
+        "memcpy", "memmove", "memset", "__divdi3", "__moddi3", "__udivdi3", "__umoddi3",
         "__ashrdi3", "__lshrdi3", "__ashldi3", "__floatundisf", "__floatundidf", "__floatundixf",
-        "__fixunsxfdi", "__fixunssfdi", "__fixunsdfdi",
+        "__fixunsxfdi", "__fixunssfdi", "__fixunsdfdi", "__fixxfdi",
     )
 
     private val allSpecs: Map<String, KeywordSpec> = buildMap {
@@ -192,6 +197,10 @@ object TccTokenIds {
         extensionSpellings.forEachIndexed { index, spelling ->
             putIfAbsent(spelling, KeywordSpec(TokenKind.IDENTIFIER, 347 + index))
         }
+        runtimeSpellings.forEachIndexed { index, spelling ->
+            putIfAbsent(spelling, KeywordSpec(TokenKind.IDENTIFIER, 435 + index))
+        }
+        putIfAbsent("alloca", KeywordSpec(TokenKind.IDENTIFIER, 452))
     }
 
     fun keyword(text: String): KeywordSpec? = allSpecs[text]
