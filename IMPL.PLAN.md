@@ -3,17 +3,17 @@
 ## Dashboard
 
 ```text
-Overall: 21/48
+Overall: 22/48
 
 [DONE]       [9/9]   1. Language front-end
 [DONE]       [6/6]   2. Semantic model and modules
-[TODO]       [0/3]   3. Compile-time and IR system
+[IN_PROGRESS] [1/3] 3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
 [TODO]       [0/3]   6. Runtime, SDK and platform ABI
 
 Current task:
-8.1 Typed intermediate representation for values, memory, calls, branches, symbols, relocations, and debug locations
+8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts
 
 Current milestone:
 M3 — Compile-time and IR system
@@ -78,9 +78,9 @@ The end state is a pure Kotlin/JVM implementation that can be built and tested e
 - [x] 7.2 Port function definitions, parameters, calling metadata, variadic functions, nested/local functions, and returns. — `DONE` (see `compiler-core/.../functions` and `FunctionParserTest`)
 - [x] 7.3 Add parser/semantic regression coverage for scope, unreachable code, VLA behavior, and control-flow errors. — `DONE` (see `compiler-core/.../semantics/ControlFlowValidator.kt` and `ControlFlowValidatorTest`)
 
-### 8. Generic IR and code-emission layer — `TODO` (0/3)
+### 8. Generic IR and code-emission layer — `IN_PROGRESS` (1/3)
 
-- [ ] 8.1 Define a typed intermediate representation for values, memory, calls, branches, symbols, relocations, and debug locations. — `TODO`
+- [x] 8.1 Define a typed intermediate representation for values, memory, calls, branches, symbols, relocations, and debug locations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `IrVerifier.kt`, and `IrModelTest`)
 - [ ] 8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts. — `TODO`
 - [ ] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `TODO`
 
