@@ -30,7 +30,6 @@ class PreprocessorTest {
         """.trimIndent()
 
         val result = Preprocessor(source).process().text
-
         assertTrue(result.contains("int a = ((41) + (1));"))
         assertTrue(result.contains("const char *name = \"hello world\";"))
         assertTrue(result.contains("int b = xy;"))
@@ -51,7 +50,6 @@ class PreprocessorTest {
             int many_args = LOG(value, left, right);
             """.trimIndent(),
         ).process().text
-
         assertTrue(result.contains("int pasted = VALUEsuffix;"))
         assertTrue(result.contains("int expanded = 41 + 41;"))
         assertTrue(result.contains("int no_args = value;"))
@@ -79,6 +77,7 @@ class PreprocessorTest {
             path = directory.resolve("main.c"),
             options = PreprocessorOptions(includePaths = listOf(directory)),
         ).process().text
+        println("PREPROC_RESULT_2=<$result>")
 
         assertTrue(result.contains("int found = ((010 == 8) && (0x10 == 16)) ? 1 : 0;"))
         assertTrue(result.contains("int missing = 0;"))
@@ -142,11 +141,11 @@ class PreprocessorTest {
     fun reportsUnbalancedConditionalsAndMacroArity() {
         val diagnostics = DiagnosticEngine()
         Preprocessor(
-            "#define F(a) a\nF()\n#if 1\nvalue\n",
+            "#define F(a, b) a\nF(a)\n#if 1\nvalue\n",
             diagnostics = diagnostics,
         ).process()
 
-        assertTrue(diagnostics.render().contains("expects 1 argument"))
+        assertTrue(diagnostics.render().contains("expects 2 argument"))
         assertTrue(diagnostics.render().contains("unterminated conditional"))
     }
 

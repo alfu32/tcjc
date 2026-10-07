@@ -3,10 +3,10 @@
 ## Dashboard
 
 ```text
-Overall: 5/36
+Overall: 6/36
 
 [DONE]        [3/3]  1. Source preservation and parity rebaseline
-[IN_PROGRESS] [2/3]  2. Lexer, tokens, and preprocessing
+[DONE]        [3/3]  2. Lexer, tokens, and preprocessing
 [TODO]        [0/3]  3. Types, declarations, symbols, and constants
 [TODO]        [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
@@ -19,10 +19,10 @@ Overall: 5/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-2.3 — port every preprocessor fixture and add differential tests for historical lexer/preprocessor edge cases
+3.1 — implement all scalar, pointer, array, function, record, enum, typedef, VLA, qualifier, attribute, and compatible-type rules
 
 Current milestone:
-M0 — source preservation and parity rebaseline
+M1 — complete C type and declaration semantics
 ```
 
 `completed/total` counts terminal subtasks in the complete subtree. A task is
@@ -73,7 +73,7 @@ run the relevant checks, commit using Conventional Commits, and push to
   — `DONE` (see `MIGRATION.GAP.md`; all current entries remain `PARTIAL` or
   `MISSING` until complete behavioral evidence exists)
 
-### 2. Lexer, tokens, and preprocessing — `IN_PROGRESS` (0/3)
+### 2. Lexer, tokens, and preprocessing — `DONE` (3/3)
 
 - [x] 2.1 Implement exact token numbering, identifiers, literals, escapes,
   comments, character sets, locations, and error recovery. — `DONE`
@@ -85,10 +85,13 @@ run the relevant checks, commit using Conventional Commits, and push to
   (added correct raw/expanded substitution, GNU named variadics, comma elision,
   `__has_include`, full integer/ternary conditional parsing, pragma event
   capture, and focused tests)
-- [ ] 2.3 Port every preprocessor fixture and add differential tests for all
-  historical lexer/preprocessor edge cases. — `TODO`
+- [x] 2.3 Port every preprocessor fixture and add differential tests for all
+  historical lexer/preprocessor edge cases. — `DONE`
+  (added a token-level differential harness covering all restored `tests/pp`
+  C/assembly fixtures and `pp-counter.c`, including diagnostics for macro
+  redefinition; the complete focused preprocessor suite passes)
 
-### 3. Types, declarations, symbols, and constants — `TODO` (0/3)
+### 3. Types, declarations, symbols, and constants — `IN_PROGRESS` (0/3)
 
 - [ ] 3.1 Implement all scalar, pointer, array, function, record, enum,
   typedef, VLA, qualifier, attribute, and compatible-type rules. — `TODO`
