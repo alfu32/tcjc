@@ -182,7 +182,7 @@ class ExpressionSemanticAnalyzer(
             -> if (isScalar(leftType) && isScalar(rightType)) typed(expression, CTypes.int) else invalid(expression, "logical operator requires scalar operands")
             BinaryOperator.LESS, BinaryOperator.LESS_EQUAL, BinaryOperator.GREATER, BinaryOperator.GREATER_EQUAL,
             BinaryOperator.EQUAL, BinaryOperator.NOT_EQUAL,
-            -> if (comparable(leftType, rightType)) typed(expression, CTypes.int) else invalid(expression, "incompatible comparison operands")
+            -> if (comparisonOperandsValid(expression, leftType, rightType)) typed(expression, CTypes.int) else invalid(expression, "incompatible comparison operands")
             BinaryOperator.ADD -> pointerArithmetic(expression, leftType, rightType, subtract = false)
             BinaryOperator.SUBTRACT -> pointerArithmetic(expression, leftType, rightType, subtract = true)
             BinaryOperator.MULTIPLY, BinaryOperator.DIVIDE,
@@ -599,6 +599,26 @@ class ExpressionSemanticAnalyzer(
         1 -> CTypes.float
         2 -> CTypes.double
         else -> CTypes.longDouble
+    }
+
+    private fun comparisonOperandsValid(expression: Expression.Binary, left: CType, right: CType): Boolean {
+        if (CTypes.compatible(left, right) || isArithmetic(left) && isArithmetic(right)) return true
+        if (left is CType.Pointer && right is CType.Pointer) {
+            if (!pointerCompatible(left, right)) {
+                diagnostics.warning(expression.span.start, "pointer type mismatch in comparison")
+            }
+            return true
+        }
+        val leftPointer = left is CType.Pointer
+        val rightPointer = right is CType.Pointer
+        if (leftPointer && isInteger(right) || rightPointer && isInteger(left)) {
+            val integerOperand = if (leftPointer) expression.right else expression.left
+            if (!isNullPointerConstant(integerOperand)) {
+                diagnostics.warning(expression.span.start, "pointer/integer mismatch in comparison")
+            }
+            return true
+        }
+        return false
     }
 
     private fun comparable(left: CType, right: CType): Boolean =

@@ -143,7 +143,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   struct/union/enum tag references preserve shared tag identity; incomplete
   object pointers reject arithmetic/indexing while TinyCC byte-stride behavior
   for void/function pointers is preserved; pointer subtraction now selects
-  target ptrdiff_t semantics for i386, x86_64 SysV, and x86_64 Win64)
+  target ptrdiff_t semantics for i386, x86_64 SysV, and x86_64 Win64; pointer
+  comparisons accept TinyCC's integer/pointer and mismatched-pointer cases with
+  warnings, while null-pointer comparisons remain warning-free)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

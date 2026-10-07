@@ -66,6 +66,27 @@ class ExpressionSemanticsTest {
     }
 
     @Test
+    fun acceptsTinyCcPointerComparisonsWithWarnings() {
+        val diagnostics = DiagnosticEngine()
+        val symbols = SymbolTable(diagnostics)
+        symbols.declare(ObjectDeclaration("pointer", CTypes.pointer(CTypes.int)))
+        symbols.declare(ObjectDeclaration("other", CTypes.pointer(CTypes.char)))
+        val analyzer = ExpressionSemanticAnalyzer(diagnostics, symbols)
+
+        val integerMismatch = analyzer.analyze(ExpressionParser(Lexer("pointer == 1").tokenize()).parse())
+        val nullComparison = analyzer.analyze(ExpressionParser(Lexer("pointer != 0").tokenize()).parse())
+        val pointerMismatch = analyzer.analyze(ExpressionParser(Lexer("pointer < other").tokenize()).parse())
+
+        assertEquals(CTypes.int, integerMismatch.type)
+        assertEquals(CTypes.int, nullComparison.type)
+        assertEquals(CTypes.int, pointerMismatch.type)
+        assertEquals(0, diagnostics.errorCount)
+        assertEquals(2, diagnostics.diagnostics().count { it.severity == org.tinycc.core.diagnostics.DiagnosticSeverity.WARNING })
+        assertTrue(diagnostics.render().contains("pointer/integer mismatch in comparison"))
+        assertTrue(diagnostics.render().contains("pointer type mismatch in comparison"))
+    }
+
+    @Test
     fun diagnosesInvalidAssignmentsAndUnknownMembers() {
         val diagnostics = DiagnosticEngine()
         val symbols = SymbolTable(diagnostics)
