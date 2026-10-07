@@ -23,7 +23,7 @@ test merely exists. Current entries are deliberately conservative.
 | PE/COFF/Mach-O | `tcccoff.c`, `tccpe.c`, `tccmacho.c`, platform headers | `backends/portable/PortableObjectWriters.kt` | PARTIAL | Valid binary writers, imports/exports, relocations, platform startup |
 | Runtime helpers | `lib/*.c`, `lib/*.S`, `libtcc1.c`, `win32/lib` | `compiler-runtime` Kotlin classes | PARTIAL | All arithmetic, atomics, varargs, startup, builtins, ABI helpers |
 | Execution/debugging | `tccrun.c`, `tccdbg.c`, `lib/bcheck.c`, `lib/bt-*.c` | `api/execution`, runtime diagnostics | PARTIAL | Run, relocation, bounds, backtraces, debug/profiling parity |
-| CLI/configuration | `tcc.c`, `libtcc.c`, `configure`, `Makefile` | `compiler-cli`, typed Gradle config; `-` consumes UTF-8 stdin for current token/preprocess modes | PARTIAL | Every option, response file, stdin source-name fidelity, multi-unit, search path, diagnostic |
+| CLI/configuration | `tcc.c`, `libtcc.c`, `configure`, `Makefile` | `compiler-cli`, typed Gradle config; `-` consumes UTF-8 stdin for current token/preprocess modes and preserves `__FILE__` as `"-"` | PARTIAL | Every option, response file, stdin diagnostic filename fidelity, multi-unit, search path, diagnostic |
 | Embedding API | `libtcc.h`, `libtcc.c` | `api/embedding/Embedding.kt` | PARTIAL | Complete lifecycle, callbacks, output, relocation, symbols, execution |
 | Original tests | `tests/` (174 C/C++, 4 assembly, 354 paths) | 101 Kotlin tests and restored references | PARTIAL | Every historical test has an executable Kotlin/JVM parity counterpart |
 | Artifact boundary | Native Make/configure and TinyCC binaries | Gradle/JVM, but legacy reference exists | PARTIAL | Clean artifact scan proves no C/native payload or dependency is shipped |

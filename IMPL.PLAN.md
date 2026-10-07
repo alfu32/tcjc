@@ -221,8 +221,9 @@ run the relevant checks, commit using Conventional Commits, and push to
 - [ ] 11.1 Implement every historical command-line option, response-file rule,
   search path, target flag, output mode, warning, and diagnostic format. — `IN_PROGRESS`
   (dash input now reads UTF-8 stdin for currently supported preprocess/token
-  output modes; source-name fidelity, multiple translation units, remaining
-  options, compilation/linking outputs, and full diagnostics remain open)
+  output modes and `__FILE__` expands to `"-"`; diagnostic filename fidelity,
+  multiple translation units, remaining options, compilation/linking outputs,
+  and full diagnostics remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
   source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`
 - [ ] 11.3 Produce reproducible Gradle/JVM distributions and verify that no

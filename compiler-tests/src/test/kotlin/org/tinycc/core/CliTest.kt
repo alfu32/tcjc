@@ -105,10 +105,12 @@ class CliTest {
     fun preprocessesStandardInputWhenDashIsTheInputFile() {
         val output = ByteArrayOutputStream()
         val errors = ByteArrayOutputStream()
-        val stdin = ByteArrayInputStream("#define ANSWER 42\nint answer = ANSWER;\n".encodeToByteArray())
+        val stdin = ByteArrayInputStream(
+            "#define ANSWER 42\nconst char *input_name = __FILE__;\nint answer = ANSWER;\n".encodeToByteArray(),
+        )
 
         assertEquals(0, execute(listOf("-E", "-"), PrintStream(output), PrintStream(errors), stdin))
-        assertEquals("int answer = 42;\n", output.toString())
+        assertEquals("const char *input_name = \"-\";\nint answer = 42;\n", output.toString())
         assertEquals("", errors.toString())
     }
 }
