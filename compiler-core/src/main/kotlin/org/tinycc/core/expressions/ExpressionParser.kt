@@ -22,6 +22,7 @@ class ExpressionParser(
     private val typeNames: Map<String, CType> = emptyMap(),
 ) {
     private var index = 0
+    private val parsedTags = HashMap<String, CType>()
 
     fun parse(): Expression {
         val expression = parseExpression()
@@ -411,8 +412,9 @@ class ExpressionParser(
                 TokenKind.ENUM -> {
                     take()
                     val tag = expect(TokenKind.IDENTIFIER, "enum tag")
-                    val type = typeNames["enum ${tag.lexeme}"] ?: typeNames[tag.lexeme]
-                        ?: org.tinycc.core.types.CType.Enumeration(tag.lexeme)
+                    val key = "enum ${tag.lexeme}"
+                    val type = typeNames[key] ?: typeNames[tag.lexeme]
+                        ?: parsedTags.getOrPut(key) { org.tinycc.core.types.CType.Enumeration(tag.lexeme) }
                     return ParsedTypeSpecifiers(type, qualifiers)
                 }
                 TokenKind.TYPEOF -> {
@@ -478,8 +480,9 @@ class ExpressionParser(
 
     private fun parseTaggedType(prefix: String, kind: org.tinycc.core.types.RecordKind): CType {
         val tag = expect(TokenKind.IDENTIFIER, "$prefix tag")
-        return typeNames["$prefix ${tag.lexeme}"] ?: typeNames[tag.lexeme]
-            ?: org.tinycc.core.types.CType.Record(kind, tag.lexeme)
+        val key = "$prefix ${tag.lexeme}"
+        return typeNames[key] ?: typeNames[tag.lexeme]
+            ?: parsedTags.getOrPut(key) { org.tinycc.core.types.CType.Record(kind, tag.lexeme) }
     }
 
     /** Parses C's abstract-declarator grammar, retaining pointer/function/array binding. */

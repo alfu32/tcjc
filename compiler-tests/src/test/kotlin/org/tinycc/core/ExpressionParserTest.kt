@@ -153,4 +153,13 @@ class ExpressionParserTest {
             assertTrue(diagnostics.hasErrors, "expected a type-specifier diagnostic for $source")
         }
     }
+
+    @Test
+    fun reusesTagIdentityAcrossTypeNameReferences() {
+        val generic = assertIs<Expression.GenericSelection>(
+            ExpressionParser(Lexer("_Generic(0, struct Node: 1, struct Node: 2)").tokenize()).parse(),
+        )
+
+        assertTrue(generic.associations[0].type === generic.associations[1].type)
+    }
 }
