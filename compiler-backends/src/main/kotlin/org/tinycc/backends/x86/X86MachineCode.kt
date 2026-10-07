@@ -8,7 +8,7 @@ import java.nio.file.attribute.PosixFilePermission
 import kotlin.io.path.createTempFile
 import org.tinycc.core.ir.IrRegister
 
-/** Encodes the register/immediate subset used by the backend smoke and parity fixtures. */
+/** Encodes the explicitly supported scalar x86 machine-instruction subset. */
 class X86MachineCodeEncoder(private val mode: X86Mode) {
     private data class ZeroOperandEncoding(val bytes: List<Int>, val mode: X86Mode? = null)
 
@@ -64,8 +64,12 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         }
         when (instruction.opcode) {
             X86Opcode.MOV -> encodeMov(instruction.operands, output)
-            X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01)
-            X86Opcode.SUB -> encodeBinary(instruction.operands, output, 0x29)
+            X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01, 0)
+            X86Opcode.OR -> encodeBinary(instruction.operands, output, 0x09, 1)
+            X86Opcode.AND -> encodeBinary(instruction.operands, output, 0x21, 4)
+            X86Opcode.SUB -> encodeBinary(instruction.operands, output, 0x29, 5)
+            X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
+            X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.PUSH -> encodeStackRegister(instruction.operands, output, push = true)
             X86Opcode.POP -> encodeStackRegister(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
@@ -93,7 +97,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         }
     }
 
-    private fun encodeBinary(operands: List<X86Operand>, output: MutableList<Byte>, opcode: Int) {
+    private fun encodeBinary(operands: List<X86Operand>, output: MutableList<Byte>, opcode: Int, extension: Int) {
         require(operands.size == 2) { "binary operation requires two operands" }
         when (val destination = operands[0]) {
             is X86Operand.Register -> {
@@ -101,15 +105,33 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
                 when (val source = operands[1]) {
                     is X86Operand.Register -> encodeRm(opcode, physicalRegister(source).number, destination, output)
                     is X86Operand.Memory -> encodeRm(opcode + 2, register.number, source, output)
+                    is X86Operand.Immediate -> encodeArithmeticImmediate(destination, source.value, extension, output)
                     else -> error("unsupported binary source: $source")
                 }
             }
             is X86Operand.Memory -> {
-                val source = physicalRegister(operands[1])
-                encodeRm(opcode, source.number, destination, output)
+                when (val source = operands[1]) {
+                    is X86Operand.Register -> encodeRm(opcode, physicalRegister(source).number, destination, output)
+                    is X86Operand.Immediate -> encodeArithmeticImmediate(destination, source.value, extension, output)
+                    else -> error("unsupported binary source: $source")
+                }
             }
             else -> error("unsupported binary destination: $destination")
         }
+    }
+
+    private fun encodeArithmeticImmediate(
+        destination: X86Operand,
+        immediate: Long,
+        extension: Int,
+        output: MutableList<Byte>,
+    ) {
+        require(immediate == immediate.toInt().toLong() ||
+            (mode == X86Mode.I386 && immediate in Int.MIN_VALUE.toLong()..0xFFFF_FFFFL)
+        ) { "x86 arithmetic immediate must fit the target's 32-bit encoding" }
+        val useSignedByte = immediate in -128L..127L
+        encodeRm(if (useSignedByte) 0x83 else 0x81, extension, destination, output)
+        if (useSignedByte) output += immediate.toByte() else appendInt(output, immediate.toInt())
     }
 
     private fun encodeImmediateMove(destination: IrRegister, immediate: Long, output: MutableList<Byte>) {

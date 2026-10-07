@@ -16,7 +16,7 @@ test merely exists. Current entries are deliberately conservative.
 | Statements/functions | `tccgen.c`, `tccrun.c` cleanup/control-flow paths | `core/statements`, `functions`, semantics | PARTIAL | Nested functions, computed goto, VLA cleanup, extensions |
 | IR/lowering | `tccgen.c` value stack, lvalues, temporaries, direct lowering | `core/ir` model/verifier/emitters | PARTIAL | Complete lowering for every AST construct; no placeholder IR |
 | x86 instruction data | `i386-asm.h`, `x86_64-asm.h`, `i386-asm.c` | `backends/x86/X86Backend.kt`; selected zero-operand instruction bytes are now represented and tested in the JVM encoder | PARTIAL | Port every opcode, operand class, prefix, alias, and encoding table |
-| x86 code generation | `i386-gen.c`, `x86_64-gen.c`, link files | X86 selector, zero-operand instruction encodings, and MOV/ADD/SUB register and simple memory forms | PARTIAL | Complete byte-accurate instruction set, indexed/relocated addressing, ABI, SSE/x87, TLS, PIC, atomics |
+| x86 code generation | `i386-gen.c`, `x86_64-gen.c`, link files | X86 selector, selected zero-operand encodings, MOV/ADD/SUB register and simple memory forms, and immediate integer ADD/OR/AND/SUB/XOR/CMP | PARTIAL | Complete byte-accurate instruction set, operand widths, indexed/relocated addressing, ABI, SSE/x87, TLS, PIC, atomics |
 | ARM/ARM64 | `arm-*.c`, `arm64-*.c`, assembler tables | `backends/arm`, `arm64` | PARTIAL | Complete ARM/Thumb/AArch64 encoders and platform relocations |
 | RISC-V/C67 | `riscv64-*.c`, `c67-*.c` | `backends/riscv`, `c67` | PARTIAL | Full instruction data, assembler, ABI, relocations, COFF |
 | ELF/linker | `tccelf.c`, `elf.h`, `stab.h`, `tccrun.c` | `backends/object/ElfWriter.kt` | PARTIAL | Sections, archives, symbols, all relocations, TLS, DWARF/Stabs, linking |
@@ -33,8 +33,9 @@ test merely exists. Current entries are deliberately conservative.
 The active tree currently contains deliberate incompleteness that cannot be
 called compatibility:
 
-- `X86MachineCode.kt` documents a register/immediate smoke subset and rejects
-  other instructions.
+- `X86MachineCode.kt` supports only explicitly encoded scalar/control forms;
+  other instruction families and many operand widths/addressing forms remain
+  unsupported.
 - `CrossTargetMatrix.kt` emits pending fixtures for some targets.
 - `Main.kt` aggregates multiple files only for token/preprocess output; full
   multi-unit compilation and linking are not implemented.

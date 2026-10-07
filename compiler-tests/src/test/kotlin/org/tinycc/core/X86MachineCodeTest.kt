@@ -125,6 +125,46 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesIntegerArithmeticAndComparisonImmediates() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x48, 0x83.toByte(), 0xC0.toByte(), 5,
+                0x48, 0x83.toByte(), 0xF8.toByte(), 0,
+                0x48, 0x81.toByte(), 0x65, 0xF8.toByte(), 0x78, 0x56, 0x34, 0x12,
+                0x49, 0x81.toByte(), 0xC9.toByte(), 0x7F, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+                0x49, 0x83.toByte(), 0x74, 0x24, 8, 0xFF.toByte(),
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.ADD, listOf(r("rax"), X86Operand.Immediate(5))),
+                    X86Instruction(X86Opcode.CMP, listOf(r("rax"), X86Operand.Immediate(0))),
+                    X86Instruction(
+                        X86Opcode.AND,
+                        listOf(X86Operand.Memory(r("rbp").value, -8), X86Operand.Immediate(0x12345678)),
+                    ),
+                    X86Instruction(X86Opcode.OR, listOf(r("r9"), X86Operand.Immediate(-129))),
+                    X86Instruction(
+                        X86Opcode.XOR,
+                        listOf(X86Operand.Memory(r("r12").value, 8), X86Operand.Immediate(-1)),
+                    ),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            x64.encode(listOf(X86Instruction(X86Opcode.SUB, listOf(r("rax"), X86Operand.Immediate(0x80000000L)))))
+        }
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        assertContentEquals(
+            byteArrayOf(0x81.toByte(), 0xE8.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+            i386.encode(listOf(X86Instruction(X86Opcode.SUB, listOf(eax, X86Operand.Immediate(0xFFFF_FFFFL))))),
+        )
+    }
+
+    @Test
     fun constructsRunnableElf64ImageWithoutExternalToolchain() {
         val image = X86LinuxElf64.image(byteArrayOf(0xC3.toByte()))
 

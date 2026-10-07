@@ -10,7 +10,7 @@ Overall: 3/36
 [IN_PROGRESS] [0/3]  3. Types, declarations, symbols, and constants
 [IN_PROGRESS] [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
-[TODO]        [0/3]  6. i386 and x86_64 instruction and ABI support
+[IN_PROGRESS] [0/3]  6. i386 and x86_64 instruction and ABI support
 [TODO]        [0/3]  7. ARM and ARM64 instruction and ABI support
 [TODO]        [0/3]  8. RISC-V and C67 instruction and ABI support
 [TODO]        [0/3]  9. Object formats, linker, and relocations
@@ -19,10 +19,10 @@ Overall: 3/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-11.1 — implement complete TinyCC CLI behavior (stdin input now works; remaining options and modes are open)
+6.2 — implement x86 machine-code selection and encoding (selected integer and control encodings are in place; most instructions and ABI behavior remain open)
 
 Current milestone:
-M1 — establish complete lexical, preprocessing, and type-system parity
+M6 — complete i386 and x86_64 instruction, relocation, and ABI support
 ```
 
 `completed/total` counts terminal subtasks in the complete subtree. A task is
@@ -176,10 +176,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   — `TODO`
 - [ ] 6.2 Implement instruction selection/encoding, x87/SSE/atomics, PIC/PIE,
   TLS, relocations, register allocation, and both i386 and SysV/Win64 ABIs. —
-  `TODO` (selected zero-operand scalar/control/fence/CET instructions and
+  `IN_PROGRESS` (selected zero-operand scalar/control/fence/CET instructions and
   register, base-displacement, SIB, and absolute memory forms for MOV/ADD/SUB
-  now have byte-exact Kotlin encodings; full tables and addressing support
-  remain open)
+  plus immediate ADD/OR/AND/SUB/XOR/CMP now have byte-exact Kotlin coverage;
+  full tables, operand widths, and addressing support remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`
 
