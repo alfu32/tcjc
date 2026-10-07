@@ -183,9 +183,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   register/immediate forms, indirect/local CALL, and PUSH/POP register,
   memory, and immediate forms, plus SHL/SHR/SAR immediate and CL-count forms
   and signed IMUL plus signed/unsigned DIV/IDIV operand encodings now have
-  byte-exact Kotlin coverage; fixed-register division lowering, external
-  symbol relocations, full tables, operand widths, and addressing support
-  remain open)
+  byte-exact Kotlin coverage; integer SETcc/MOVZX comparison results are
+  zero-extended; floating compare lowering, fixed-register division lowering,
+  external symbol relocations, full tables, operand widths, and addressing
+  support remain open)
 - [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
   parity tests for both x86 targets. — `TODO`
 

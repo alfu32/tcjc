@@ -13,6 +13,7 @@ import org.tinycc.backends.x86.X86Registers
 import org.tinycc.backends.x86.X86TargetOptions
 import org.tinycc.core.ir.IrBasicBlock
 import org.tinycc.core.ir.IrBinaryOp
+import org.tinycc.core.ir.IrCompareCondition
 import org.tinycc.core.ir.IrFunction
 import org.tinycc.core.ir.IrInstruction
 import org.tinycc.core.ir.IrMemoryOrder
@@ -72,6 +73,38 @@ class X86BackendTest {
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.CALL))
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.JNE))
         assertTrue(opcodes.contains(org.tinycc.backends.x86.X86Opcode.JMP))
+    }
+
+    @Test
+    fun zeroExtendsIntegerComparisonResultsAfterSetcc() {
+        val int = IrTypes.i32
+        val bool = IrTypes.i1
+        val result = IrValue.Local(1, bool, "less")
+        val function = IrFunction(
+            IrSymbol("isLess", IrType.Function(bool, listOf(int, int))),
+            listOf(IrParameter("left", int), IrParameter("right", int)),
+            listOf(
+                IrBasicBlock(
+                    "entry",
+                    listOf(
+                        IrInstruction.Compare(
+                            result,
+                            IrCompareCondition.SIGNED_LESS,
+                            IrValue.Parameter(0, int, "left"),
+                            IrValue.Parameter(1, int, "right"),
+                        ),
+                    ),
+                    IrTerminator.Return(result),
+                ),
+            ),
+        )
+        val compiled = X86CodeGenerator(X86Mode.X86_64).compile(function)
+        val instructions = compiled.function.blocks.single().instructions
+        assertTrue(instructions.any { it.opcode == X86Opcode.SETCC })
+        assertTrue(instructions.any { it.opcode == X86Opcode.MOVZX })
+        val assembly = X86AssemblyEmitter().emit(compiled)
+        assertTrue(assembly.contains("setl "))
+        assertTrue(assembly.contains("movzx "))
     }
 
     @Test

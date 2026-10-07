@@ -31,6 +31,16 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         X86Opcode.JLE to 0xE,
         X86Opcode.JG to 0xF,
     )
+    private val setConditionCodes = mapOf(
+        "equal" to 0x4, "e" to 0x4, "z" to 0x4,
+        "not_equal" to 0x5, "ne" to 0x5, "nz" to 0x5,
+        "signed_less" to 0xC, "l" to 0xC, "signed_less_equal" to 0xE, "le" to 0xE,
+        "signed_greater" to 0xF, "g" to 0xF, "signed_greater_equal" to 0xD, "ge" to 0xD,
+        "unsigned_less" to 0x2, "b" to 0x2, "c" to 0x2,
+        "unsigned_less_equal" to 0x6, "be" to 0x6,
+        "unsigned_greater" to 0x7, "a" to 0x7,
+        "unsigned_greater_equal" to 0x3, "ae" to 0x3,
+    )
 
     private val zeroOperandEncodings = mapOf(
         X86Opcode.RET to ZeroOperandEncoding(listOf(0xC3)),
@@ -136,6 +146,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         }
         when (instruction.opcode) {
             X86Opcode.MOV -> encodeMov(instruction.operands, output)
+            X86Opcode.MOVZX -> encodeMovzx(instruction.operands, output)
             X86Opcode.LEA -> encodeLea(instruction.operands, output)
             X86Opcode.ADD -> encodeBinary(instruction.operands, output, 0x01, 0)
             X86Opcode.OR -> encodeBinary(instruction.operands, output, 0x09, 1)
@@ -144,6 +155,7 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.XOR -> encodeBinary(instruction.operands, output, 0x31, 6)
             X86Opcode.CMP -> encodeBinary(instruction.operands, output, 0x39, 7)
             X86Opcode.TEST -> encodeTest(instruction.operands, output)
+            X86Opcode.SETCC -> encodeSetcc(instruction.operands, output)
             X86Opcode.IMUL -> encodeImul(instruction.operands, output)
             X86Opcode.DIV -> encodeDivision(instruction.operands, output, 6)
             X86Opcode.IDIV -> encodeDivision(instruction.operands, output, 7)
@@ -155,6 +167,55 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
             X86Opcode.POP -> encodeStackOperand(instruction.operands, output, push = false)
             else -> error("machine-code encoder does not support ${instruction.opcode}")
         }
+    }
+
+    private fun encodeSetcc(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 2 && operands[1] is X86Operand.Condition) {
+            "setcc requires a register/memory destination and condition"
+        }
+        val destination = operands[0]
+        val condition = (operands[1] as X86Operand.Condition).name.lowercase()
+        val code = setConditionCodes[condition] ?: error("unsupported integer setcc condition: $condition")
+        when (destination) {
+            is X86Operand.Register -> {
+                val register = physicalRegister(destination)
+                require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                    "setcc destination must be a target-width integer register"
+                }
+                if (mode == X86Mode.I386) {
+                    require(register.number in 0..3) { "i386 setcc requires a register with an encodable low byte" }
+                }
+                rex(
+                    output,
+                    base = register.number,
+                    force = mode == X86Mode.X86_64 && register.number in 4..7,
+                )
+                output += 0x0F
+                output += (0x90 + code).toByte()
+                output += modRm(3, 0, register.number)
+            }
+            is X86Operand.Memory -> encodeRm(listOf(0x0F, 0x90 + code), 0, destination, output, w = false)
+            else -> error("setcc destination must be a register or memory operand")
+        }
+    }
+
+    private fun encodeMovzx(operands: List<X86Operand>, output: MutableList<Byte>) {
+        require(operands.size == 2) { "movzx requires a register destination and register/memory source" }
+        val destination = physicalRegister(operands[0])
+        require(destination.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && destination.bits == mode.bits) {
+            "movzx destination width must match ${mode.bits}-bit target mode"
+        }
+        val source = operands[1]
+        if (source is X86Operand.Register) {
+            val register = physicalRegister(source)
+            require(register.registerClass == org.tinycc.core.ir.IrRegisterClass.INTEGER && register.bits == mode.bits) {
+                "movzx source must be a target-width integer register (low byte is read)"
+            }
+        }
+        require(source is X86Operand.Register || source is X86Operand.Memory) {
+            "movzx source must be a register or memory operand"
+        }
+        encodeRm(listOf(0x0F, 0xB6), destination.number, source, output)
     }
 
     private fun encodeIndirectCall(operands: List<X86Operand>, output: MutableList<Byte>) {
@@ -499,10 +560,11 @@ class X86MachineCodeEncoder(private val mode: X86Mode) {
         w: Boolean = false,
         register: Int = 0,
         base: Int = 0,
+        force: Boolean = false,
     ) {
         if (mode != X86Mode.X86_64) return
         val value = 0x40 or (if (w) 8 else 0) or (if (register >= 8) 4 else 0) or (if (base >= 8) 1 else 0)
-        if (value != 0x40) output += value.toByte()
+        if (value != 0x40 || force) output += value.toByte()
     }
 
     private fun modRm(mode: Int, register: Int, base: Int): Byte =

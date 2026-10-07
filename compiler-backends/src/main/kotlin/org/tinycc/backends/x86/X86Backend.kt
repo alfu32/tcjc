@@ -139,7 +139,7 @@ sealed interface X86Operand {
 }
 
 enum class X86Opcode {
-    MOV, LEA, ADD, SUB, IMUL, DIV, IDIV, AND, OR, XOR, SHL, SHR, SAR,
+    MOV, MOVZX, LEA, ADD, SUB, IMUL, DIV, IDIV, AND, OR, XOR, SHL, SHR, SAR,
     MOVSS, MOVSD, ADDSS, ADDSD, SUBSS, SUBSD, MULSS, MULSD, DIVSS, DIVSD,
     CMP, TEST, UCOMISS, UCOMISD, SETCC, CALL, JMP, JO, JNO, JB, JAE, JE, JNE, JBE, JA,
     JS, JNS, JP, JNP, JL, JGE, JLE, JG, LABEL, PUSH, POP, SUB_STACK, ADD_STACK,
@@ -217,6 +217,7 @@ class X86InstructionSelector(
             is IrInstruction.Compare -> {
                 output += X86Instruction(compareOpcode(instruction.left.type), listOf(value(instruction.left), value(instruction.right)))
                 output += X86Instruction(X86Opcode.SETCC, listOf(register(instruction.result), X86Operand.Condition(instruction.condition.name.lowercase())))
+                output += X86Instruction(X86Opcode.MOVZX, listOf(register(instruction.result), register(instruction.result)))
             }
             is IrInstruction.Cast -> output += X86Instruction(X86Opcode.MOV, listOf(register(instruction.result), value(instruction.value)))
             is IrInstruction.GetElementPointer -> output += X86Instruction(X86Opcode.LEA, listOf(register(instruction.result), memory(instruction.base)))
@@ -463,6 +464,12 @@ class X86AssemblyEmitter {
     }
 
     private fun format(instruction: X86Instruction, compiled: X86CompiledFunction): String {
+        if (instruction.opcode == X86Opcode.SETCC) {
+            require(instruction.operands.size == 2 && instruction.operands[1] is X86Operand.Condition) {
+                "setcc assembly requires a destination and condition"
+            }
+            return "set${conditionMnemonic((instruction.operands[1] as X86Operand.Condition).name)} ${format(instruction.operands[0], compiled)}"
+        }
         val operands = instruction.operands.joinToString(", ") { format(it, compiled) }
         val mnemonic = mnemonic(instruction.opcode)
         return listOfNotNull(mnemonic, operands.takeIf { it.isNotEmpty() }, instruction.comment?.let { "# $it" }).joinToString(" ")
@@ -504,6 +511,20 @@ class X86AssemblyEmitter {
         X86Opcode.LOCK_OR -> "lock or"
         X86Opcode.LOCK_XOR -> "lock xor"
         else -> opcode.name.lowercase()
+    }
+
+    private fun conditionMnemonic(condition: String): String = when (condition.lowercase()) {
+        "equal" -> "e"
+        "not_equal" -> "ne"
+        "signed_less" -> "l"
+        "signed_less_equal" -> "le"
+        "signed_greater" -> "g"
+        "signed_greater_equal" -> "ge"
+        "unsigned_less" -> "b"
+        "unsigned_less_equal" -> "be"
+        "unsigned_greater" -> "a"
+        "unsigned_greater_equal" -> "ae"
+        else -> error("unsupported x86 setcc condition: $condition")
     }
 
     private fun formatSymbol(name: String, relocation: X86RelocationSyntax, mode: X86Mode): String = when (relocation) {

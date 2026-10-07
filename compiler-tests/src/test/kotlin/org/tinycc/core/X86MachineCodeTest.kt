@@ -392,6 +392,52 @@ class X86MachineCodeTest {
     }
 
     @Test
+    fun encodesIntegerSetccAndZeroExtension() {
+        val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
+        val r64 = { name: String -> physical(X86Mode.X86_64, name) }
+        assertContentEquals(
+            byteArrayOf(
+                0x0F, 0x94.toByte(), 0xC0.toByte(),
+                0x41, 0x0F, 0x9C.toByte(), 0xC4.toByte(),
+                0x40, 0x0F, 0x93.toByte(), 0xC4.toByte(),
+                0x0F, 0x95.toByte(), 0x45, 0xFF.toByte(),
+                0x48, 0x0F, 0xB6.toByte(), 0xC0.toByte(),
+                0x4D, 0x0F, 0xB6.toByte(), 0x4C, 0x24, 8,
+            ),
+            x64.encode(
+                listOf(
+                    X86Instruction(X86Opcode.SETCC, listOf(r64("rax"), X86Operand.Condition("equal"))),
+                    X86Instruction(X86Opcode.SETCC, listOf(r64("r12"), X86Operand.Condition("signed_less"))),
+                    X86Instruction(X86Opcode.SETCC, listOf(r64("rsp"), X86Operand.Condition("unsigned_greater_equal"))),
+                    X86Instruction(
+                        X86Opcode.SETCC,
+                        listOf(X86Operand.Memory(r64("rbp").value, -1), X86Operand.Condition("not_equal")),
+                    ),
+                    X86Instruction(X86Opcode.MOVZX, listOf(r64("rax"), r64("rax"))),
+                    X86Instruction(X86Opcode.MOVZX, listOf(r64("r9"), X86Operand.Memory(r64("r12").value, 8))),
+                ),
+            ),
+        )
+
+        val i386 = X86MachineCodeEncoder(X86Mode.I386)
+        val eax = physical(X86Mode.I386, "eax")
+        assertContentEquals(
+            byteArrayOf(0x0F, 0x94.toByte(), 0xC0.toByte(), 0x0F, 0xB6.toByte(), 0xC0.toByte()),
+            i386.encode(
+                listOf(
+                    X86Instruction(X86Opcode.SETCC, listOf(eax, X86Operand.Condition("equal"))),
+                    X86Instruction(X86Opcode.MOVZX, listOf(eax, eax)),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            i386.encode(
+                listOf(X86Instruction(X86Opcode.SETCC, listOf(physical(X86Mode.I386, "esi"), X86Operand.Condition("equal")))),
+            )
+        }
+    }
+
+    @Test
     fun encodesIntegerArithmeticAndComparisonImmediates() {
         val x64 = X86MachineCodeEncoder(X86Mode.X86_64)
         val r = { name: String -> physical(X86Mode.X86_64, name) }
