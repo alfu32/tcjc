@@ -1,145 +1,179 @@
-# TinyCC to Kotlin/JVM Migration Plan
+# TinyCC to Kotlin/JVM Implementation Plan
 
 ## Dashboard
 
 ```text
-Overall: 51/51
+Overall: 0/36
 
-[DONE]       [9/9]   1. Language front-end
-[DONE]       [6/6]   2. Semantic model and modules
-[DONE]       [3/3]   3. Compile-time and IR system
-[DONE]       [12/12] 4. Lowering and native target backends
-[DONE]       [15/15] 5. Tooling, integration and quality
-[DONE]       [3/3] 6. Runtime, SDK and platform ABI
-[DONE]       [3/3] 7. Legacy C artifact quarantine and final pure-JVM cleanup
+[IN_PROGRESS] [0/3]  1. Source preservation and parity rebaseline
+[TODO]        [0/3]  2. Lexer, tokens, and preprocessing
+[TODO]        [0/3]  3. Types, declarations, symbols, and constants
+[TODO]        [0/3]  4. Expressions, statements, functions, and semantics
+[TODO]        [0/3]  5. Complete IR, lowering, and optimization
+[TODO]        [0/3]  6. i386 and x86_64 instruction and ABI support
+[TODO]        [0/3]  7. ARM and ARM64 instruction and ABI support
+[TODO]        [0/3]  8. RISC-V and C67 instruction and ABI support
+[TODO]        [0/3]  9. Object formats, linker, and relocations
+[TODO]        [0/3] 10. Runtime, execution, debugging, and bounds support
+[TODO]        [0/3] 11. CLI, embedding API, configuration, and distributions
+[TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-none — legacy C quarantine and pure Kotlin/JVM verification are complete
+1.1 — restore the complete historical TinyCC implementation under `legacy-c/`
 
 Current milestone:
-complete — migration milestones M1–M7
+M0 — source preservation and parity rebaseline
 ```
 
-Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 9–12; M5 = tasks 1, 2, 14–16; M6 = task 13; M7 = task 17. Each `completed/total` value counts terminal subtasks in that milestone subtree.
+`completed/total` counts terminal subtasks in the complete subtree. A task is
+`DONE` only when all of its subtasks are `DONE`. Statuses are `TODO`,
+`IN_PROGRESS`, `DONE`, and `BLOCKED`.
 
-## Status
+## Objective and non-negotiable gates
 
-- Overall migration: **DONE** (17/17 tasks; 51/51 subtasks complete)
-- Repository cleanup: **DONE** (legacy C/native residue quarantined under `legacy-c/`; `tests/` preserved)
-- Planning artifact: **DONE**
-- Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
-- New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
-- A task is `DONE` only when all three subtasks are `DONE`; its aggregate is shown as `x/3`.
-- After every subtask completion, update its status and the affected aggregate, run the relevant checks, commit, and push to `origin work`. If a push fails, keep the commit and resolve the push before starting the next subtask.
+The deliverable is a full Kotlin/JVM implementation of the TinyCC behavior
+represented by the historical source tree at the parent of cutover commit
+`4f0b9e93`. This includes the C language, GNU/TCC extensions, preprocessor,
+assembler, all recorded targets, object formats, linker behavior, runtime
+helpers, CLI, and `libtcc`-equivalent embedding API.
 
-## Scope and Compatibility Contract
+- `legacy-c/` is the preserved source/reference tree, never an active build
+  input or packaged artifact.
+- The original regression suite remains under `tests/`; new executable tests
+  are Gradle/Kotlin tests under `compiler-tests/`.
+- Production implementation and shipped artifacts contain only Kotlin/JVM
+  code and JVM resources. No C source, native library, DLL/SO, JNI bridge, or
+  external TinyCC executable may be required.
+- Every historical data table, opcode definition, ABI rule, relocation form,
+  and generated binary format must have an explicit Kotlin implementation and
+  a parity test. A reduced enum, facade, placeholder, or smoke-only encoder is
+  not completion.
+- Completion requires a clean checkout build, the restored original tests,
+  deterministic differential/golden tests, and a source/artifact audit proving
+  the pure Kotlin/JVM boundary.
 
-The end state is a pure Kotlin/JVM implementation that can be built and tested entirely through Gradle, with no C compiler sources, TinyCC DLL/SO files, native bridge, Make target, or shell configuration required or packaged. Preserve the current TinyCC command-line behavior, `libtcc`-style embedding API, diagnostics, C language behavior, and native output targets unless a compatibility change is explicitly documented. The JVM is the host for the compiler; native target generation remains part of the migration rather than being silently replaced by JVM-only output. The original C tree was a temporary parity oracle and was removed at Task 16.3.
+After each completed subtask, update this dashboard and its aggregate status,
+run the relevant checks, commit using Conventional Commits, and push to
+`origin work` before starting the next subtask.
 
-## Implementation Tasks
+## Implementation tasks
 
-### 1. Baseline and migration contract — `DONE` (3/3)
+### 1. Source preservation and parity rebaseline — `IN_PROGRESS` (0/3)
 
-- [x] 1.1 Inventory CLI options, `libtcc` entry points, source modules, target architectures, object formats, and platform-specific behavior. — `DONE` (see [MIGRATION.BASELINE.md](MIGRATION.BASELINE.md))
-- [x] 1.2 Capture current `make`, `make test`, examples, preprocessor fixtures, and representative compiler outputs as migration goldens. — `DONE` (see [baseline/README.md](baseline/README.md))
-- [x] 1.3 Define supported JDK/toolchain versions, Gradle coordinates, compatibility boundaries, and measurable parity gates. — `DONE` (see [MIGRATION.CONTRACT.md](MIGRATION.CONTRACT.md))
+- [ ] 1.1 Restore every historical TinyCC implementation, header, target,
+  runtime, build, and platform file under `legacy-c/`, excluding tests. — `TODO`
+- [ ] 1.2 Restore and preserve the original C regression suite under `tests/`
+  without deleting existing fixtures or generated outputs. — `TODO`
+- [ ] 1.3 Produce a module-by-module gap matrix mapping every historical file,
+  table, feature, option, target, and test to Kotlin code and parity evidence.
+  — `TODO`
 
-### 2. Gradle/Kotlin project foundation — `DONE` (3/3)
+### 2. Lexer, tokens, and preprocessing — `TODO` (0/3)
 
-- [x] 2.1 Add `gradlew`, wrapper metadata, `settings.gradle.kts`, and a reproducible Kotlin/JVM toolchain. — `DONE` (Gradle 9.2.1, Kotlin 2.2.20, JDK 17 target)
-- [x] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `DONE` (see `compiler-*` projects)
-- [x] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `DONE` (direct Kotlin smoke compile; Gradle task execution is environment-blocked)
+- [ ] 2.1 Implement exact token numbering, identifiers, literals, escapes,
+  comments, character sets, locations, and error recovery. — `TODO`
+- [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
+  includes, pragmas, predefined macros, and line control. — `TODO`
+- [ ] 2.3 Port every preprocessor fixture and add differential tests for all
+  historical lexer/preprocessor edge cases. — `TODO`
 
-### 3. Core utilities, diagnostics, and memory model — `DONE` (3/3)
+### 3. Types, declarations, symbols, and constants — `TODO` (0/3)
 
-- [x] 3.1 Port strings, dynamic arrays, byte buffers, arenas, hash tables, and platform-neutral file utilities. — `DONE` (see `compiler-core/.../collections` and `io`)
-- [x] 3.2 Implement source locations, include stacks, diagnostic severities, error recovery, and stable message formatting. — `DONE` (see `compiler-core/.../diagnostics`)
-- [x] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `DONE` (see `compiler-tests/.../CoreUtilitiesTest.kt`)
+- [ ] 3.1 Implement all scalar, pointer, array, function, record, enum,
+  typedef, VLA, qualifier, attribute, and compatible-type rules. — `TODO`
+- [ ] 3.2 Implement namespaces, scopes, linkage, storage classes, tentative
+  definitions, visibility, declaration merging, and symbol lifetime. — `TODO`
+- [ ] 3.3 Implement integer/floating/address constant evaluation, initializer
+  folding, layout, alignment, bit-fields, and ABI metadata. — `TODO`
 
-### 4. Lexer, tokens, and preprocessor — `DONE` (3/3)
+### 4. Expressions, statements, functions, and semantics — `TODO` (0/3)
 
-- [x] 4.1 Port character decoding, token kinds, literals, comments, identifiers, escapes, and token location tracking. — `DONE` (see `compiler-core/.../io/SourceFiles.kt` and `lexer`)
-- [x] 4.2 Port macro definitions/expansion, conditional compilation, variadic macros, and predefined macros. — `DONE` (see `compiler-core/.../preprocessor` and `compiler-tests/.../PreprocessorTest.kt`)
-- [x] 4.3 Port include resolution, pragma handling, line directives, and all `tests/pp` expected-output cases. — `DONE` (see `compiler-core/.../preprocessor` and `PreprocessorTest`)
+- [ ] 4.1 Implement the complete expression grammar, conversions, lvalues,
+  pointer arithmetic, compound literals, and GNU/TCC expression extensions. — `TODO`
+- [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
+  VLA cleanup, function definitions, variadics, nested functions, and returns.
+  — `TODO`
+- [ ] 4.3 Match semantic diagnostics, recovery, unreachable-code behavior,
+  constraints, and all parser/semantic regression cases. — `TODO`
 
-### 5. C types, symbols, and declarations — `DONE` (3/3)
+### 5. Complete IR, lowering, and optimization — `TODO` (0/3)
 
-- [x] 5.1 Implement primitive, qualified, pointer, array, function, struct/union, enum, typedef, and variably modified types. — `DONE` (see `compiler-core/.../types` and `TypesTest`)
-- [x] 5.2 Port symbol scopes, namespaces, storage classes, linkage, visibility, and declaration merging. — `DONE` (see `compiler-core/.../symbols` and `SymbolsTest`)
-- [x] 5.3 Add type compatibility, layout/alignment, ABI metadata, and diagnostics tests for declaration edge cases. — `DONE` (see `compiler-core/.../types/Layout.kt` and `LayoutTest`)
+- [ ] 5.1 Port the full value stack, lvalue model, temporaries, memory model,
+  calls, aggregates, atomics, TLS, symbols, sections, and relocations. — `TODO`
+- [ ] 5.2 Implement target-independent lowering, constant folding, register
+  allocation, stack frames, calling-convention hooks, and required optimizations.
+  — `TODO`
+- [ ] 5.3 Verify that every C construct lowers deterministically to complete IR
+  with source locations, diagnostics, and no placeholder operation. — `TODO`
 
-### 6. Expressions and constant evaluation — `DONE` (3/3)
+### 6. i386 and x86_64 instruction and ABI support — `TODO` (0/3)
 
-- [x] 6.1 Port expression parsing with precedence, casts, compound literals, initializer expressions, and GNU-compatible extensions in scope. — `DONE` (see `compiler-core/.../expressions` and `ExpressionParserTest`)
-- [x] 6.2 Implement conversions, lvalues, pointer arithmetic, qualifiers, overload-free operator typing, and diagnostics. — `DONE` (see `compiler-core/.../semantics/ExpressionSemantics.kt` and `ExpressionSemanticsTest`)
-- [x] 6.3 Port integer, floating-point, address, relocation, and compile-time constant evaluation with golden tests. — `DONE` (see `compiler-core/.../constants` and `ConstantEvaluationTest`)
+- [ ] 6.1 Port the complete instruction-definition matrices from the historical
+  assembler tables, including operand classes, prefixes, groups, and aliases.
+  — `TODO`
+- [ ] 6.2 Implement instruction selection/encoding, x87/SSE/atomics, PIC/PIE,
+  TLS, relocations, register allocation, and both i386 and SysV/Win64 ABIs. — `TODO`
+- [ ] 6.3 Pass byte-level assembler, compile, link, run, ABI, and self-hosting
+  parity tests for both x86 targets. — `TODO`
 
-### 7. Statements, functions, and control flow — `DONE` (3/3)
+### 7. ARM and ARM64 instruction and ABI support — `TODO` (0/3)
 
-- [x] 7.1 Port blocks, declarations, expression statements, selection, loops, jumps, labels, and switch lowering. — `DONE` (see `compiler-core/.../statements` and `StatementParserTest`)
-- [x] 7.2 Port function definitions, parameters, calling metadata, variadic functions, nested/local functions, and returns. — `DONE` (see `compiler-core/.../functions` and `FunctionParserTest`)
-- [x] 7.3 Add parser/semantic regression coverage for scope, unreachable code, VLA behavior, and control-flow errors. — `DONE` (see `compiler-core/.../semantics/ControlFlowValidator.kt` and `ControlFlowValidatorTest`)
+- [ ] 7.1 Port ARM/Thumb instruction matrices, unified assembler parsing,
+  VFP/EABI rules, relocations, and register/stack conventions. — `TODO`
+- [ ] 7.2 Port ARM64 instruction selection/encoding, AAPCS64, floating point,
+  atomics, TLS, PIC, Apple, Windows, and ELF platform rules. — `TODO`
+- [ ] 7.3 Validate byte-level outputs and cross-target fixtures with execution
+  where available and deterministic golden checks otherwise. — `TODO`
 
-### 8. Generic IR and code-emission layer — `DONE` (3/3)
+### 8. RISC-V and C67 instruction and ABI support — `TODO` (0/3)
 
-- [x] 8.1 Define a typed intermediate representation for values, memory, calls, branches, symbols, relocations, and debug locations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `IrVerifier.kt`, and `IrModelTest`)
-- [x] 8.2 Port register/stack abstractions, calling-convention hooks, section management, and relocation contracts. — `DONE` (see `compiler-core/.../ir/IrBackendContracts.kt` and `BackendContractsTest`)
-- [x] 8.3 Implement deterministic assembly/object emission interfaces and differential tests against captured C implementation output. — `DONE` (see `compiler-core/.../ir/IrEmitters.kt` and `EmissionTest`)
+- [ ] 8.1 Port RISC-V instruction/assembler tables, RV32/RV64 conventions,
+  atomics, floating point, relocations, and compressed instructions. — `TODO`
+- [ ] 8.2 Port C67 code generation, restrictions, assembler behavior, and COFF
+  integration without reducing target coverage to metadata. — `TODO`
+- [ ] 8.3 Run complete cross-target compile/link fixtures and document only
+  environment-specific execution requirements, never omitted implementation.
+  — `TODO`
 
-### 9. i386 and x86_64 backends — `DONE` (3/3)
+### 9. Object formats, linker, and relocations — `TODO` (0/3)
 
-- [x] 9.1 Port instruction selection, register allocation, ABI handling, prologues/epilogues, and assembler support. — `DONE` (see `compiler-backends/.../x86/X86Backend.kt` and `X86BackendTest`)
-- [x] 9.2 Port x86 floating-point, SSE, atomics, TLS, PIC/PIE, and architecture-specific relocations. — `DONE` (see `compiler-core/.../ir/IrModel.kt`, `compiler-backends/.../x86/X86Backend.kt`, and expanded `X86BackendTest`)
-- [x] 9.3 Pass native i386/x86_64 compile, link, run, ABI, assembler, and self-hosting parity tests. — `DONE` (see `compiler-backends/.../x86/X86MachineCode.kt` and `X86MachineCodeTest`; native smoke uses a Kotlin-built ELF64 image)
+- [ ] 9.1 Implement complete ELF sections, symbols, archives, relocations,
+  dynamic linking, TLS, DWARF/Stabs, and startup rules. — `TODO`
+- [ ] 9.2 Implement complete COFF/PE and Mach-O output, import/export data,
+  DLL/shared-library metadata, and platform relocation behavior. — `TODO`
+- [ ] 9.3 Implement linker scripts, static/shared/PIC modes, symbol resolution,
+  alignment, common symbols, weak symbols, and error diagnostics. — `TODO`
 
-### 10. ARM and ARM64 backends — `DONE` (3/3)
+### 10. Runtime, execution, debugging, and bounds support — `TODO` (0/3)
 
-- [x] 10.1 Port ARM instruction generation, ARM/Thumb ABI choices, VFP/EABI variants, and assembler behavior. — `DONE` (see `compiler-backends/.../arm/ArmBackend.kt` and `ArmBackendTest`)
-- [x] 10.2 Port ARM64 instruction generation, calling convention, floating-point, atomics, and platform ABI details. — `DONE` (see `compiler-backends/.../arm64/Arm64Backend.kt` and `Arm64BackendTest`)
-- [x] 10.3 Validate ARM/ARM64 cross builds and execution where available, including Windows and Apple variants. — `DONE` (see `compiler-backends/.../arm/ArmPlatform.kt` and `ArmPlatformTest`)
+- [ ] 10.1 Port all `libtcc1`, builtin, arithmetic, startup, atomics, varargs,
+  and compiler-runtime helpers as Kotlin/JVM-owned implementations. — `TODO`
+- [ ] 10.2 Implement `-run`, temporary images, environment/exit behavior,
+  symbol registration, in-memory relocation, and execution policies. — `TODO`
+- [ ] 10.3 Implement bounds checking, backtraces, debug metadata, profiling,
+  sanitizer diagnostics, and resource ownership with parity tests. — `TODO`
 
-### 11. RISC-V and C67 backends — `DONE` (3/3)
+### 11. CLI, embedding API, configuration, and distributions — `TODO` (0/3)
 
-- [x] 11.1 Port RISC-V instruction selection, register conventions, relocations, and assembler support. — `DONE` (see `compiler-backends/.../riscv/RiscVBackend.kt` and `RiscVBackendTest`)
-- [x] 11.2 Port C67 code generation, COFF integration, and the target-specific restrictions currently encoded in TCC. — `DONE` (see `compiler-backends/.../c67/C67Backend.kt` and `C67BackendTest`)
-- [x] 11.3 Add cross-target compile/link fixtures and document toolchain/emulator requirements for unavailable hosts. — `DONE` (see `compiler-backends/.../CrossTargetMatrix.kt`, [CROSS-TARGETS.md](CROSS-TARGETS.md), and `CrossTargetMatrixTest`)
+- [ ] 11.1 Implement every historical command-line option, response-file rule,
+  search path, target flag, output mode, warning, and diagnostic format. — `TODO`
+- [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
+  source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`
+- [ ] 11.3 Produce reproducible Gradle/JVM distributions and verify that no
+  legacy source or native payload enters any published artifact. — `TODO`
 
-### 12. Object formats, linker, and native runtime — `DONE` (3/3)
+### 12. Original tests, differential parity, and final cutover — `TODO` (0/3)
 
-- [x] 12.1 Port ELF sections, symbols, relocations, dynamic linking, TLS, DWARF/Stabs metadata, and platform startup rules. — `DONE` (see `compiler-backends/.../elf/ElfWriter.kt` and `ElfWriterTest`)
-- [x] 12.2 Port PE/COFF and Mach-O writers/linking paths, import/export handling, and Windows runtime integration. — `DONE` (see `compiler-backends/.../portable/PortableObjectWriters.kt` and `PortableObjectWriterTest`)
-- [x] 12.3 Port `libtcc1` and assembly/C runtime helpers, then verify static, shared, PIC, and cross-linked programs. — `DONE` (see `compiler-runtime/.../Runtime.kt` and `RuntimeTest`; native dependencies are rejected)
+- [ ] 12.1 Port the restored C, ABI, assembler, VLA, bounds, linker, runtime,
+  library, and platform tests to Gradle-managed Kotlin/JVM execution. — `TODO`
+- [ ] 12.2 Compare Kotlin outputs with captured historical behavior across all
+  targets, options, optimization modes, diagnostics, and malformed inputs. — `TODO`
+- [ ] 12.3 Run clean-checkout release gates, fuzzing, coverage, performance,
+  source audits, and final documentation review before marking completion. — `TODO`
 
-### 13. Execution, bounds checking, debugging, and embedding — `DONE` (3/3)
+## Progress rules
 
-- [x] 13.1 Port `-run`, temporary executable handling, dynamic library loading, environment propagation, and exit behavior. — `DONE` (see `compiler-api/.../execution/Execution.kt` and `ExecutionTest`; native libraries are rejected by the pure Kotlin/JVM boundary)
-- [x] 13.2 Port bounds checking, backtraces, debug information, profiling hooks, and sanitizer-friendly diagnostics. — `DONE` (see `compiler-runtime/.../RuntimeDiagnostics.kt` and `RuntimeTest`)
-- [x] 13.3 Implement and test the Kotlin/JVM embedding API equivalent to `libtcc`, including callbacks and resource ownership. — `DONE` (see `compiler-api/.../embedding/Embedding.kt` and `EmbeddingTest`; the session owns JVM libraries and rejects native loading)
-
-### 14. CLI, configuration, and distributions — `DONE` (3/3)
-
-- [x] 14.1 Port command-line parsing, help/version output, response files, scripts, include/library search paths, and target selection. — `DONE` (see `compiler-cli/.../Cli.kt`, `Main.kt`, and `CliTest`; `-run` is represented as a typed request while backend executable handoff remains explicit)
-- [x] 14.2 Replace shell/Make configuration with typed Gradle and runtime configuration while preserving install and cross-build options. — `DONE` (see `compiler-api/.../config/BuildConfiguration.kt` and `build.gradle.kts`; `verifyPureKotlinArtifact` rejects C/native payloads in JVM archives)
-- [x] 14.3 Produce reproducible JVM distributions, native launcher scripts, Maven-publishable artifacts, and Windows packages. — `DONE` (see reproducible archive settings in `build.gradle.kts` and `compiler-cli:windowsPackage`; generated launchers are JVM shell/`.bat` scripts)
-
-### 15. Full test parity and migration hardening — `DONE` (3/3)
-
-- [x] 15.1 Port the C, ABI, assembler, VLA, bounds, linker, runtime, and library tests to Gradle-managed Kotlin/JVM test execution. — `DONE` (see `compiler-tests/.../ParityMatrixTest.kt`; the matrix requires Kotlin/JVM suites for each captured baseline area)
-- [x] 15.2 Add differential testing against the captured C implementation across supported hosts, targets, and optimization/configuration modes. — `DONE` (see `compiler-tests/.../DifferentialParityTest.kt` and `ArtifactDifferential`; captured preprocessing and object metadata are replayed deterministically)
-- [x] 15.3 Run coverage, sanitization-equivalent JVM checks, fuzzing, performance comparisons, and fix all release-blocking discrepancies. — `DONE` (see `compiler-tests/.../HardeningTest.kt`, JaCoCo configuration, and `verifyPureKotlinArtifact`)
-
-### 16. Cutover, documentation, and C removal — `DONE` (3/3)
-
-- [x] 16.1 Switch default build, tests, examples, CI configuration, and contributor instructions to Gradle/Kotlin/JVM. — `DONE` (see `README`, `.github/workflows/build.yml`, and Gradle/JaCoCo configuration; pre-existing `AGENTS.md` was preserved per repository instruction)
-- [x] 16.2 Update user/API documentation, architecture notes, migration notes, licensing attributions, and release metadata. — `DONE` (see `ARCHITECTURE.md`, `MIGRATION.md`, `RELEASE-METADATA.md`, and `NOTICE`)
-- [x] 16.3 Remove obsolete C build paths only after parity gates pass; perform a clean checkout build and final repository audit. — `DONE` (legacy C/source/header/Make/configure paths removed; `./gradlew clean check` passed all 101 tests; `verifyPureKotlinArtifact` passed; tracked-source audit found no C/native build paths)
-
-### 17. Legacy C artifact quarantine and final pure-JVM cleanup — `DONE` (3/3)
-
-- [x] 17.1 Inventory the working tree for residual C sources, headers, native binaries, generated C build files, and associated directories while explicitly preserving `tests/`. — `DONE` (no tracked C sources remain; ignored native artifacts and empty legacy directories were identified)
-- [x] 17.2 Move residual C/native artifacts and associated legacy directories into `legacy-c/`, without moving or deleting `tests/`. — `DONE` (objects, archives, executable, generated configuration/docs, runtime `lib/`, and empty legacy directories moved; `tests/` remains at the repository root)
-- [x] 17.3 Document the quarantine boundary and verify the Gradle build, test suite, and pure Kotlin/JVM artifact audit after cleanup. — `DONE` (added `legacy-c/README.md`; `./gradlew clean check` passed; no C/native paths remain outside `legacy-c/` and preserved `tests/`)
-
-## Completion Gate
-
-The migration is complete: all 17 tasks and 51 subtasks are `DONE`, a clean Gradle build passes, the ported test suites pass on the supported host, the CLI and embedding API parity gates pass, residual C/native material is quarantined under `legacy-c/`, and the clean-artifact audit proves that no runtime or build path depends on C sources or native TinyCC libraries.
+No task may be marked `DONE` because a class or test exists. It must have
+behavioral evidence covering the complete historical scope named by that task.
+If a feature is not yet implemented, leave it `TODO` or `IN_PROGRESS`; do not
+rename it, hide it behind a facade, or claim compatibility by documentation.
