@@ -62,6 +62,8 @@ object TccTokenIds {
     const val PREPROCESSOR_STRING = 0xCE
     const val LINE_NUMBER = 0xCF
 
+    enum class TargetProfile { I386, I386_PE, X86_64_LINUX, X86_64_PE }
+
     data class KeywordSpec(val kind: TokenKind, val tccId: Int)
 
     /** Base, target-independent keyword IDs from tcctok.h. */
@@ -203,7 +205,39 @@ object TccTokenIds {
         putIfAbsent("alloca", KeywordSpec(TokenKind.IDENTIFIER, 452))
     }
 
-    fun keyword(text: String): KeywordSpec? = allSpecs[text]
+    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? {
+        if (target == TargetProfile.I386 || target == TargetProfile.I386_PE) {
+            when (text) {
+                "__builtin_va_arg_types", "__builtin_va_start", "__builtin_va_arg" -> return null
+                "__fixsfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 450)
+                "__fixdfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 451)
+                "__fixxfdi" -> return KeywordSpec(TokenKind.IDENTIFIER, 452)
+                "alloca" -> return KeywordSpec(TokenKind.IDENTIFIER, 453)
+                "__chkstk" -> if (target == TargetProfile.I386_PE) return KeywordSpec(TokenKind.IDENTIFIER, 454)
+                "__tls_index" -> if (target == TargetProfile.I386_PE) return KeywordSpec(TokenKind.IDENTIFIER, 455)
+            }
+        }
+        if (target == TargetProfile.X86_64_PE && text == "__builtin_va_arg_types") return null
+        if (target == TargetProfile.X86_64_PE) {
+            when (text) {
+                "__builtin_va_start" -> return KeywordSpec(TokenKind.IDENTIFIER, 411)
+                "__chkstk" -> return KeywordSpec(TokenKind.IDENTIFIER, 453)
+                "__tls_index" -> return KeywordSpec(TokenKind.IDENTIFIER, 454)
+            }
+        }
+        val spec = allSpecs[text] ?: return null
+        if (target == TargetProfile.I386 || target == TargetProfile.I386_PE) {
+            return if (spec.tccId >= 412) spec.copy(tccId = spec.tccId - 1) else spec
+        }
+        return spec
+    }
+
+    fun targetProfile(targetTriple: String): TargetProfile = when {
+        targetTriple.startsWith("i386", ignoreCase = true) && targetTriple.contains("windows", ignoreCase = true) -> TargetProfile.I386_PE
+        targetTriple.startsWith("i386", ignoreCase = true) -> TargetProfile.I386
+        targetTriple.startsWith("x86_64", ignoreCase = true) && targetTriple.contains("windows", ignoreCase = true) -> TargetProfile.X86_64_PE
+        else -> TargetProfile.X86_64_LINUX
+    }
 
     fun literalId(literal: LiteralValue): Int = when (literal) {
         is LiteralValue.Character -> if (literal.wide) WIDE_CHARACTER else CHARACTER

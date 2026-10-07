@@ -38,6 +38,16 @@ class EmbeddingTest {
     }
 
     @Test
+    fun selectsX86TokenTableFromCompilationTarget() {
+        KotlinCompilerSession(CompilerOptions(target = "i386-linux")).use { compiler ->
+            val result = compiler.compileString("tokens.c", "__atomic_store __builtin_va_arg_types")
+
+            assertTrue(result.success)
+            assertEquals(listOf(411, 256, -1), result.tokens.map { it.tccId })
+        }
+    }
+
+    @Test
     fun reportsFrontendDiagnosticsThroughCallbacksAndBlocksInvalidOutput() {
         val diagnostics = mutableListOf<String>()
         KotlinCompilerSession().use { compiler ->

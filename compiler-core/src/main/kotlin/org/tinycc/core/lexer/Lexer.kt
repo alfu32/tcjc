@@ -11,6 +11,7 @@ import org.tinycc.core.diagnostics.SourceSpan
 data class LexerOptions(
     val dollarsInIdentifiers: Boolean = true,
     val binaryLiterals: Boolean = true,
+    val tokenTarget: TccTokenIds.TargetProfile = TccTokenIds.TargetProfile.X86_64_LINUX,
 )
 
 /** Lexes one C translation unit while retaining exact source spans. */
@@ -73,7 +74,7 @@ class Lexer(
             }
         }
         val text = source.substring(start, index)
-        val keyword = TccTokenIds.keyword(text)
+        val keyword = TccTokenIds.keyword(text, options.tokenTarget)
         return token(keyword?.kind ?: TokenKind.IDENTIFIER, start, index, tccId = keyword?.tccId)
     }
 

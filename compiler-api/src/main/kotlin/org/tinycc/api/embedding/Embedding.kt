@@ -14,6 +14,7 @@ import org.tinycc.core.diagnostics.DiagnosticSeverity
 import org.tinycc.core.io.SourceFileLoader
 import org.tinycc.core.lexer.Lexer
 import org.tinycc.core.lexer.Token
+import org.tinycc.core.lexer.TccTokenIds
 import org.tinycc.core.preprocessor.Preprocessor
 import org.tinycc.core.preprocessor.PreprocessorOptions
 
@@ -126,7 +127,12 @@ class KotlinCompilerSession(
                 sourceLoader = sourceLoader,
             ),
         ).process()
-        val tokens = Lexer(preprocessed.text, path, diagnostics).tokenize()
+        val tokens = Lexer(
+            preprocessed.text,
+            path,
+            diagnostics,
+            options = org.tinycc.core.lexer.LexerOptions(tokenTarget = TccTokenIds.targetProfile(options.target)),
+        ).tokenize()
         return CompilationResult(sourceName, preprocessed.text, tokens, diagnostics.diagnostics()).also {
             lastCompilation = it
         }

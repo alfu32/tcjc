@@ -79,9 +79,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   comments, character sets, locations, and error recovery. — `IN_PROGRESS`
   (base historical token IDs, literal classes, raw token IDs, hex floats,
   digraphs, line splicing, GNU escapes, and UCN checks exist; full token-table,
-  character-set, and malformed-input parity is not yet demonstrated; corrected
-  default x86_64 Linux VA-builtin/atomic/pragma/runtime-helper order, verified
-  against `tcctok.h`; other target-conditional token layouts remain unverified)
+  character-set, and malformed-input parity is not yet demonstrated; x86
+  Linux/Windows VA-builtin, atomic, pragma, runtime-helper, and alloca token
+  order is verified against `tcctok.h`; other architecture token layouts remain
+  unverified)
 - [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
   includes, pragmas, predefined macros, and line control. — `IN_PROGRESS`
   (many GNU macro and conditional forms are covered, but all platform

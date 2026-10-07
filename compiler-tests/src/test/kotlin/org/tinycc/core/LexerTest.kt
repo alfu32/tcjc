@@ -8,7 +8,9 @@ import org.junit.jupiter.api.Test
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.io.SourceDecoder
 import org.tinycc.core.lexer.Lexer
+import org.tinycc.core.lexer.LexerOptions
 import org.tinycc.core.lexer.LiteralValue
+import org.tinycc.core.lexer.TccTokenIds
 import org.tinycc.core.lexer.TokenKind
 
 class LexerTest {
@@ -86,6 +88,34 @@ class LexerTest {
         ).tokenize()
 
         assertEquals(listOf(411, 412, 427, 428, 429, 434, 435, 438, 450, 451, 452), tokens.dropLast(1).map { it.tccId })
+    }
+
+    @Test
+    fun selectsHistoricalI386TokenIdsAndTargetBuiltins() {
+        val i386 = TccTokenIds.TargetProfile.I386
+        val tokens = Lexer(
+            "__builtin_va_arg_types __atomic_store __atomic_nand_fetch pack memcpy __divdi3 " +
+                "__fixsfdi __fixdfdi __fixxfdi alloca",
+            options = LexerOptions(tokenTarget = i386),
+        ).tokenize()
+
+        assertEquals(listOf(256, 411, 426, 427, 434, 437, 450, 451, 452, 453), tokens.dropLast(1).map { it.tccId })
+        assertEquals(TokenKind.IDENTIFIER, tokens.first().kind)
+    }
+
+    @Test
+    fun preservesWindowsX86TokenConditionals() {
+        val x64 = Lexer(
+            "__builtin_va_start pack __chkstk __tls_index",
+            options = LexerOptions(tokenTarget = TccTokenIds.TargetProfile.X86_64_PE),
+        ).tokenize()
+        val i386 = Lexer(
+            "pack alloca __chkstk __tls_index",
+            options = LexerOptions(tokenTarget = TccTokenIds.TargetProfile.I386_PE),
+        ).tokenize()
+
+        assertEquals(listOf(411, 428, 453, 454), x64.dropLast(1).map { it.tccId })
+        assertEquals(listOf(427, 453, 454, 455), i386.dropLast(1).map { it.tccId })
     }
 
     @Test
