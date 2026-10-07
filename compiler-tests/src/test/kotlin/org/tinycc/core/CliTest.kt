@@ -142,4 +142,33 @@ class CliTest {
             Files.deleteIfExists(include)
         }
     }
+
+    @Test
+    fun aggregatesMultipleSourcesInPreprocessAndTokenModes() {
+        val root = Files.createTempDirectory("tcjc-cli-multi-")
+        val first = root.resolve("first.c")
+        val second = root.resolve("second.c")
+        first.writeText("int first_value;\n")
+        second.writeText("int second_value;\n")
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+
+        try {
+            assertEquals(
+                0,
+                execute(listOf("-E", first.toString(), second.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertEquals("int first_value;\nint second_value;\n", output.toString())
+
+            output.reset()
+            assertEquals(
+                0,
+                execute(listOf("-c", first.toString(), second.toString()), PrintStream(output), PrintStream(errors)),
+            )
+            assertEquals(2, output.toString().lines().count { it == "EOF\t" })
+            assertEquals("", errors.toString())
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
 }

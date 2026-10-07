@@ -4,6 +4,8 @@ import java.io.InputStream
 import java.io.PrintStream
 import java.nio.file.Files
 import org.tinycc.core.BuildInfo
+import org.tinycc.api.embedding.CompilationResult
+import org.tinycc.api.embedding.CompilerOutputType
 import org.tinycc.api.embedding.CompilerOptions
 import org.tinycc.api.embedding.KotlinCompilerSession
 import org.tinycc.core.diagnostics.DiagnosticFormatter
@@ -36,10 +38,6 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
         error.println("tcc-jvm: no input files")
         return 2
     }
-    if (inputs.size > 1) {
-        error.println("tcc-jvm: multiple input units are not supported by this output mode yet")
-        return 2
-    }
     val predefined = options.defines.toMutableMap().apply { options.undefines.forEach(::remove) }
     return try {
         KotlinCompilerSession(
@@ -69,9 +67,12 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
                 error.println("tcc-jvm: -run requires a native executable artifact from the target backend")
                 return 2
             }
-            if (options.outputPath != null) compiler.writeOutput(options.outputPath)
-            else output.write(compiler.outputBytes())
-            if (options.outputPath == null && options.outputType == org.tinycc.api.embedding.CompilerOutputType.TOKENS) {
+            val outputBytes = if (results.size == 1) compiler.outputBytes() else aggregateOutput(results, options.outputType)
+            if (options.outputPath != null) {
+                options.outputPath.toAbsolutePath().normalize().parent?.let(Files::createDirectories)
+                Files.write(options.outputPath, outputBytes)
+            } else output.write(outputBytes)
+            if (options.outputPath == null && options.outputType == CompilerOutputType.TOKENS) {
                 output.println()
             }
             0
@@ -83,3 +84,25 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
 }
 
 private fun inputStreamText(stream: InputStream): String = stream.readBytes().decodeToString()
+
+private fun aggregateOutput(
+    results: List<CompilationResult>,
+    outputType: CompilerOutputType,
+): ByteArray = when (outputType) {
+    CompilerOutputType.PREPROCESSED -> buildString {
+        results.forEach { result ->
+            append(result.preprocessedSource)
+            if (result.preprocessedSource.isNotEmpty() && !result.preprocessedSource.endsWith('\n')) append('\n')
+        }
+    }.encodeToByteArray()
+    CompilerOutputType.TOKENS -> results
+        .flatMap { it.tokens }
+        .joinToString("\n") { token ->
+            buildString {
+                append(token.kind.name)
+                append('\t')
+                append(token.lexeme.replace("\\", "\\\\").replace("\n", "\\n"))
+            }
+        }
+        .encodeToByteArray()
+}
