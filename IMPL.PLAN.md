@@ -129,7 +129,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   calls through function-pointer expressions are now covered; parser-provided
   typedef and tagged-record/enum type names are now accepted in type names;
   specifier permutations, `_Atomic(type)`, and GNU `typeof(type)` type forms
-  are now parsed)
+  are now parsed; TinyCC special floating constants now retain float typing
+  and constant-evaluation semantics)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

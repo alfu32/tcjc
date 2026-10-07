@@ -180,4 +180,13 @@ class ExpressionSemanticsTest {
         assertEquals(CTypes.long, result.type)
         assertEquals(0, diagnostics.errorCount)
     }
+
+    @Test
+    fun assignsTinyCcSpecialFloatingConstantsFloatType() {
+        val analyzer = ExpressionSemanticAnalyzer()
+        for (literal in listOf("__nan__", "__snan__", "__inf__")) {
+            val expression = ExpressionParser(Lexer(literal).tokenize()).parse()
+            assertEquals(CTypes.float, analyzer.analyze(expression).type)
+        }
+    }
 }

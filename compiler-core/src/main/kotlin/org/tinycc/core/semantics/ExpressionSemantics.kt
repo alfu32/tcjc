@@ -35,7 +35,10 @@ class ExpressionSemanticAnalyzer(
     fun analyze(expression: Expression): TypedExpression = when (expression) {
         is Expression.Name -> analyzeName(expression)
         is Expression.Integer -> typed(expression, CTypes.int)
-        is Expression.Floating -> typed(expression, CTypes.double)
+        is Expression.Floating -> typed(
+            expression,
+            if (expression.raw.uppercase() in setOf("NAN", "SNAN", "INF")) CTypes.float else CTypes.double,
+        )
         is Expression.Character -> typed(expression, CTypes.int)
         is Expression.StringLiteral -> typed(expression, CTypes.arrayOf(CTypes.char, expression.value.length.toLong() + 1), ValueCategory.LVALUE)
         is Expression.Invalid -> typed(expression, CType.Error, ValueCategory.INVALID)

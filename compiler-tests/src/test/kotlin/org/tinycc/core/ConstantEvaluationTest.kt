@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import org.tinycc.core.constants.ConstantEvaluator
 import org.tinycc.core.constants.ConstantValue
 import org.tinycc.core.constants.RelocationKind
+import org.tinycc.core.constants.SpecialFloatingKind
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.expressions.ExpressionParser
 import org.tinycc.core.lexer.Lexer
@@ -63,5 +64,21 @@ class ConstantEvaluationTest {
         assertEquals(BigInteger.ONE, assertIs<ConstantValue.Integer>(values[0]).value)
         assertTrue(values[3] is ConstantValue.Zero)
         assertTrue(!diagnostics.hasErrors)
+    }
+
+    @Test
+    fun preservesTinyCcSpecialFloatingConstants() {
+        val evaluator = ConstantEvaluator()
+        val nan = evaluator.evaluate(ExpressionParser(Lexer("__nan__").tokenize()).parse())
+        val signalingNan = evaluator.evaluate(ExpressionParser(Lexer("__snan__").tokenize()).parse())
+        val negativeInfinity = evaluator.evaluate(ExpressionParser(Lexer("-__inf__").tokenize()).parse())
+        val comparison = evaluator.evaluate(ExpressionParser(Lexer("__nan__ != __inf__").tokenize()).parse())
+        val conditional = evaluator.evaluate(ExpressionParser(Lexer("__inf__ ? 3 : 4").tokenize()).parse())
+
+        assertEquals(SpecialFloatingKind.NAN, assertIs<ConstantValue.SpecialFloating>(nan).kind)
+        assertEquals(SpecialFloatingKind.SNAN, assertIs<ConstantValue.SpecialFloating>(signalingNan).kind)
+        assertTrue(assertIs<ConstantValue.SpecialFloating>(negativeInfinity).negative)
+        assertEquals(BigInteger.ONE, assertIs<ConstantValue.Integer>(comparison).value)
+        assertEquals(BigInteger.valueOf(3), assertIs<ConstantValue.Integer>(conditional).value)
     }
 }

@@ -18,11 +18,14 @@ import org.tinycc.core.types.TypeLayout
 
 enum class RelocationKind { ABSOLUTE, PC_RELATIVE, GOT, PLT, TLS, SECTION_RELATIVE }
 
+enum class SpecialFloatingKind { NAN, SNAN, INF }
+
 data class Relocation(val symbol: String, val addend: Long = 0, val kind: RelocationKind = RelocationKind.ABSOLUTE)
 
 sealed interface ConstantValue {
     data class Integer(val value: BigInteger) : ConstantValue
     data class Floating(val value: BigDecimal) : ConstantValue
+    data class SpecialFloating(val kind: SpecialFloatingKind, val negative: Boolean = false) : ConstantValue
     data class Address(val relocation: Relocation) : ConstantValue
     data class Aggregate(val values: List<ConstantValue>) : ConstantValue
     data object Zero : ConstantValue
@@ -40,7 +43,8 @@ class ConstantEvaluator(
     fun evaluate(expression: Expression): ConstantValue = when (expression) {
         is Expression.Integer -> ConstantValue.Integer(expression.value)
         is Expression.Character -> ConstantValue.Integer(BigInteger.valueOf(expression.value.toLong()))
-        is Expression.Floating -> parseFloating(expression.raw)?.let(ConstantValue::Floating)
+        is Expression.Floating -> specialFloating(expression.raw)
+            ?: parseFloating(expression.raw)?.let(ConstantValue::Floating)
             ?: notConstant(expression, "invalid floating constant")
         is Expression.Name, is Expression.StringLiteral -> ConstantValue.NotConstant
         is Expression.Invalid, is Expression.Index, is Expression.Member -> ConstantValue.NotConstant
@@ -58,10 +62,9 @@ class ConstantEvaluator(
         is Expression.Unary -> evaluateUnary(expression)
         is Expression.Binary -> evaluateBinary(expression)
         is Expression.Conditional -> {
-            when (val condition = evaluate(expression.condition)) {
-                is ConstantValue.Integer -> if (condition.value != BigInteger.ZERO) evaluate(expression.whenTrue) else evaluate(expression.whenFalse)
-                else -> notConstant(expression, "conditional expression is not constant")
-            }
+            truthValue(evaluate(expression.condition))?.let {
+                evaluate(if (it) expression.whenTrue else expression.whenFalse)
+            } ?: notConstant(expression, "conditional expression is not constant")
         }
     }
 
@@ -150,9 +153,11 @@ class ConstantEvaluator(
             org.tinycc.core.expressions.UnaryOperator.PLUS -> value
             org.tinycc.core.expressions.UnaryOperator.MINUS -> integer(value)?.let { ConstantValue.Integer(it.negate()) }
                 ?: floating(value)?.let { ConstantValue.Floating(it.negate()) }
+                ?: (value as? ConstantValue.SpecialFloating)?.let { it.copy(negative = !it.negative) }
                 ?: notConstant(expression, "unary operand is not constant")
             org.tinycc.core.expressions.UnaryOperator.LOGICAL_NOT -> integer(value)?.let { bool(it == BigInteger.ZERO) }
                 ?: floating(value)?.let { bool(it.compareTo(BigDecimal.ZERO) == 0) }
+                ?: (value as? ConstantValue.SpecialFloating)?.let { bool(false) }
                 ?: notConstant(expression, "unary operand is not constant")
             org.tinycc.core.expressions.UnaryOperator.BITWISE_NOT -> integer(value)?.let { ConstantValue.Integer(it.not()) } ?: notConstant(expression, "unary operand is not constant")
             org.tinycc.core.expressions.UnaryOperator.DEREFERENCE,
@@ -181,6 +186,9 @@ class ConstantEvaluator(
         val leftInteger = integer(left)
         val rightInteger = integer(right)
         if (leftInteger != null && rightInteger != null) return evaluateIntegerBinary(expression.operator, leftInteger, rightInteger)
+        if (left is ConstantValue.SpecialFloating || right is ConstantValue.SpecialFloating) {
+            return evaluateSpecialFloatingBinary(expression.operator, left, right)
+        }
         val leftFloat = floating(left)
         val rightFloat = floating(right)
         if (leftFloat != null || rightFloat != null) {
@@ -225,6 +233,28 @@ class ConstantEvaluator(
         BinaryOperator.EQUAL -> bool(left.compareTo(right) == 0)
         BinaryOperator.NOT_EQUAL -> bool(left.compareTo(right) != 0)
         else -> ConstantValue.NotConstant
+    }
+
+    private fun evaluateSpecialFloatingBinary(
+        operator: BinaryOperator,
+        left: ConstantValue,
+        right: ConstantValue,
+    ): ConstantValue {
+        val leftValue = floatingDouble(left) ?: integer(left)?.toDouble() ?: return ConstantValue.NotConstant
+        val rightValue = floatingDouble(right) ?: integer(right)?.toDouble() ?: return ConstantValue.NotConstant
+        return when (operator) {
+            BinaryOperator.LESS -> bool(leftValue < rightValue)
+            BinaryOperator.LESS_EQUAL -> bool(leftValue <= rightValue)
+            BinaryOperator.GREATER -> bool(leftValue > rightValue)
+            BinaryOperator.GREATER_EQUAL -> bool(leftValue >= rightValue)
+            BinaryOperator.EQUAL -> bool(leftValue == rightValue)
+            BinaryOperator.NOT_EQUAL -> bool(leftValue != rightValue)
+            BinaryOperator.ADD -> specialOrFloating(leftValue + rightValue)
+            BinaryOperator.SUBTRACT -> specialOrFloating(leftValue - rightValue)
+            BinaryOperator.MULTIPLY -> specialOrFloating(leftValue * rightValue)
+            BinaryOperator.DIVIDE -> specialOrFloating(leftValue / rightValue)
+            else -> ConstantValue.NotConstant
+        }
     }
 
     private fun evaluateAddressBinary(expression: Expression.Binary, left: ConstantValue, right: ConstantValue): ConstantValue {
@@ -344,6 +374,20 @@ class ConstantEvaluator(
         }.getOrNull()
     }
 
+    private fun specialFloating(raw: String): ConstantValue.SpecialFloating? = when (raw.uppercase()) {
+        "NAN", "SNAN" -> ConstantValue.SpecialFloating(
+            if (raw.equals("SNAN", true)) SpecialFloatingKind.SNAN else SpecialFloatingKind.NAN,
+        )
+        "INF" -> ConstantValue.SpecialFloating(SpecialFloatingKind.INF)
+        else -> null
+    }
+
+    private fun specialOrFloating(value: Double): ConstantValue = when {
+        value.isNaN() -> ConstantValue.SpecialFloating(SpecialFloatingKind.NAN)
+        value.isInfinite() -> ConstantValue.SpecialFloating(SpecialFloatingKind.INF, value < 0)
+        else -> ConstantValue.Floating(BigDecimal.valueOf(value))
+    }
+
     private fun pointerElementSize(expression: Expression): Long {
         val type = semanticAnalyzer.analyze(expression).type
         val pointer = canonical(type) as? CType.Pointer ?: return 1
@@ -353,6 +397,22 @@ class ConstantEvaluator(
     private fun integer(value: ConstantValue): BigInteger? = (value as? ConstantValue.Integer)?.value
 
     private fun floating(value: ConstantValue): BigDecimal? = (value as? ConstantValue.Floating)?.value
+
+    private fun floatingDouble(value: ConstantValue): Double? = when (value) {
+        is ConstantValue.Floating -> value.value.toDouble()
+        is ConstantValue.SpecialFloating -> when (value.kind) {
+            SpecialFloatingKind.NAN, SpecialFloatingKind.SNAN -> Double.NaN
+            SpecialFloatingKind.INF -> if (value.negative) Double.NEGATIVE_INFINITY else Double.POSITIVE_INFINITY
+        }
+        else -> null
+    }
+
+    private fun truthValue(value: ConstantValue): Boolean? = when (value) {
+        is ConstantValue.Integer -> value.value != BigInteger.ZERO
+        is ConstantValue.Floating -> value.value.compareTo(BigDecimal.ZERO) != 0
+        is ConstantValue.SpecialFloating -> true
+        else -> null
+    }
 
     private fun integer(value: BigInteger): ConstantValue.Integer = ConstantValue.Integer(value)
 
