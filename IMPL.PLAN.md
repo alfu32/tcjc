@@ -3,9 +3,9 @@
 ## Dashboard
 
 ```text
-Overall: 0/36
+Overall: 1/36
 
-[IN_PROGRESS] [0/3]  1. Source preservation and parity rebaseline
+[IN_PROGRESS] [1/3]  1. Source preservation and parity rebaseline
 [TODO]        [0/3]  2. Lexer, tokens, and preprocessing
 [TODO]        [0/3]  3. Types, declarations, symbols, and constants
 [TODO]        [0/3]  4. Expressions, statements, functions, and semantics
@@ -19,7 +19,7 @@ Overall: 0/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-1.1 — restore the complete historical TinyCC implementation under `legacy-c/`
+1.2 — restore and preserve the original C regression suite under `tests/`
 
 Current milestone:
 M0 — source preservation and parity rebaseline
@@ -60,8 +60,10 @@ run the relevant checks, commit using Conventional Commits, and push to
 
 ### 1. Source preservation and parity rebaseline — `IN_PROGRESS` (0/3)
 
-- [ ] 1.1 Restore every historical TinyCC implementation, header, target,
-  runtime, build, and platform file under `legacy-c/`, excluding tests. — `TODO`
+- [x] 1.1 Restore every historical TinyCC implementation, header, target,
+  runtime, build, and platform file under `legacy-c/`, excluding tests. — `DONE`
+  (restored 61 C/C++ sources, 111 headers, 5 assembly files, platform/runtime
+  support, build files, and associated historical material from `4f0b9e93^`)
 - [ ] 1.2 Restore and preserve the original C regression suite under `tests/`
   without deleting existing fixtures or generated outputs. — `TODO`
 - [ ] 1.3 Produce a module-by-module gap matrix mapping every historical file,
