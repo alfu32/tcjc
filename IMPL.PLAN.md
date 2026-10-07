@@ -3,10 +3,10 @@
 ## Dashboard
 
 ```text
-Overall: 2/36
+Overall: 3/36
 
-[IN_PROGRESS] [2/3]  1. Source preservation and parity rebaseline
-[TODO]        [0/3]  2. Lexer, tokens, and preprocessing
+[DONE]        [3/3]  1. Source preservation and parity rebaseline
+[IN_PROGRESS] [0/3]  2. Lexer, tokens, and preprocessing
 [TODO]        [0/3]  3. Types, declarations, symbols, and constants
 [TODO]        [0/3]  4. Expressions, statements, functions, and semantics
 [TODO]        [0/3]  5. Complete IR, lowering, and optimization
@@ -19,7 +19,7 @@ Overall: 2/36
 [TODO]        [0/3] 12. Original tests, differential parity, and final cutover
 
 Current task:
-1.3 — produce the module-by-module gap matrix
+2.1 — implement exact token numbering, literals, escapes, comments, and locations
 
 Current milestone:
 M0 — source preservation and parity rebaseline
@@ -58,7 +58,7 @@ run the relevant checks, commit using Conventional Commits, and push to
 
 ## Implementation tasks
 
-### 1. Source preservation and parity rebaseline — `IN_PROGRESS` (0/3)
+### 1. Source preservation and parity rebaseline — `DONE` (3/3)
 
 - [x] 1.1 Restore every historical TinyCC implementation, header, target,
   runtime, build, and platform file under `legacy-c/`, excluding tests. — `DONE`
@@ -68,11 +68,12 @@ run the relevant checks, commit using Conventional Commits, and push to
   without deleting existing fixtures or generated outputs. — `DONE`
   (restored 174 C/C++ tests, 4 assembly tests, 354 historical test paths, and
   retained the existing generated fixtures)
-- [ ] 1.3 Produce a module-by-module gap matrix mapping every historical file,
+- [x] 1.3 Produce a module-by-module gap matrix mapping every historical file,
   table, feature, option, target, and test to Kotlin code and parity evidence.
-  — `TODO`
+  — `DONE` (see `MIGRATION.GAP.md`; all current entries remain `PARTIAL` or
+  `MISSING` until complete behavioral evidence exists)
 
-### 2. Lexer, tokens, and preprocessing — `TODO` (0/3)
+### 2. Lexer, tokens, and preprocessing — `IN_PROGRESS` (0/3)
 
 - [ ] 2.1 Implement exact token numbering, identifiers, literals, escapes,
   comments, character sets, locations, and error recovery. — `TODO`
