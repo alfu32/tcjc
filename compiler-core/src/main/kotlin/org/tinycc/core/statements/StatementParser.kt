@@ -184,6 +184,22 @@ class StatementParser(
         var type: CType = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
         while (match(TokenKind.STAR) != null) type = CTypes.pointer(type)
         val name = expect(TokenKind.IDENTIFIER, "declarator name")
+        while (match(TokenKind.LEFT_BRACKET) != null) {
+            val boundStart = index
+            val boundEnd = findDelimiter(TokenKind.RIGHT_BRACKET)
+            val bound = when {
+                boundStart == boundEnd -> org.tinycc.core.types.ArrayBound.Unspecified
+                boundEnd - boundStart == 1 && tokens[boundStart].literal is org.tinycc.core.lexer.LiteralValue.Integer -> {
+                    val literal = tokens[boundStart].literal as org.tinycc.core.lexer.LiteralValue.Integer
+                    org.tinycc.core.types.ArrayBound.Constant(literal.value.longValueExact())
+                }
+                else -> org.tinycc.core.types.ArrayBound.Variable(
+                    tokens.subList(boundStart, boundEnd).joinToString(" ") { it.lexeme },
+                )
+            }
+            type = CType.Array(type, bound)
+            index = (boundEnd + 1).coerceAtMost(end)
+        }
         val initializer = if (match(TokenKind.ASSIGN) != null) {
             val expressionStart = index
             parseExpressionRange(expressionStart, end).also { index = end }

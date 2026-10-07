@@ -46,15 +46,42 @@ class FunctionSemanticValidator(
                     invalid()
                 } else statement.expression?.let { analyzer.analyze(it) }
             }
-            is Statement.Compound -> statement.statements.forEach { walk(it, returnType, analyzer, invalid) }
+            is Statement.Compound -> symbols.withScope(ScopeKind.BLOCK) {
+                statement.statements.forEach { child ->
+                    if (child is Statement.DeclarationStatement) {
+                        symbols.declare(child.declaration, location = child.span.start)
+                    }
+                    walk(child, returnType, analyzer, invalid)
+                }
+            }
             is Statement.If -> {
+                analyzer.analyze(statement.condition)
                 walk(statement.thenBranch, returnType, analyzer, invalid)
                 statement.elseBranch?.let { walk(it, returnType, analyzer, invalid) }
             }
-            is Statement.While -> walk(statement.body, returnType, analyzer, invalid)
-            is Statement.DoWhile -> walk(statement.body, returnType, analyzer, invalid)
-            is Statement.For -> statement.body.let { walk(it, returnType, analyzer, invalid) }
-            is Statement.Switch -> walk(statement.body, returnType, analyzer, invalid)
+            is Statement.While -> {
+                analyzer.analyze(statement.condition)
+                walk(statement.body, returnType, analyzer, invalid)
+            }
+            is Statement.DoWhile -> {
+                walk(statement.body, returnType, analyzer, invalid)
+                analyzer.analyze(statement.condition)
+            }
+            is Statement.For -> symbols.withScope(ScopeKind.BLOCK) {
+                statement.initializer?.let { initializer ->
+                    if (initializer is Statement.DeclarationStatement) {
+                        symbols.declare(initializer.declaration, location = initializer.span.start)
+                    }
+                    walk(initializer, returnType, analyzer, invalid)
+                }
+                statement.condition?.let { analyzer.analyze(it) }
+                statement.update?.let { analyzer.analyze(it) }
+                walk(statement.body, returnType, analyzer, invalid)
+            }
+            is Statement.Switch -> {
+                analyzer.analyze(statement.condition)
+                walk(statement.body, returnType, analyzer, invalid)
+            }
             is Statement.Case -> statement.statements.forEach { walk(it, returnType, analyzer, invalid) }
             is Statement.Default -> statement.statements.forEach { walk(it, returnType, analyzer, invalid) }
             is Statement.Label -> walk(statement.statement, returnType, analyzer, invalid)
