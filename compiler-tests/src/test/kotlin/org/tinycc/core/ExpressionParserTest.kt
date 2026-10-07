@@ -41,6 +41,25 @@ class ExpressionParserTest {
     }
 
     @Test
+    fun parsesPostfixTypeQueriesAndGenericSelections() {
+        val postfix = ExpressionParser(Lexer("value++").tokenize()).parse()
+        assertEquals(org.tinycc.core.expressions.UnaryOperator.POST_INCREMENT, assertIs<Expression.Unary>(postfix).operator)
+        assertIs<Expression.AlignOf>(ExpressionParser(Lexer("_Alignof(long long)").tokenize()).parse())
+        assertIs<Expression.TypeOf>(ExpressionParser(Lexer("typeof(value)").tokenize()).parse())
+
+        val generic = assertIs<Expression.GenericSelection>(
+            ExpressionParser(Lexer("_Generic(value, int: 1, default: 2)").tokenize()).parse(),
+        )
+        assertEquals(2, generic.associations.size)
+        assertTrue(generic.associations.any { it.type == null })
+
+        val statementExpression = assertIs<Expression.StatementExpression>(
+            ExpressionParser(Lexer("({ value + 1; })").tokenize()).parse(),
+        )
+        assertIs<org.tinycc.core.statements.Statement.Compound>(statementExpression.body)
+    }
+
+    @Test
     fun reportsMalformedExpressionAndStillReturnsInvalidNode() {
         val diagnostics = DiagnosticEngine()
         val expression = ExpressionParser(Lexer("a + )", diagnostics = diagnostics).tokenize(), diagnostics).parse()

@@ -112,7 +112,14 @@ run the relevant checks, commit using Conventional Commits, and push to
 ### 4. Expressions, statements, functions, and semantics — `IN_PROGRESS` (0/3)
 
 - [ ] 4.1 Implement the complete expression grammar, conversions, lvalues,
-  pointer arithmetic, compound literals, and GNU/TCC expression extensions. — `TODO`
+  pointer arithmetic, compound literals, and GNU/TCC expression extensions. — `IN_PROGRESS`
+  (implemented postfix operators, lvalue/modifiability and scalar/pointer
+  conversions, pointer arithmetic, compound-literal validation, `_Generic`,
+  `typeof`, `_Alignof`, GNU statement expressions, and core builtins including
+  `__builtin_choose_expr`, `__builtin_constant_p`, `__builtin_expect`, frame/
+  return-address, `alloca`, and `unreachable`; remaining type-aware builtins,
+  label addresses, inline asm expressions, atomics, variadics, and full
+  declarator-aware expression coverage remain open)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

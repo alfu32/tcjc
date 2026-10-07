@@ -2,6 +2,7 @@ package org.tinycc.core.expressions
 
 import java.math.BigInteger
 import org.tinycc.core.diagnostics.SourceSpan
+import org.tinycc.core.statements.Statement
 import org.tinycc.core.types.CType
 
 sealed interface Expression {
@@ -34,9 +35,19 @@ sealed interface Expression {
     data class Member(val receiver: Expression, val name: String, val throughPointer: Boolean, override val span: SourceSpan) : Expression
     data class Cast(val type: CType, val operand: Expression, override val span: SourceSpan) : Expression
     data class SizeOf(val operand: SizeOperand, override val span: SourceSpan) : Expression
+    data class AlignOf(val operand: SizeOperand, override val span: SourceSpan) : Expression
+    data class TypeOf(val operand: SizeOperand, override val span: SourceSpan) : Expression
+    data class GenericSelection(
+        val controlling: Expression,
+        val associations: List<GenericAssociation>,
+        override val span: SourceSpan,
+    ) : Expression
+    data class StatementExpression(val body: Statement, override val span: SourceSpan) : Expression
     data class CompoundLiteral(val type: CType, val initializer: Initializer, override val span: SourceSpan) : Expression
     data class Invalid(override val span: SourceSpan) : Expression
 }
+
+data class GenericAssociation(val type: CType?, val expression: Expression)
 
 sealed interface SizeOperand {
     data class Type(val value: CType) : SizeOperand
@@ -48,7 +59,18 @@ sealed interface Initializer {
     data class ListValue(val values: List<Initializer>) : Initializer
 }
 
-enum class UnaryOperator { PLUS, MINUS, LOGICAL_NOT, BITWISE_NOT, ADDRESS, DEREFERENCE, PRE_INCREMENT, PRE_DECREMENT }
+enum class UnaryOperator {
+    PLUS,
+    MINUS,
+    LOGICAL_NOT,
+    BITWISE_NOT,
+    ADDRESS,
+    DEREFERENCE,
+    PRE_INCREMENT,
+    PRE_DECREMENT,
+    POST_INCREMENT,
+    POST_DECREMENT,
+}
 
 enum class BinaryOperator {
     MULTIPLY, DIVIDE, REMAINDER,

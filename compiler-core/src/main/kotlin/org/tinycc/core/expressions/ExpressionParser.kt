@@ -6,6 +6,7 @@ import org.tinycc.core.diagnostics.SourceSpan
 import org.tinycc.core.lexer.LiteralValue
 import org.tinycc.core.lexer.Token
 import org.tinycc.core.lexer.TokenKind
+import org.tinycc.core.statements.StatementParser
 import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.PrimitiveKind
@@ -134,6 +135,10 @@ class ExpressionParser(
                     val name = expect(TokenKind.IDENTIFIER, "member name")
                     Expression.Member(expression, name.lexeme, true, expression.span.merge(name.span))
                 }
+                match(TokenKind.PLUS_PLUS) != null ->
+                    Expression.Unary(UnaryOperator.POST_INCREMENT, expression, expression.span.merge(previous().span))
+                match(TokenKind.MINUS_MINUS) != null ->
+                    Expression.Unary(UnaryOperator.POST_DECREMENT, expression, expression.span.merge(previous().span))
                 else -> break
             }
         }
@@ -152,6 +157,9 @@ class ExpressionParser(
                 Expression.StringLiteral(value.value, value.wide, token.span)
             }
             TokenKind.LEFT_PAREN -> parseParenthesizedOrCast(token)
+            TokenKind.ALIGNOF -> parseAlignOf(token)
+            TokenKind.TYPEOF -> parseTypeOf(token)
+            TokenKind.GENERIC -> parseGenericSelection(token)
             else -> {
                 error(token, "expression expected")
                 Expression.Invalid(token.span)
@@ -160,6 +168,16 @@ class ExpressionParser(
     }
 
     private fun parseParenthesizedOrCast(open: Token): Expression {
+        if (match(TokenKind.LEFT_BRACE) != null) {
+            val bodyStart = index - 1
+            val closeIndex = findClosingBrace(bodyStart)
+            val bodyTokens = ArrayList<Token>(tokens.subList(bodyStart, closeIndex + 1))
+            bodyTokens += tokens.last()
+            val body = StatementParser(bodyTokens, diagnostics).parse()
+            index = closeIndex + 1
+            val close = expect(TokenKind.RIGHT_PAREN, "')'")
+            return Expression.StatementExpression(body, open.span.merge(close.span))
+        }
         if (isTypeStart(current().kind)) {
             val type = parseTypeName()
             val close = expect(TokenKind.RIGHT_PAREN, "')'")
@@ -174,6 +192,64 @@ class ExpressionParser(
         return expression
     }
 
+    private fun findClosingBrace(open: Int): Int {
+        var depth = 0
+        for (cursor in open until tokens.size) {
+            when (tokens[cursor].kind) {
+                TokenKind.LEFT_BRACE -> depth++
+                TokenKind.RIGHT_BRACE -> {
+                    depth--
+                    if (depth == 0) return cursor
+                }
+                else -> Unit
+            }
+        }
+        error(tokens.last(), "unterminated statement expression")
+        return tokens.lastIndex
+    }
+
+    private fun parseAlignOf(keyword: Token): Expression {
+        val open = expect(TokenKind.LEFT_PAREN, "'('")
+        val operand = parseTypeOrExpressionOperand()
+        val close = expect(TokenKind.RIGHT_PAREN, "')'")
+        return Expression.AlignOf(operand, keyword.span.merge(close.span))
+    }
+
+    private fun parseTypeOf(keyword: Token): Expression {
+        val open = expect(TokenKind.LEFT_PAREN, "'('")
+        val operand = parseTypeOrExpressionOperand()
+        val close = expect(TokenKind.RIGHT_PAREN, "')'")
+        return Expression.TypeOf(operand, keyword.span.merge(close.span))
+    }
+
+    private fun parseTypeOrExpressionOperand(): SizeOperand = if (isTypeStart(current().kind)) {
+        SizeOperand.Type(parseTypeName())
+    } else {
+        SizeOperand.Expression(parseExpression())
+    }
+
+    private fun parseGenericSelection(keyword: Token): Expression {
+        expect(TokenKind.LEFT_PAREN, "'('")
+        val controlling = parseAssignment()
+        expect(TokenKind.COMMA, "','")
+        val associations = ArrayList<GenericAssociation>()
+        var hasDefault = false
+        do {
+            val type = if (match(TokenKind.DEFAULT) != null) {
+                if (hasDefault) error(previous(), "duplicate default association in _Generic")
+                hasDefault = true
+                null
+            } else {
+                if (!isTypeStart(current().kind)) error(current(), "type name expected in _Generic association")
+                parseTypeName()
+            }
+            expect(TokenKind.COLON, "':'")
+            associations += GenericAssociation(type, parseAssignment())
+        } while (match(TokenKind.COMMA) != null && !at(TokenKind.RIGHT_PAREN))
+        val close = expect(TokenKind.RIGHT_PAREN, "')'")
+        return Expression.GenericSelection(controlling, associations, keyword.span.merge(close.span))
+    }
+
     private fun parseInitializerAfterOpenBrace(): Initializer {
         val values = ArrayList<Initializer>()
         if (!at(TokenKind.RIGHT_BRACE)) {
@@ -184,8 +260,7 @@ class ExpressionParser(
     }
 
     private fun parseTypeName(): CType {
-        var qualifiers = TypeQualifiers()
-        if (match(TokenKind.CONST) != null) qualifiers = qualifiers.copy(isConst = true)
+        var qualifiers = parseQualifiers()
         val base = when (take().kind) {
             TokenKind.VOID -> CTypes.void
             TokenKind.CHAR -> CTypes.char
@@ -193,24 +268,55 @@ class ExpressionParser(
             TokenKind.FLOAT -> CTypes.float
             TokenKind.DOUBLE -> CTypes.double
             TokenKind.SHORT -> CType.Primitive(PrimitiveKind.SHORT)
-            TokenKind.LONG -> CType.Primitive(PrimitiveKind.LONG)
-            TokenKind.UNSIGNED -> when {
-                match(TokenKind.SHORT) != null -> CType.Primitive(PrimitiveKind.UNSIGNED_SHORT)
-                match(TokenKind.LONG) != null -> CType.Primitive(PrimitiveKind.UNSIGNED_LONG)
-                else -> CType.Primitive(PrimitiveKind.UNSIGNED_INT)
+            TokenKind.LONG -> when {
+                match(TokenKind.LONG) != null -> CType.Primitive(PrimitiveKind.LONG_LONG)
+                match(TokenKind.DOUBLE) != null -> CType.Primitive(PrimitiveKind.LONG_DOUBLE)
+                else -> CType.Primitive(PrimitiveKind.LONG)
             }
-            TokenKind.SIGNED -> CTypes.int
+            TokenKind.UNSIGNED -> when {
+                match(TokenKind.CHAR) != null -> CTypes.unsignedChar
+                match(TokenKind.SHORT) != null -> CType.Primitive(PrimitiveKind.UNSIGNED_SHORT)
+                match(TokenKind.LONG) != null -> if (match(TokenKind.LONG) != null) CTypes.unsignedLongLong else CTypes.unsignedLong
+                else -> CTypes.unsignedInt
+            }
+            TokenKind.SIGNED -> when {
+                match(TokenKind.CHAR) != null -> CTypes.signedChar
+                match(TokenKind.SHORT) != null -> CType.Primitive(PrimitiveKind.SHORT)
+                match(TokenKind.LONG) != null -> if (match(TokenKind.LONG) != null) CTypes.longLong else CTypes.long
+                else -> CTypes.int
+            }
             TokenKind.INT -> CTypes.int
             else -> CType.Error
         }
         var result: CType = if (qualifiers == TypeQualifiers()) base else CTypes.qualified(base, qualifiers)
-        while (match(TokenKind.STAR) != null) result = CTypes.pointer(result)
+        while (match(TokenKind.STAR) != null) {
+            result = CTypes.pointer(result, parseQualifiers())
+        }
         return result
+    }
+
+    private fun parseQualifiers(): TypeQualifiers {
+        var qualifiers = TypeQualifiers()
+        var parsing = true
+        while (parsing) {
+            qualifiers = when {
+                match(TokenKind.CONST) != null -> qualifiers.copy(isConst = true)
+                match(TokenKind.VOLATILE) != null -> qualifiers.copy(isVolatile = true)
+                match(TokenKind.RESTRICT) != null -> qualifiers.copy(isRestrict = true)
+                match(TokenKind.ATOMIC) != null -> qualifiers.copy(isAtomic = true)
+                else -> {
+                    parsing = false
+                    qualifiers
+                }
+            }
+        }
+        return qualifiers
     }
 
     private fun isTypeStart(kind: TokenKind): Boolean = kind in setOf(
         TokenKind.VOID, TokenKind.CHAR, TokenKind.BOOL, TokenKind.INT, TokenKind.FLOAT, TokenKind.DOUBLE,
         TokenKind.SHORT, TokenKind.LONG, TokenKind.SIGNED, TokenKind.UNSIGNED, TokenKind.CONST,
+        TokenKind.VOLATILE, TokenKind.RESTRICT, TokenKind.ATOMIC,
     )
 
     private fun assignmentOperator(kind: TokenKind): AssignmentOperator? = when (kind) {

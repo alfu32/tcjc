@@ -48,6 +48,10 @@ class ConstantEvaluator(
         is Expression.Assignment -> notConstant(expression, "assignment is not a constant expression")
         is Expression.Cast -> cast(expression.type, evaluate(expression.operand), expression)
         is Expression.SizeOf -> evaluateSizeOf(expression)
+        is Expression.AlignOf -> evaluateAlignOf(expression)
+        is Expression.TypeOf -> notConstant(expression, "typeof does not produce a runtime value")
+        is Expression.GenericSelection -> evaluateGeneric(expression)
+        is Expression.StatementExpression -> notConstant(expression, "statement expression is not a constant expression")
         is Expression.Unary -> evaluateUnary(expression)
         is Expression.Binary -> evaluateBinary(expression)
         is Expression.Conditional -> {
@@ -111,6 +115,8 @@ class ConstantEvaluator(
             org.tinycc.core.expressions.UnaryOperator.DEREFERENCE,
             org.tinycc.core.expressions.UnaryOperator.PRE_INCREMENT,
             org.tinycc.core.expressions.UnaryOperator.PRE_DECREMENT,
+            org.tinycc.core.expressions.UnaryOperator.POST_INCREMENT,
+            org.tinycc.core.expressions.UnaryOperator.POST_DECREMENT,
             -> notConstant(expression, "operator is not permitted in a constant expression")
             org.tinycc.core.expressions.UnaryOperator.ADDRESS -> error("unreachable")
         }
@@ -206,6 +212,23 @@ class ConstantEvaluator(
         }
         return layout.sizeOf(type)?.let { integer(BigInteger.valueOf(it)) }
             ?: notConstant(expression, "sizeof operand has no compile-time size")
+    }
+
+    private fun evaluateAlignOf(expression: Expression.AlignOf): ConstantValue {
+        val type = when (val operand = expression.operand) {
+            is SizeOperand.Type -> operand.value
+            is SizeOperand.Expression -> semanticAnalyzer.analyze(operand.value).type
+        }
+        return layout.alignmentOf(type)?.let { integer(BigInteger.valueOf(it)) }
+            ?: notConstant(expression, "alignof operand has no compile-time alignment")
+    }
+
+    private fun evaluateGeneric(expression: Expression.GenericSelection): ConstantValue {
+        val controllingType = semanticAnalyzer.analyze(expression.controlling).type
+        val selected = expression.associations.firstOrNull { it.type != null && CTypes.compatible(it.type, controllingType) }
+            ?: expression.associations.firstOrNull { it.type == null }
+        return selected?.let { evaluate(it.expression) }
+            ?: notConstant(expression, "_Generic has no matching association")
     }
 
     private fun initializerElementTypes(type: CType, count: Int): List<CType>? = when (val canonical = canonical(type)) {

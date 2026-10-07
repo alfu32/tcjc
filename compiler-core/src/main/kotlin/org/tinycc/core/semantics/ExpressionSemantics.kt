@@ -2,10 +2,14 @@ package org.tinycc.core.semantics
 
 import org.tinycc.core.diagnostics.DiagnosticEngine
 import org.tinycc.core.diagnostics.SourceLocation
+import org.tinycc.core.constants.ConstantEvaluator
+import org.tinycc.core.constants.ConstantValue
 import org.tinycc.core.expressions.BinaryOperator
 import org.tinycc.core.expressions.Expression
 import org.tinycc.core.expressions.Initializer
 import org.tinycc.core.expressions.SizeOperand
+import org.tinycc.core.expressions.AssignmentOperator
+import org.tinycc.core.statements.Statement
 import org.tinycc.core.symbols.SymbolTable
 import org.tinycc.core.types.ArrayBound
 import org.tinycc.core.types.CTypes
@@ -39,9 +43,20 @@ class ExpressionSemanticAnalyzer(
         is Expression.Call -> analyzeCall(expression)
         is Expression.Index -> analyzeIndex(expression)
         is Expression.Member -> analyzeMember(expression)
-        is Expression.Cast -> typed(expression, expression.type)
+        is Expression.Cast -> {
+            analyze(expression.operand)
+            typed(expression, expression.type)
+        }
         is Expression.SizeOf -> typed(expression, CTypes.unsignedLong)
-        is Expression.CompoundLiteral -> typed(expression, expression.type, ValueCategory.LVALUE)
+        is Expression.AlignOf -> typed(expression, CTypes.unsignedLong)
+        is Expression.TypeOf -> typed(expression, operandType(expression.operand))
+        is Expression.GenericSelection -> analyzeGeneric(expression)
+        is Expression.StatementExpression -> analyzeStatementExpression(expression)
+        is Expression.CompoundLiteral -> if (analyzeInitializer(expression.initializer, expression.type)) {
+            typed(expression, expression.type, ValueCategory.LVALUE)
+        } else {
+            typed(expression, CType.Error, ValueCategory.INVALID)
+        }
     }
 
     fun analyzeInitializer(initializer: Initializer, expected: CType): Boolean = when (initializer) {
@@ -50,15 +65,29 @@ class ExpressionSemanticAnalyzer(
             requireCompatible(expected, decay(actual), initializer.expression.span.start, "initializer")
         }
         is Initializer.ListValue -> {
-            val element = when (val type = canonical(expected)) {
-                is CType.Array -> type.element
-                is CType.Record -> null
-                else -> null
+            when (val type = canonical(expected)) {
+                is CType.Array -> {
+                    val tooMany = type.bound is ArrayBound.Constant && initializer.values.size > type.bound.length
+                    if (tooMany) diagnostics.error(SourceLocation(), "too many initializers for array")
+                    initializer.values.take(type.bound.boundAsCount(initializer.values.size)).all {
+                        analyzeInitializer(it, type.element)
+                    } && !tooMany
+                }
+                is CType.Record -> {
+                    if (initializer.values.size > type.fields.size) {
+                        diagnostics.error(SourceLocation(), "too many initializers for record")
+                        false
+                    } else initializer.values.mapIndexed { index, value ->
+                        analyzeInitializer(value, type.fields[index].type)
+                    }.all { it }
+                }
+                else -> if (initializer.values.size == 1) {
+                    analyzeInitializer(initializer.values.single(), expected)
+                } else {
+                    diagnostics.error(SourceLocation(), "initializer list requires an aggregate type")
+                    false
+                }
             }
-            if (element == null) {
-                diagnostics.error(SourceLocation(), "initializer list requires an aggregate type")
-                false
-            } else initializer.values.all { analyzeInitializer(it, element) }
         }
     }
 
@@ -78,6 +107,9 @@ class ExpressionSemanticAnalyzer(
         return when (expression.operator) {
             org.tinycc.core.expressions.UnaryOperator.ADDRESS -> {
                 if (operand.category !in setOf(ValueCategory.LVALUE, ValueCategory.FUNCTION_DESIGNATOR)) error(expression, "address-of requires an lvalue")
+                if (expression.operand is Expression.Member && isBitField(expression.operand)) {
+                    error(expression, "address-of cannot be applied to a bit-field")
+                }
                 typed(expression, CTypes.pointer(operand.type))
             }
             org.tinycc.core.expressions.UnaryOperator.DEREFERENCE -> {
@@ -87,14 +119,19 @@ class ExpressionSemanticAnalyzer(
                     typed(expression, CType.Error, ValueCategory.INVALID)
                 } else typed(expression, pointee, ValueCategory.LVALUE)
             }
-            org.tinycc.core.expressions.UnaryOperator.LOGICAL_NOT -> typed(expression, CTypes.int)
-            org.tinycc.core.expressions.UnaryOperator.BITWISE_NOT,
+            org.tinycc.core.expressions.UnaryOperator.LOGICAL_NOT ->
+                if (isScalar(canonical)) typed(expression, CTypes.int) else invalid(expression, "logical not requires a scalar operand")
+            org.tinycc.core.expressions.UnaryOperator.BITWISE_NOT ->
+                if (isInteger(canonical)) typed(expression, canonical) else invalid(expression, "bitwise not requires an integer operand")
             org.tinycc.core.expressions.UnaryOperator.PLUS,
             org.tinycc.core.expressions.UnaryOperator.MINUS,
             -> if (isArithmetic(canonical)) typed(expression, canonical) else invalid(expression, "unary operator requires an arithmetic operand")
             org.tinycc.core.expressions.UnaryOperator.PRE_INCREMENT,
             org.tinycc.core.expressions.UnaryOperator.PRE_DECREMENT,
-            -> if (operand.category == ValueCategory.LVALUE && isArithmetic(canonical)) typed(expression, operand.type) else invalid(expression, "increment/decrement requires an arithmetic lvalue")
+            org.tinycc.core.expressions.UnaryOperator.POST_INCREMENT,
+            org.tinycc.core.expressions.UnaryOperator.POST_DECREMENT,
+            -> if (isModifiableLvalue(operand) && (isArithmetic(canonical) || canonical is CType.Pointer)) typed(expression, operand.type)
+            else invalid(expression, "increment/decrement requires a modifiable arithmetic or pointer lvalue")
         }
     }
 
@@ -106,15 +143,18 @@ class ExpressionSemanticAnalyzer(
         return when (expression.operator) {
             BinaryOperator.COMMA -> typed(expression, rightType)
             BinaryOperator.LOGICAL_AND, BinaryOperator.LOGICAL_OR,
+            -> if (isScalar(leftType) && isScalar(rightType)) typed(expression, CTypes.int) else invalid(expression, "logical operator requires scalar operands")
             BinaryOperator.LESS, BinaryOperator.LESS_EQUAL, BinaryOperator.GREATER, BinaryOperator.GREATER_EQUAL,
             BinaryOperator.EQUAL, BinaryOperator.NOT_EQUAL,
             -> if (comparable(leftType, rightType)) typed(expression, CTypes.int) else invalid(expression, "incompatible comparison operands")
             BinaryOperator.ADD -> pointerArithmetic(expression, leftType, rightType, subtract = false)
             BinaryOperator.SUBTRACT -> pointerArithmetic(expression, leftType, rightType, subtract = true)
-            BinaryOperator.MULTIPLY, BinaryOperator.DIVIDE, BinaryOperator.REMAINDER,
-            BinaryOperator.SHIFT_LEFT, BinaryOperator.SHIFT_RIGHT,
-            BinaryOperator.BITWISE_AND, BinaryOperator.BITWISE_XOR, BinaryOperator.BITWISE_OR,
+            BinaryOperator.MULTIPLY, BinaryOperator.DIVIDE,
             -> if (isArithmetic(leftType) && isArithmetic(rightType)) typed(expression, commonArithmetic(leftType, rightType)) else invalid(expression, "binary operator requires arithmetic operands")
+            BinaryOperator.REMAINDER,
+            BinaryOperator.BITWISE_AND, BinaryOperator.BITWISE_XOR, BinaryOperator.BITWISE_OR,
+            BinaryOperator.SHIFT_LEFT, BinaryOperator.SHIFT_RIGHT,
+            -> if (isInteger(leftType) && isInteger(rightType)) typed(expression, commonArithmetic(leftType, rightType)) else invalid(expression, "integer operands are required")
         }
     }
 
@@ -133,25 +173,53 @@ class ExpressionSemanticAnalyzer(
     }
 
     private fun analyzeConditional(expression: Expression.Conditional): TypedExpression {
-        analyze(expression.condition)
+        val condition = analyze(expression.condition)
+        if (!isScalar(canonical(decay(condition)))) error(expression.condition, "conditional condition requires a scalar operand")
         val whenTrue = analyze(expression.whenTrue)
         val whenFalse = analyze(expression.whenFalse)
         val trueType = canonical(decay(whenTrue))
         val falseType = canonical(decay(whenFalse))
-        return if (CTypes.compatible(trueType, falseType)) typed(expression, trueType)
-        else if (isArithmetic(trueType) && isArithmetic(falseType)) typed(expression, commonArithmetic(trueType, falseType))
-        else invalid(expression, "conditional operands have incompatible types")
+        return when {
+            CTypes.compatible(trueType, falseType) -> typed(expression, trueType)
+            isArithmetic(trueType) && isArithmetic(falseType) -> typed(expression, commonArithmetic(trueType, falseType))
+            trueType is CType.Pointer && falseType is CType.Pointer && comparable(trueType, falseType) -> typed(expression, trueType)
+            trueType is CType.Pointer && isNullPointerConstant(expression.whenFalse) -> typed(expression, trueType)
+            falseType is CType.Pointer && isNullPointerConstant(expression.whenTrue) -> typed(expression, falseType)
+            else -> invalid(expression, "conditional operands have incompatible types")
+        }
     }
 
     private fun analyzeAssignment(expression: Expression.Assignment): TypedExpression {
         val target = analyze(expression.target)
         val value = analyze(expression.value)
-        if (target.category != ValueCategory.LVALUE) return invalid(expression, "assignment target is not an lvalue")
-        if (!requireCompatible(target.type, decay(value), expression.value.span.start, "assignment")) return typed(expression, target.type)
+        if (!isModifiableLvalue(target)) return invalid(expression, "assignment target is not an lvalue or is not modifiable")
+        val actual = decay(value)
+        val valid = if (expression.operator == AssignmentOperator.ASSIGN) {
+            requireCompatible(target.type, actual, expression.value.span.start, "assignment")
+        } else {
+            val targetType = canonical(decay(target))
+            val valueType = canonical(actual)
+            val validOperator = when (expression.operator) {
+                AssignmentOperator.ADD, AssignmentOperator.SUBTRACT ->
+                    (isArithmetic(targetType) && isArithmetic(valueType)) || targetType is CType.Pointer && isInteger(valueType)
+                AssignmentOperator.MULTIPLY, AssignmentOperator.DIVIDE -> isArithmetic(targetType) && isArithmetic(valueType)
+                AssignmentOperator.REMAINDER, AssignmentOperator.AND, AssignmentOperator.OR,
+                AssignmentOperator.XOR, AssignmentOperator.SHIFT_LEFT, AssignmentOperator.SHIFT_RIGHT ->
+                    isInteger(targetType) && isInteger(valueType)
+                AssignmentOperator.ASSIGN -> true
+            }
+            if (!validOperator) error(expression, "invalid operands for compound assignment")
+            validOperator
+        }
+        if (!valid) return typed(expression, target.type)
         return typed(expression, target.type)
     }
 
     private fun analyzeCall(expression: Expression.Call): TypedExpression {
+        val builtin = (expression.callee as? Expression.Name)?.identifier?.let {
+            analyzeBuiltinCall(expression, it)
+        }
+        if (builtin != null) return builtin
         val callee = canonical(decay(analyze(expression.callee)))
         val function = when (callee) {
             is CType.Function -> callee
@@ -169,6 +237,54 @@ class ExpressionSemanticAnalyzer(
             function.parameters.getOrNull(index)?.let { requireCompatible(it.type, decay(actual), argument.span.start, "argument") }
         }
         return typed(expression, function.returnType)
+    }
+
+    private fun analyzeBuiltinCall(expression: Expression.Call, name: String): TypedExpression? = when (name) {
+        "__builtin_constant_p" -> {
+            requireArgumentCount(expression, 1, name)
+            expression.arguments.firstOrNull()?.let(::analyze)
+            typed(expression, CTypes.int)
+        }
+        "__builtin_expect" -> {
+            requireArgumentCount(expression, 2, name)
+            val value = expression.arguments.firstOrNull()?.let(::analyze) ?: return invalid(expression, "$name requires a value")
+            expression.arguments.getOrNull(1)?.let { expected ->
+                if (!isScalar(canonical(decay(analyze(expected))))) error(expected, "$name expectation must be scalar")
+            }
+            typed(expression, value.type, value.category)
+        }
+        "__builtin_choose_expr" -> {
+            requireArgumentCount(expression, 3, name)
+            val condition = expression.arguments.firstOrNull()?.let { ConstantEvaluator(diagnostics, symbols).evaluate(it) }
+            val selected = when (condition) {
+                is ConstantValue.Integer -> if (condition.value.signum() != 0) expression.arguments.getOrNull(1) else expression.arguments.getOrNull(2)
+                else -> null
+            }
+            if (selected == null) invalid(expression, "$name requires an integer constant condition")
+            else {
+                val result = analyze(selected)
+                typed(expression, result.type, result.category)
+            }
+        }
+        "__builtin_unreachable" -> {
+            requireArgumentCount(expression, 0, name)
+            typed(expression, CTypes.void)
+        }
+        "__builtin_frame_address", "__builtin_return_address" -> {
+            requireArgumentCount(expression, 1, name)
+            expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name level must be an integer") }
+            typed(expression, CTypes.pointer(CTypes.void))
+        }
+        "alloca", "__builtin_alloca" -> {
+            requireArgumentCount(expression, 1, name)
+            expression.arguments.firstOrNull()?.let { if (!isInteger(canonical(decay(analyze(it))))) error(it, "$name size must be an integer") }
+            typed(expression, CTypes.pointer(CTypes.void))
+        }
+        else -> null
+    }
+
+    private fun requireArgumentCount(expression: Expression.Call, expected: Int, name: String) {
+        if (expression.arguments.size != expected) error(expression, "$name expects $expected argument(s)")
     }
 
     private fun analyzeIndex(expression: Expression.Index): TypedExpression {
@@ -192,6 +308,32 @@ class ExpressionSemanticAnalyzer(
         return typed(expression, field.type, ValueCategory.LVALUE)
     }
 
+    private fun analyzeGeneric(expression: Expression.GenericSelection): TypedExpression {
+        val controllingType = canonical(decay(analyze(expression.controlling)))
+        val selected = expression.associations.firstOrNull { it.type != null && CTypes.compatible(it.type, controllingType) }
+            ?: expression.associations.firstOrNull { it.type == null }
+        if (selected == null) return invalid(expression, "_Generic has no matching association")
+        val result = analyze(selected.expression)
+        return typed(expression, result.type, result.category)
+    }
+
+    private fun analyzeStatementExpression(expression: Expression.StatementExpression): TypedExpression {
+        val last = when (val body = expression.body) {
+            is Statement.ExpressionStatement -> body.expression
+            is Statement.Compound -> (body.statements.lastOrNull() as? Statement.ExpressionStatement)?.expression
+            else -> null
+        }
+        return if (last == null) typed(expression, CTypes.void) else {
+            val result = analyze(last)
+            typed(expression, result.type, result.category)
+        }
+    }
+
+    private fun operandType(operand: SizeOperand): CType = when (operand) {
+        is SizeOperand.Type -> operand.value
+        is SizeOperand.Expression -> analyze(operand.value).type
+    }
+
     private fun decay(value: TypedExpression): CType = when (val type = canonical(value.type)) {
         is CType.Array -> CTypes.pointer(type.element)
         is CType.Function -> CTypes.pointer(type)
@@ -212,10 +354,11 @@ class ExpressionSemanticAnalyzer(
 
     private fun comparable(left: CType, right: CType): Boolean =
         CTypes.compatible(left, right) || isArithmetic(left) && isArithmetic(right) ||
-            left is CType.Pointer && right is CType.Pointer
+            left is CType.Pointer && right is CType.Pointer && pointerCompatible(left, right)
 
     private fun isArithmetic(type: CType): Boolean = when (val value = canonical(type)) {
         is CType.Primitive -> value.kind != PrimitiveKind.VOID
+        is CType.Enumeration -> true
         else -> false
     }
 
@@ -225,7 +368,41 @@ class ExpressionSemanticAnalyzer(
             PrimitiveKind.SHORT, PrimitiveKind.UNSIGNED_SHORT, PrimitiveKind.INT, PrimitiveKind.UNSIGNED_INT,
             PrimitiveKind.LONG, PrimitiveKind.UNSIGNED_LONG, PrimitiveKind.LONG_LONG, PrimitiveKind.UNSIGNED_LONG_LONG,
         )
+        is CType.Enumeration -> true
         else -> false
+    }
+
+    private fun isScalar(type: CType): Boolean = isArithmetic(type) || canonical(type) is CType.Pointer
+
+    private fun isModifiableLvalue(value: TypedExpression): Boolean =
+        value.category == ValueCategory.LVALUE && canonical(value.type) !is CType.Array && !isConstQualified(value.type)
+
+    private fun isConstQualified(type: CType): Boolean = when (type) {
+        is CType.Qualified -> type.qualifiers.isConst || isConstQualified(type.base)
+        is CType.Typedef -> isConstQualified(type.target)
+        else -> false
+    }
+
+    private fun pointerCompatible(left: CType.Pointer, right: CType.Pointer): Boolean {
+        if (CTypes.compatible(left.pointee, right.pointee)) return true
+        val leftPointee = canonical(left.pointee)
+        val rightPointee = canonical(right.pointee)
+        return leftPointee is CType.Primitive && leftPointee.kind == PrimitiveKind.VOID && rightPointee !is CType.Function ||
+            rightPointee is CType.Primitive && rightPointee.kind == PrimitiveKind.VOID && leftPointee !is CType.Function
+    }
+
+    private fun isNullPointerConstant(expression: Expression): Boolean =
+        expression is Expression.Integer && expression.value.signum() == 0
+
+    private fun ArrayBound.boundAsCount(initializerCount: Int): Int = when (this) {
+        is ArrayBound.Constant -> length.toInt().coerceAtMost(initializerCount)
+        ArrayBound.Flexible, ArrayBound.Unspecified, is ArrayBound.Variable -> initializerCount
+    }
+
+    private fun isBitField(expression: Expression.Member): Boolean {
+        val receiver = canonical(analyze(expression.receiver).type)
+        val record = if (expression.throughPointer) (receiver as? CType.Pointer)?.pointee else receiver
+        return (canonical(record ?: CType.Error) as? CType.Record)?.fields?.firstOrNull { it.name == expression.name }?.bitWidth != null
     }
 
     private fun isUnsigned(kind: PrimitiveKind): Boolean = kind.name.startsWith("UNSIGNED")
@@ -262,8 +439,17 @@ class ExpressionSemanticAnalyzer(
     }
 
     private fun requireCompatible(expected: CType, actual: CType, location: SourceLocation, context: String): Boolean {
-        if (CTypes.compatible(expected, actual)) return true
+        if (assignable(expected, actual)) return true
         diagnostics.error(location, "incompatible $context: expected $expected, got $actual")
+        return false
+    }
+
+    private fun assignable(expected: CType, actual: CType): Boolean {
+        if (CTypes.compatible(expected, actual)) return true
+        val expectedType = canonical(expected)
+        val actualType = canonical(actual)
+        if (isArithmetic(expectedType) && isArithmetic(actualType)) return true
+        if (expectedType is CType.Pointer && actualType is CType.Pointer) return pointerCompatible(expectedType, actualType)
         return false
     }
 
