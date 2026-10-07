@@ -121,8 +121,9 @@ run the relevant checks, commit using Conventional Commits, and push to
   queries, label addresses, and atomic builtin families; remaining
   designated initializer AST/validation and aggregate placement, abstract
   array compound literals, and `__builtin_offsetof` are now covered; inline-asm
-  expressions/statements, target-specific atomic and variadic lowering, and
-  full declarator-aware expression coverage remain open)
+  templates/statements with constraint validation are now covered; target-
+  specific atomic and variadic lowering, global asm, and full
+  declarator-aware expression coverage remain open)
 - [ ] 4.2 Implement declarations in blocks, control flow, labels, switches,
   VLA cleanup, function definitions, variadics, nested functions, and returns.
   — `TODO`

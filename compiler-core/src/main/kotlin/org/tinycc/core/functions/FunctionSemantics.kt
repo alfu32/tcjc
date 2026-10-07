@@ -86,7 +86,44 @@ class FunctionSemanticValidator(
             is Statement.Default -> statement.statements.forEach { walk(it, returnType, analyzer, invalid) }
             is Statement.Label -> walk(statement.statement, returnType, analyzer, invalid)
             is Statement.ExpressionStatement -> analyzer.analyze(statement.expression)
+            is Statement.InlineAssembly -> validateInlineAssembly(statement, analyzer, invalid)
             else -> Unit
+        }
+    }
+
+    private fun validateInlineAssembly(
+        statement: Statement.InlineAssembly,
+        analyzer: ExpressionSemanticAnalyzer,
+        invalid: () -> Unit,
+    ) {
+        if (statement.template.isBlank() && statement.outputs.isEmpty() && statement.inputs.isEmpty()) {
+            diagnostics.error(statement.span.start, "inline assembly requires a template or operands")
+            invalid()
+        }
+        statement.outputs.forEach { operand ->
+            if (operand.constraint.isBlank()) {
+                diagnostics.error(statement.span.start, "inline assembly output constraint must not be empty")
+                invalid()
+            }
+            val expression = operand.expression
+            if (expression == null) {
+                diagnostics.error(statement.span.start, "inline assembly output requires an expression")
+                invalid()
+            } else if (analyzer.analyze(expression).category != org.tinycc.core.semantics.ValueCategory.LVALUE) {
+                diagnostics.error(expression.span.start, "inline assembly output requires an lvalue")
+                invalid()
+            }
+        }
+        statement.inputs.forEach { operand ->
+            if (operand.constraint.isBlank()) {
+                diagnostics.error(statement.span.start, "inline assembly input constraint must not be empty")
+                invalid()
+            }
+            operand.expression?.let { analyzer.analyze(it) }
+        }
+        if (statement.clobbers.any { it.isBlank() }) {
+            diagnostics.error(statement.span.start, "inline assembly clobber must not be empty")
+            invalid()
         }
     }
 }

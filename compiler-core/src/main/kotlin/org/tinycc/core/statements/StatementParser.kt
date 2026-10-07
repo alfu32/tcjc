@@ -6,6 +6,7 @@ import org.tinycc.core.expressions.Expression
 import org.tinycc.core.expressions.ExpressionParser
 import org.tinycc.core.lexer.Token
 import org.tinycc.core.lexer.TokenKind
+import org.tinycc.core.lexer.LiteralValue
 import org.tinycc.core.types.CTypes
 import org.tinycc.core.types.CType
 import org.tinycc.core.types.ObjectDeclaration
@@ -39,6 +40,7 @@ class StatementParser(
         at(TokenKind.CONTINUE) -> parseSimpleJump { Statement.Continue(it) }
         at(TokenKind.RETURN) -> parseReturn()
         at(TokenKind.GOTO) -> parseGoto()
+        at(TokenKind.ASM) -> parseInlineAssembly()
         at(TokenKind.IDENTIFIER) && peek(1).kind == TokenKind.COLON -> parseLabel()
         isDeclarationStart(current().kind) -> parseDeclarationStatement()
         else -> parseExpressionStatement()
@@ -143,6 +145,55 @@ class StatementParser(
         val label = expect(TokenKind.IDENTIFIER, "label")
         val semicolon = expect(TokenKind.SEMICOLON, "';'")
         return Statement.Goto(label.lexeme, keyword.span.merge(semicolon.span))
+    }
+
+    private fun parseInlineAssembly(): Statement.InlineAssembly {
+        val keyword = expect(TokenKind.ASM, "'asm'")
+        val isVolatile = match(TokenKind.VOLATILE) != null
+        expect(TokenKind.LEFT_PAREN, "'('")
+        val templateToken = expect(TokenKind.STRING_LITERAL, "assembly template")
+        val template = (templateToken.literal as? LiteralValue.StringValue)?.value ?: templateToken.lexeme
+        val sections = arrayOf(ArrayList<AsmOperand>(), ArrayList<AsmOperand>())
+        val clobbers = ArrayList<String>()
+        var section = 0
+        while (!at(TokenKind.RIGHT_PAREN) && !at(TokenKind.EOF)) {
+            if (match(TokenKind.COLON) != null) {
+                section++
+                if (section > 3) diagnostics.error(current().span.start, "too many inline assembly sections")
+                continue
+            }
+            if (section >= 3) {
+                val clobber = expect(TokenKind.STRING_LITERAL, "clobber string")
+                clobbers += (clobber.literal as? LiteralValue.StringValue)?.value ?: clobber.lexeme
+            } else {
+                val operand = parseAsmOperand()
+                sections[(section - 1).coerceIn(0, 1)] += operand
+            }
+            if (match(TokenKind.COMMA) == null && !at(TokenKind.RIGHT_PAREN) && !at(TokenKind.COLON)) {
+                diagnostics.error(current().span.start, "',' or ')' expected in inline assembly")
+                break
+            }
+        }
+        val close = expect(TokenKind.RIGHT_PAREN, "')'")
+        val semicolon = expect(TokenKind.SEMICOLON, "';'")
+        return Statement.InlineAssembly(template, sections[0], sections[1], clobbers, isVolatile, keyword.span.merge(semicolon.span))
+    }
+
+    private fun parseAsmOperand(): AsmOperand {
+        if (match(TokenKind.LEFT_BRACKET) != null) {
+            expect(TokenKind.IDENTIFIER, "operand name")
+            expect(TokenKind.RIGHT_BRACKET, "']'")
+        }
+        val constraintToken = expect(TokenKind.STRING_LITERAL, "operand constraint")
+        val constraint = (constraintToken.literal as? LiteralValue.StringValue)?.value ?: constraintToken.lexeme
+        val expression = if (match(TokenKind.LEFT_PAREN) != null) {
+            val start = index
+            val end = findDelimiter(TokenKind.RIGHT_PAREN)
+            val parsed = parseExpressionRange(start, end)
+            index = (end + 1).coerceAtMost(tokens.lastIndex)
+            parsed
+        } else null
+        return AsmOperand(constraint, expression)
     }
 
     private fun parseLabel(): Statement {

@@ -10,6 +10,14 @@ sealed interface Statement {
     data class Empty(override val span: SourceSpan) : Statement
     data class ExpressionStatement(val expression: Expression, override val span: SourceSpan) : Statement
     data class DeclarationStatement(val declaration: ObjectDeclaration, override val span: SourceSpan) : Statement
+    data class InlineAssembly(
+        val template: String,
+        val outputs: List<AsmOperand>,
+        val inputs: List<AsmOperand>,
+        val clobbers: List<String>,
+        val isVolatile: Boolean,
+        override val span: SourceSpan,
+    ) : Statement
     data class Compound(val statements: List<Statement>, override val span: SourceSpan) : Statement
     data class If(
         val condition: Expression,
@@ -36,3 +44,5 @@ sealed interface Statement {
     data class Label(val label: String, val statement: Statement, override val span: SourceSpan) : Statement
     data class Invalid(override val span: SourceSpan) : Statement
 }
+
+data class AsmOperand(val constraint: String, val expression: Expression?)

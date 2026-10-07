@@ -42,4 +42,28 @@ class FunctionParserTest {
         assertTrue(diagnostics.render().contains("non-void function must return a value"))
         assertTrue(diagnostics.render().contains("void function must not return a value"))
     }
+
+    @Test
+    fun validatesInlineAssemblyOperandsInsideFunctionBodies() {
+        val diagnostics = DiagnosticEngine()
+        val functions = FunctionParser(
+            Lexer("int add(int value) { asm(\"add \\$1, %0\" : \"+r\"(value) : \"r\"(1) : \"cc\"); return value; }", diagnostics = diagnostics).tokenize(),
+            diagnostics,
+        ).parse()
+
+        assertTrue(FunctionSemanticValidator(diagnostics).validate(functions.single()))
+        assertEquals(0, diagnostics.errorCount)
+    }
+
+    @Test
+    fun rejectsNonLvalueInlineAssemblyOutputs() {
+        val diagnostics = DiagnosticEngine()
+        val function = FunctionParser(
+            Lexer("int invalid() { asm(\"\" : \"=r\"(1)); return 0; }", diagnostics = diagnostics).tokenize(),
+            diagnostics,
+        ).parse().single()
+
+        assertTrue(!FunctionSemanticValidator(diagnostics).validate(function))
+        assertTrue(diagnostics.render().contains("inline assembly output requires an lvalue"))
+    }
 }

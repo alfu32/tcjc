@@ -41,6 +41,7 @@ class ControlFlowValidator(private val diagnostics: DiagnosticEngine) {
         is Statement.Empty,
         is Statement.ExpressionStatement,
         is Statement.DeclarationStatement,
+        is Statement.InlineAssembly,
         is Statement.Invalid,
         -> reachable
         is Statement.If -> {

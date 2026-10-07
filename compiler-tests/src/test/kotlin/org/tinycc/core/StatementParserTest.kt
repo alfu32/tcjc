@@ -40,4 +40,20 @@ class StatementParserTest {
         assertTrue(statement is Statement.Compound || statement is Statement.For)
         assertTrue(diagnostics.hasErrors)
     }
+
+    @Test
+    fun parsesInlineAssemblyTemplatesConstraintsAndClobbers() {
+        val diagnostics = DiagnosticEngine()
+        val source = "{ int value; asm volatile(\"add %1, %0\" : \"+r\"(value) : \"r\"(1) : \"cc\", \"memory\"); }"
+        val statement = StatementParser(Lexer(source, diagnostics = diagnostics).tokenize(), diagnostics).parse()
+        val block = assertIs<Statement.Compound>(statement)
+        val asm = assertIs<Statement.InlineAssembly>(block.statements[1])
+
+        assertEquals("add %1, %0", asm.template)
+        assertEquals(listOf("+r"), asm.outputs.map { it.constraint })
+        assertEquals(listOf("r"), asm.inputs.map { it.constraint })
+        assertEquals(listOf("cc", "memory"), asm.clobbers)
+        assertTrue(asm.isVolatile)
+        assertEquals(0, diagnostics.errorCount)
+    }
 }
