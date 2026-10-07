@@ -228,8 +228,8 @@ run the relevant checks, commit using Conventional Commits, and push to
   modes preserve source/include transitions; `-P10` converts integer tokens to
   decimal, floating tokens to TinyCC placeholders, and canonical character and
   string tokens; malformed/universal escapes, remaining target-specific wide-
-  string edge cases, numeric edge-case parity for `-P10`, multi-unit
-  compilation/linking,
+  string edge cases, `-P10` 64-bit overflow wrapping/warnings, other numeric
+  edge cases, multi-unit compilation/linking,
   remaining options, and full diagnostic parity remain open)
 - [ ] 11.2 Implement the complete `libtcc`-equivalent lifecycle, callbacks,
   source/file compilation, output, relocation, execution, and symbol APIs. — `TODO`

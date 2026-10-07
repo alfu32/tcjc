@@ -2,13 +2,16 @@ package org.tinycc.cli
 
 import java.io.InputStream
 import java.io.PrintStream
+import java.math.BigInteger
 import java.nio.file.Files
 import org.tinycc.core.BuildInfo
 import org.tinycc.api.embedding.CompilationResult
 import org.tinycc.api.embedding.CompilerOutputType
 import org.tinycc.api.embedding.CompilerOptions
 import org.tinycc.api.embedding.KotlinCompilerSession
+import org.tinycc.core.diagnostics.Diagnostic
 import org.tinycc.core.diagnostics.DiagnosticFormatter
+import org.tinycc.core.diagnostics.DiagnosticSeverity
 
 fun main(args: Array<String>) {
     execute(args.toList(), System.out, System.err)
@@ -64,6 +67,24 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
                 compiler.compileString(inputPath.toString(), if (prefix.isEmpty()) source else "$prefix\n$source")
             }
             if (results.any { !it.success }) return 1
+            if (options.numericPreprocessing && options.outputType == CompilerOutputType.PREPROCESSED) {
+                results.forEach { result ->
+                    result.tokens.forEach tokenLoop@{ token ->
+                        val integer = token.literal as? org.tinycc.core.lexer.LiteralValue.Integer ?: return@tokenLoop
+                        if (integer.value > UNSIGNED_LONG_MAX) {
+                            error.println(
+                                DiagnosticFormatter.DEFAULT.format(
+                                    Diagnostic(
+                                        DiagnosticSeverity.WARNING,
+                                        token.span.start,
+                                        "integer constant overflow",
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
             if (options.run) {
                 error.println("tcc-jvm: -run requires a native executable artifact from the target backend")
                 return 2
@@ -94,6 +115,8 @@ fun execute(args: List<String>, output: PrintStream, error: PrintStream, input: 
         1
     }
 }
+
+private val UNSIGNED_LONG_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
 private fun inputStreamText(stream: InputStream): String = stream.readBytes().decodeToString()
 

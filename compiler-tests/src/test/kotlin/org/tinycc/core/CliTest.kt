@@ -254,7 +254,8 @@ class CliTest {
         val root = Files.createTempDirectory("tcjc-cli-p10-")
         val source = root.resolve("numbers.c")
         source.writeText("""#define HEX_VALUE 0x2a
-int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; char nl = '\n'; char quote = '\'';
+int value = HEX_VALUE + 17UL; double d = 1.5; float f = 2.0f; long double ld = 3.0L; char nl = '\n'; char quote = '\'';
+unsigned long long max_value = 18446744073709551615ULL; unsigned long long wrapped = 18446744073709551616ULL;
 const char *text = "quote: \\\" slash: \\\\ utf8: é"; const wchar_t *wide = L"é"; const wchar_t *supplementary = L"𝄞";
 const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn = "\u00e9"; const wchar_t *wide_byte = L"\xFF";
 """)
@@ -267,6 +268,9 @@ const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn =
             assertTrue(text.contains("int value = 42 + 17;"), text)
             assertTrue(text.contains("double d = <double>;"), text)
             assertTrue(text.contains("float f = <float>;"), text)
+            assertTrue(text.contains("long double ld = <long double>;"), text)
+            assertTrue(text.contains("max_value = 18446744073709551615;"), text)
+            assertTrue(text.contains("wrapped = 0;"), text)
             assertTrue(text.contains("char nl = '\\n';"), text)
             assertTrue(text.contains("char quote = '\\'';"), text)
             assertTrue(text.contains("""quote: \\\" slash:"""), text)
@@ -277,8 +281,10 @@ const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn =
             assertTrue(text.contains("const char *ucn = \"\\303\\251\";"), text)
             assertTrue(text.contains("const wchar_t *wide_byte = L\"\\377\";"), text)
             assertTrue(text.contains("const wchar_t *supplementary = L\"\\436\";"), text)
+            assertTrue(errors.toString().contains("integer constant overflow"), errors.toString())
 
             output.reset()
+            errors.reset()
             assertEquals(
                 0,
                 execute(
@@ -288,7 +294,7 @@ const char *escaped = "\xFF"; const char *truncated = "\x100"; const char *ucn =
                 ),
             )
             assertTrue(output.toString().contains("const wchar_t *supplementary = L\"\\064\\436\";"), output.toString())
-            assertEquals("", errors.toString())
+            assertTrue(errors.toString().contains("integer constant overflow"), errors.toString())
             assertTrue(!text.contains("# 1 \""), text)
         } finally {
             root.toFile().deleteRecursively()
