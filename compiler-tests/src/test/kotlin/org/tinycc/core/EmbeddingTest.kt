@@ -67,6 +67,14 @@ class EmbeddingTest {
     }
 
     @Test
+    fun selectsBoundsCheckBuildTokenTableForEmbeddingSession() {
+        KotlinCompilerSession(CompilerOptions(boundsCheckTokens = true)).use { compiler ->
+            val result = compiler.compileString("bounds.c", "__bound_ptr_add freshName")
+            assertEquals(listOf(453, 1336, -1), result.tokens.map { it.tccId })
+        }
+    }
+
+    @Test
     fun reportsFrontendDiagnosticsThroughCallbacksAndBlocksInvalidOutput() {
         val diagnostics = mutableListOf<String>()
         KotlinCompilerSession().use { compiler ->

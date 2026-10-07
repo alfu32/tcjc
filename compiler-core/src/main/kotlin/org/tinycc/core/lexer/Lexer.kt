@@ -12,6 +12,7 @@ data class LexerOptions(
     val dollarsInIdentifiers: Boolean = true,
     val binaryLiterals: Boolean = true,
     val tokenTarget: TccTokenIds.TargetProfile = TccTokenIds.TargetProfile.X86_64_LINUX,
+    val boundsCheckTokens: Boolean = false,
 )
 
 /** Lexes one C translation unit while retaining exact source spans. */
@@ -20,7 +21,8 @@ class Lexer(
     private val path: Path? = null,
     private val diagnostics: DiagnosticEngine = DiagnosticEngine(),
     private val options: LexerOptions = LexerOptions(),
-    private val identifierAllocator: TccTokenIds.IdentifierAllocator = TccTokenIds.IdentifierAllocator(options.tokenTarget),
+    private val identifierAllocator: TccTokenIds.IdentifierAllocator =
+        TccTokenIds.IdentifierAllocator(options.tokenTarget, options.boundsCheckTokens),
 ) {
     private val lineMap = LineMap(source)
     private var index = 0
@@ -75,7 +77,7 @@ class Lexer(
             }
         }
         val text = source.substring(start, index)
-        val keyword = TccTokenIds.keyword(text, options.tokenTarget)
+        val keyword = TccTokenIds.keyword(text, options.tokenTarget, options.boundsCheckTokens)
         val tokenId = keyword?.tccId ?: identifierAllocator.id(text)
         return token(keyword?.kind ?: TokenKind.IDENTIFIER, start, index, tccId = tokenId)
     }

@@ -192,15 +192,20 @@ object TccTokenIds {
         "once" to TokenKind.ONCE, "option" to TokenKind.OPTION,
     )
 
-    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? {
-        val id = tokenTablesByTarget.getValue(target).idsBySpelling[text] ?: return null
+    fun keyword(
+        text: String,
+        target: TargetProfile = TargetProfile.X86_64_LINUX,
+        boundsCheckTokens: Boolean = false,
+    ): KeywordSpec? {
+        val id = tokenTablesByTarget.getValue(target to boundsCheckTokens).idsBySpelling[text] ?: return null
         return KeywordSpec(tokenSpecsByTarget.getValue(target)[text]?.kind ?: TokenKind.IDENTIFIER, id)
     }
 
-    fun firstIdentifierId(target: TargetProfile): Int = tokenTablesByTarget.getValue(target).firstIdentifierId
+    fun firstIdentifierId(target: TargetProfile, boundsCheckTokens: Boolean = false): Int =
+        tokenTablesByTarget.getValue(target to boundsCheckTokens).firstIdentifierId
 
-    class IdentifierAllocator(target: TargetProfile) {
-        private var nextId = firstIdentifierId(target)
+    class IdentifierAllocator(target: TargetProfile, boundsCheckTokens: Boolean = false) {
+        private var nextId = firstIdentifierId(target, boundsCheckTokens)
         private val ids = HashMap<String, Int>()
 
         @Synchronized
@@ -290,11 +295,12 @@ object TccTokenIds {
 
     private data class TargetTokenTable(val idsBySpelling: Map<String, Int>, val firstIdentifierId: Int)
 
-    private val tokenTablesByTarget: Map<TargetProfile, TargetTokenTable> = loadTokenTables()
+    private val tokenTablesByTarget: Map<Pair<TargetProfile, Boolean>, TargetTokenTable> = loadTokenTables()
 
-    private fun loadTokenTables(): Map<TargetProfile, TargetTokenTable> {
-        val ids = TargetProfile.entries.associateWith { LinkedHashMap<String, Int>() }
-        val firstIdentifiers = HashMap<TargetProfile, Int>()
+    private fun loadTokenTables(): Map<Pair<TargetProfile, Boolean>, TargetTokenTable> {
+        val keys = TargetProfile.entries.flatMap { target -> listOf(target to false, target to true) }
+        val ids = keys.associateWith { LinkedHashMap<String, Int>() }
+        val firstIdentifiers = HashMap<Pair<TargetProfile, Boolean>, Int>()
         val stream = TccTokenIds::class.java.getResourceAsStream("/org/tinycc/core/lexer/tokens.tsv")
             ?: error("missing historical token data resource")
         BufferedReader(stream.reader()).useLines { lines ->
@@ -302,18 +308,26 @@ object TccTokenIds {
                 if (line.isBlank()) return@forEachIndexed
                 val fields = line.split('\t', limit = 3)
                 require(fields.size == 3) { "malformed token data at line ${index + 1}" }
-                val target = TargetProfile.valueOf(fields[0])
+                val boundsCheckTokens = fields[0].endsWith("_BCHECK")
+                val profileName = if (boundsCheckTokens) fields[0].removeSuffix("_BCHECK") else fields[0]
+                val target = TargetProfile.valueOf(profileName)
+                val key = target to boundsCheckTokens
                 if (fields[1] == "FIRST_IDENTIFIER") {
-                    firstIdentifiers[target] = fields[2].toInt()
+                    firstIdentifiers[key] = fields[2].toInt()
                 } else {
-                    ids.getValue(target)[fields[2]] = fields[1].toInt()
+                    ids.getValue(key)[fields[2]] = fields[1].toInt()
                 }
             }
         }
-        return TargetProfile.entries.associateWith { target ->
-            TargetTokenTable(ids.getValue(target), requireNotNull(firstIdentifiers[target]) {
-                "missing first identifier ID for $target"
-            })
+        return buildMap {
+            for (target in TargetProfile.entries) {
+                for (boundsCheckTokens in listOf(false, true)) {
+                    val key = target to boundsCheckTokens
+                    put(key, TargetTokenTable(ids.getValue(key), requireNotNull(firstIdentifiers[key]) {
+                        "missing first identifier ID for $target (boundsCheckTokens=$boundsCheckTokens)"
+                    }))
+                }
+            }
         }
     }
 

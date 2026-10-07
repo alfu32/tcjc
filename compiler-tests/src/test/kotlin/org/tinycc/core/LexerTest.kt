@@ -99,6 +99,18 @@ class LexerTest {
     }
 
     @Test
+    fun selectsCompileTimeBoundsCheckTokenTable() {
+        val ordinary = Lexer("__bound_ptr_add freshName").tokenize()
+        val boundsCheck = Lexer(
+            "__bound_ptr_add freshName",
+            options = LexerOptions(boundsCheckTokens = true),
+        ).tokenize()
+
+        assertEquals(listOf(1317, 1318, -1), ordinary.map { it.tccId })
+        assertEquals(listOf(453, 1336, -1), boundsCheck.map { it.tccId })
+    }
+
+    @Test
     fun selectsHistoricalI386TokenIdsAndTargetBuiltins() {
         val i386 = TccTokenIds.TargetProfile.I386
         val tokens = Lexer(

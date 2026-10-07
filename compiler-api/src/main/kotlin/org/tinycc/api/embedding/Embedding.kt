@@ -26,6 +26,7 @@ data class CompilerOptions(
     val systemIncludePaths: List<Path> = emptyList(),
     val predefined: Map<String, String> = emptyMap(),
     val outputType: CompilerOutputType = CompilerOutputType.TOKENS,
+    val boundsCheckTokens: Boolean = false,
 )
 
 fun interface CompilerDiagnosticCallback {
@@ -66,7 +67,7 @@ class KotlinCompilerSession(
 
     private val sourceLoader = SourceFileLoader()
     private val tokenTargetProfile = TccTokenIds.targetProfile(initialOptions.target)
-    private val identifierAllocator = TccTokenIds.IdentifierAllocator(tokenTargetProfile)
+    private val identifierAllocator = TccTokenIds.IdentifierAllocator(tokenTargetProfile, initialOptions.boundsCheckTokens)
     private val registeredSymbols = LinkedHashMap<String, Long>()
     private val ownedLibraries = ArrayList<KotlinJvmLibrary>()
     private var diagnosticCallback: CompilerDiagnosticCallback? = null
@@ -133,7 +134,10 @@ class KotlinCompilerSession(
             preprocessed.text,
             path,
             diagnostics,
-            options = org.tinycc.core.lexer.LexerOptions(tokenTarget = tokenTargetProfile),
+            options = org.tinycc.core.lexer.LexerOptions(
+                tokenTarget = tokenTargetProfile,
+                boundsCheckTokens = options.boundsCheckTokens,
+            ),
             identifierAllocator = identifierAllocator,
         ).tokenize()
         return CompilationResult(sourceName, preprocessed.text, tokens, diagnostics.diagnostics()).also {
