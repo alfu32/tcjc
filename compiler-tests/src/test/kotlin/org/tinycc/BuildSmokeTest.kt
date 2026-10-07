@@ -1,7 +1,7 @@
 package org.tinycc
 
-import kotlin.test.Test
 import kotlin.test.assertEquals
+import org.junit.jupiter.api.Test
 import org.tinycc.core.BuildInfo
 
 class BuildSmokeTest {

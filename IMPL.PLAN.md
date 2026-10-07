@@ -3,10 +3,10 @@
 ## Dashboard
 
 ```text
-Overall: 8/48
+Overall: 9/48
 
 [TODO]       [0/9]   1. Language front-end
-[IN_PROGRESS] [2/6]  2. Semantic model and modules
+[IN_PROGRESS] [3/6]  2. Semantic model and modules
 [TODO]       [0/3]   3. Compile-time and IR system
 [TODO]       [0/12]  4. Lowering and native target backends
 [IN_PROGRESS] [6/15] 5. Tooling, integration and quality
@@ -23,7 +23,7 @@ Dashboard mapping: M1 = tasks 4, 6, 7; M2 = tasks 3, 5; M3 = task 8; M4 = tasks 
 
 ## Status
 
-- Overall migration: **NOT_STARTED** (2/16 implementation tasks; 8/48 subtasks complete)
+- Overall migration: **NOT_STARTED** (3/16 implementation tasks; 9/48 subtasks complete)
 - Planning artifact: **DONE**
 - Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`.
 - New tasks and subtasks start as `TODO`; dashboard states are derived from their current descendants.
@@ -48,11 +48,11 @@ The end state is a Kotlin/JVM implementation that can be built and tested entire
 - [x] 2.2 Create focused modules for compiler core, target backends, CLI, embedding API, runtime resources, and tests. — `DONE` (see `compiler-*` projects)
 - [x] 2.3 Add compile, test, formatting/lint, distribution, and dependency-locking conventions with a passing JVM smoke test. — `DONE` (direct Kotlin smoke compile; Gradle task execution is environment-blocked)
 
-### 3. Core utilities, diagnostics, and memory model — `IN_PROGRESS` (2/3)
+### 3. Core utilities, diagnostics, and memory model — `DONE` (3/3)
 
 - [x] 3.1 Port strings, dynamic arrays, byte buffers, arenas, hash tables, and platform-neutral file utilities. — `DONE` (see `compiler-core/.../collections` and `io`)
 - [x] 3.2 Implement source locations, include stacks, diagnostic severities, error recovery, and stable message formatting. — `DONE` (see `compiler-core/.../diagnostics`)
-- [ ] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `TODO`
+- [x] 3.3 Add unit and property tests for boundary conditions, deterministic ordering, and malformed-input reporting. — `DONE` (see `compiler-tests/.../CoreUtilitiesTest.kt`)
 
 ### 4. Lexer, tokens, and preprocessor — `TODO` (0/3)
 
