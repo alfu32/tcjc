@@ -1,5 +1,7 @@
 package org.tinycc.core.lexer
 
+import java.io.BufferedReader
+
 /**
  * Token values used by the historical TinyCC front end. Punctuation retains
  * its C character value where TinyCC does so; compound operators, literals,
@@ -190,8 +192,20 @@ object TccTokenIds {
         "once" to TokenKind.ONCE, "option" to TokenKind.OPTION,
     )
 
-    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? =
-        tokenSpecsByTarget.getValue(target)[text]
+    fun keyword(text: String, target: TargetProfile = TargetProfile.X86_64_LINUX): KeywordSpec? {
+        val id = tokenTablesByTarget.getValue(target).idsBySpelling[text] ?: return null
+        return KeywordSpec(tokenSpecsByTarget.getValue(target)[text]?.kind ?: TokenKind.IDENTIFIER, id)
+    }
+
+    fun firstIdentifierId(target: TargetProfile): Int = tokenTablesByTarget.getValue(target).firstIdentifierId
+
+    class IdentifierAllocator(target: TargetProfile) {
+        private var nextId = firstIdentifierId(target)
+        private val ids = HashMap<String, Int>()
+
+        @Synchronized
+        fun id(spelling: String): Int = ids.getOrPut(spelling) { nextId++ }
+    }
 
     fun targetProfile(targetTriple: String): TargetProfile = when {
         targetTriple.startsWith("i386", ignoreCase = true) && isWindows(targetTriple) -> TargetProfile.I386_PE
@@ -273,6 +287,35 @@ object TccTokenIds {
     )
 
     private val tokenSpecsByTarget = TargetProfile.entries.associateWith(::buildTargetSpecs)
+
+    private data class TargetTokenTable(val idsBySpelling: Map<String, Int>, val firstIdentifierId: Int)
+
+    private val tokenTablesByTarget: Map<TargetProfile, TargetTokenTable> = loadTokenTables()
+
+    private fun loadTokenTables(): Map<TargetProfile, TargetTokenTable> {
+        val ids = TargetProfile.entries.associateWith { LinkedHashMap<String, Int>() }
+        val firstIdentifiers = HashMap<TargetProfile, Int>()
+        val stream = TccTokenIds::class.java.getResourceAsStream("/org/tinycc/core/lexer/tokens.tsv")
+            ?: error("missing historical token data resource")
+        BufferedReader(stream.reader()).useLines { lines ->
+            lines.forEachIndexed { index, line ->
+                if (line.isBlank()) return@forEachIndexed
+                val fields = line.split('\t', limit = 3)
+                require(fields.size == 3) { "malformed token data at line ${index + 1}" }
+                val target = TargetProfile.valueOf(fields[0])
+                if (fields[1] == "FIRST_IDENTIFIER") {
+                    firstIdentifiers[target] = fields[2].toInt()
+                } else {
+                    ids.getValue(target)[fields[2]] = fields[1].toInt()
+                }
+            }
+        }
+        return TargetProfile.entries.associateWith { target ->
+            TargetTokenTable(ids.getValue(target), requireNotNull(firstIdentifiers[target]) {
+                "missing first identifier ID for $target"
+            })
+        }
+    }
 
     private fun runtimeBeforeAlloca(target: TargetProfile): List<String> = when (target) {
         TargetProfile.I386, TargetProfile.I386_PE -> genericRuntime + listOf("__fixsfdi", "__fixdfdi", "__fixxfdi")

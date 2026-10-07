@@ -20,6 +20,7 @@ class Lexer(
     private val path: Path? = null,
     private val diagnostics: DiagnosticEngine = DiagnosticEngine(),
     private val options: LexerOptions = LexerOptions(),
+    private val identifierAllocator: TccTokenIds.IdentifierAllocator = TccTokenIds.IdentifierAllocator(options.tokenTarget),
 ) {
     private val lineMap = LineMap(source)
     private var index = 0
@@ -75,7 +76,8 @@ class Lexer(
         }
         val text = source.substring(start, index)
         val keyword = TccTokenIds.keyword(text, options.tokenTarget)
-        return token(keyword?.kind ?: TokenKind.IDENTIFIER, start, index, tccId = keyword?.tccId)
+        val tokenId = keyword?.tccId ?: identifierAllocator.id(text)
+        return token(keyword?.kind ?: TokenKind.IDENTIFIER, start, index, tccId = tokenId)
     }
 
     private fun number(start: Int): Token {

@@ -82,7 +82,10 @@ run the relevant checks, commit using Conventional Commits, and push to
   character-set, and malformed-input parity is not yet demonstrated; x86
   Linux/Windows, ARM EABI/VFP/soft-float, ARM64, RISC-V, and C67 conditional
   builtin/atomic/pragma/runtime token orders are covered by profile tests against
-  `tcctok.h`; assembler token tables and build-option variants remain open)
+  `tcctok.h`; target-specific assembler spellings and unknown-identifier
+  interning now come from ordered JVM token data, with session-persistent ID
+  tests; build-option variants, character sets, and malformed-input parity
+  remain open)
 - [ ] 2.2 Implement macro expansion, token pasting/stringizing, conditionals,
   includes, pragmas, predefined macros, and line control. — `IN_PROGRESS`
   (many GNU macro and conditional forms are covered, but all platform

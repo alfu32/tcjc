@@ -92,6 +92,13 @@ class LexerTest {
     }
 
     @Test
+    fun internsUnknownIdentifiersAfterTheTargetVocabulary() {
+        val tokens = Lexer("freshName freshName secondName mov").tokenize()
+
+        assertEquals(listOf(1317, 1317, 1318, 586, -1), tokens.map { it.tccId })
+    }
+
+    @Test
     fun selectsHistoricalI386TokenIdsAndTargetBuiltins() {
         val i386 = TccTokenIds.TargetProfile.I386
         val tokens = Lexer(
@@ -100,7 +107,7 @@ class LexerTest {
             options = LexerOptions(tokenTarget = i386),
         ).tokenize()
 
-        assertEquals(listOf(256, 411, 426, 427, 434, 437, 450, 451, 452, 453), tokens.dropLast(1).map { it.tccId })
+        assertEquals(listOf(1214, 411, 426, 427, 434, 437, 450, 451, 452, 453), tokens.dropLast(1).map { it.tccId })
         assertEquals(TokenKind.IDENTIFIER, tokens.first().kind)
     }
 

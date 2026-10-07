@@ -65,6 +65,8 @@ class KotlinCompilerSession(
         get() = sessionOptions
 
     private val sourceLoader = SourceFileLoader()
+    private val tokenTargetProfile = TccTokenIds.targetProfile(initialOptions.target)
+    private val identifierAllocator = TccTokenIds.IdentifierAllocator(tokenTargetProfile)
     private val registeredSymbols = LinkedHashMap<String, Long>()
     private val ownedLibraries = ArrayList<KotlinJvmLibrary>()
     private var diagnosticCallback: CompilerDiagnosticCallback? = null
@@ -131,7 +133,8 @@ class KotlinCompilerSession(
             preprocessed.text,
             path,
             diagnostics,
-            options = org.tinycc.core.lexer.LexerOptions(tokenTarget = TccTokenIds.targetProfile(options.target)),
+            options = org.tinycc.core.lexer.LexerOptions(tokenTarget = tokenTargetProfile),
+            identifierAllocator = identifierAllocator,
         ).tokenize()
         return CompilationResult(sourceName, preprocessed.text, tokens, diagnostics.diagnostics()).also {
             lastCompilation = it

@@ -56,6 +56,17 @@ class EmbeddingTest {
     }
 
     @Test
+    fun retainsIdentifierInterningAcrossTranslationUnitsInOneSession() {
+        KotlinCompilerSession().use { compiler ->
+            val first = compiler.compileString("first.c", "sessionFirst")
+            val second = compiler.compileString("second.c", "sessionSecond sessionFirst")
+
+            assertEquals(listOf(1317, -1), first.tokens.map { it.tccId })
+            assertEquals(listOf(1318, 1317, -1), second.tokens.map { it.tccId })
+        }
+    }
+
+    @Test
     fun reportsFrontendDiagnosticsThroughCallbacksAndBlocksInvalidOutput() {
         val diagnostics = mutableListOf<String>()
         KotlinCompilerSession().use { compiler ->
