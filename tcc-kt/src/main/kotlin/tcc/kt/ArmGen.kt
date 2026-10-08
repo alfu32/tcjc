@@ -187,6 +187,7 @@ object ArmGen {
 
     data class Symbol(val name: String, val isStatic: Boolean = false)
     data class ConstantValue(val value: Int, val symbol: Symbol? = null)
+    data class CallTarget(val value: Int = 0, val symbol: Symbol? = null, val register: Int = -1, val indirect: Boolean = false)
 
     data class AvailableVfpRegisters(
         val holes: IntArray = IntArray(3), var firstHole: Int = 0,
@@ -300,6 +301,38 @@ object ArmGen {
                 stuffConstantHarder(0xe2800000.toInt() or (armRegister shl 12) or (armRegister shl 16), value.value).forEach(output)
             }
         }
+    }
+
+    /** Emits the ARM direct, literal-pool, or register-indirect call/jump sequence. */
+    fun emitCallOrJump(
+        target: CallTarget, jump: Boolean, position: () -> Int, output: (Int) -> Unit,
+        relocate: (Symbol, Int, String) -> Unit, allocateIntegerRegister: () -> Int = { TREG_R0 },
+        loadValue: (ConstantValue, Int) -> Unit = { _, _ -> }, clearBoundsFlag: () -> Unit = {},
+    ) {
+        if (!target.indirect && target.register < 0) {
+            val symbol = target.symbol
+            if (symbol != null) {
+                val at = position()
+                val branch = encodeBranch(at, at + target.value, false)
+                if (branch != 0) {
+                    relocate(symbol, at, "R_ARM_PC24")
+                    output(branch or if (jump) 0xe0000000.toInt() else 0xe1000000.toInt())
+                } else {
+                    val register = TREG_LR
+                    loadValue(ConstantValue(target.value, symbol), register)
+                    output(if (jump) 0xe1a0f000.toInt() or integerRegister(register) else 0xe12fff30.toInt() or integerRegister(register))
+                }
+            } else {
+                if (!jump) output(0xe28fe004.toInt())
+                output(0xe51ff004.toInt())
+                output(target.value)
+            }
+            return
+        }
+        clearBoundsFlag()
+        val register = if (target.register >= 0) target.register else allocateIntegerRegister()
+        if (!jump) output(0xe1a0e00f.toInt())
+        output(0xe1a0f000.toInt() or integerRegister(register))
     }
 
     /** Encodes a PC-relative ARM branch displacement. */
