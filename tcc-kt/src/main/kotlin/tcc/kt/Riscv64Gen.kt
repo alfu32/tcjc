@@ -66,6 +66,8 @@ class Riscv64Gen(
         val fields: List<FieldType> = emptyList(),
     )
     data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
+    data class CallArgument(val type: AbiType, val alignment: Int = 8, val named: Boolean = true)
+    data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
     data class FunctionFrame(
         val prologPosition: Int,
         var localOffset: Int = -16,
@@ -363,6 +365,65 @@ class Riscv64Gen(
         }
         return RegisterPass(classes, offsets)
     }
+
+    /** Performs gfunc_call's ABI register and outgoing stack slot allocation pass. */
+    fun planCallArguments(arguments: List<CallArgument>, oldPrototype: Boolean = false): CallPlan {
+        val info = IntArray(arguments.size)
+        var integerRegisters = 0
+        var floatingRegisters = 8
+        var stackAdjustment = 0
+        var temporarySpace = 0
+        for ((index, argument) in arguments.withIndex()) {
+            var size = argument.type.size
+            var alignment = argument.alignment
+            var byReference = 0
+            if (size > 16) {
+                alignment = maxOf(alignment, 8)
+                temporarySpace = (temporarySpace + alignment - 1) and -alignment
+                val temporaryOffset = temporarySpace
+                temporarySpace += size
+                size = 8
+                alignment = 8
+                byReference = 64 or (temporaryOffset shl 7)
+            }
+            val pass = registerPass(argument.type, oldPrototype || argument.named)
+            val count = pass.classes[0]
+            if (!oldPrototype && !argument.named && alignment == 16 && size <= 16) integerRegisters = (integerRegisters + 1) and -2
+            if (size == 0) continue
+            val stack = (pass.classes[1] == RC_INT && integerRegisters >= 8) ||
+                (pass.classes[1] == RC_FLOAT && floatingRegisters >= 16) ||
+                (count == 2 && pass.classes[1] == RC_FLOAT && pass.classes[2] == RC_FLOAT && floatingRegisters >= 15) ||
+                (count == 2 && pass.classes[1] != pass.classes[2] && (floatingRegisters >= 16 || integerRegisters >= 8))
+            if (stack) {
+                info[index] = 32
+                alignment = maxOf(alignment, 8)
+                stackAdjustment += (size + alignment - 1) and -alignment
+                if (!oldPrototype && !argument.named) { integerRegisters = 8; floatingRegisters = 16 }
+            } else {
+                info[index] = integerRegistersOrFloatRegister(pass.classes[1], integerRegisters, floatingRegisters)
+                if (pass.classes[1] == RC_INT) integerRegisters++ else floatingRegisters++
+                if (byReference == 0) info[index] = info[index] or ((pass.fieldOffsets[1] and 0xf) shl 12)
+                if (count == 2) {
+                    val secondClass = pass.classes[2]
+                    if (secondClass == RC_FLOAT || integerRegisters < 8) {
+                        val secondIndex = if (secondClass == RC_INT) integerRegisters++ else floatingRegisters++
+                        info[index] = info[index] or ((secondIndex + 1) shl 7)
+                    } else {
+                        info[index] = info[index] or 16
+                        stackAdjustment += 8
+                    }
+                    if (byReference == 0) info[index] = info[index] or (pass.fieldOffsets[2] shl 16)
+                }
+            }
+            info[index] = info[index] or byReference
+        }
+        stackAdjustment = (stackAdjustment + 15) and -16
+        temporarySpace = (temporarySpace + 15) and -16
+        return CallPlan(info, stackAdjustment, temporarySpace, stackAdjustment + temporarySpace)
+    }
+
+    private fun integerRegistersOrFloatRegister(registerClass: Int, integerCount: Int, floatingCount: Int): Int =
+        if (registerClass == RC_INT) integerCount else floatingCount
 
     fun fillNops(byteCount: Int) {
         require(byteCount and 3 == 0) { "alignment of code section not multiple of 4" }
