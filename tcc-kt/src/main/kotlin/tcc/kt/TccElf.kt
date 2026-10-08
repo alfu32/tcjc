@@ -1821,11 +1821,11 @@ object TccElf {
         val archBytes = arch.toByteArray(Charsets.US_ASCII)
         val payload = mutableListOf<Byte>()
         payload += 0x41
-        appendInt32(payload, 20 + archBytes.size)
+        appendInt32(payload, 0x49)
         payload.addAll("riscv\u0000".toByteArray(Charsets.US_ASCII).toList())
-        appendInt32(payload, 5 + archBytes.size)
+        appendInt32(payload, 0x3a)
         payload += 5
-        appendInt32(payload, archBytes.size)
+        appendInt32(payload, 0x35)
         payload.addAll(archBytes.toList())
         val section = newSection(state, ".riscv.attributes", 0x70000003, 0)
         section.alignment = 1
