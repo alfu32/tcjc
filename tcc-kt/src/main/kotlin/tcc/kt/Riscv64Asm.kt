@@ -570,6 +570,12 @@ class Riscv64Asm(
             return emitAtomicInstruction(name, rd, source, base)
         }
         if (name.startsWith("c.")) return assembleCompressed(name, operandText, hooks)
+        if (name.startsWith("fcvt") || name.startsWith("fclass")) {
+            val parts = splitOperands(operandText)
+            if (parts.size !in 2..3) { expect("floating conversion operands"); return false }
+            val ops = parts.take(2).map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) }
+            return emitFloatingInstruction(name, ops, parseRoundingMode(parts.getOrNull(2)))
+        }
         if (name in setOf("beq", "bne", "blt", "bge", "bltu", "bgeu", "bgt", "ble", "bgtu", "bleu", "beqz", "bnez", "blez", "bgez", "bltz", "bgtz")) {
             val parts = splitOperands(operandText)
             if (parts.size !in 2..3) { expect("branch operands"); return false }
