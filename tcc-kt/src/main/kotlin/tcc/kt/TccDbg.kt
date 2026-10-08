@@ -140,7 +140,7 @@ object TccDbg {
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
         val operations: MutableList<Byte> = mutableListOf(),
         var currentFile: Int = 1,
-        var lastFile: Int = 1,
+        var lastFile: Int = 0,
         var lastPc: Int = 0,
         var lastLine: Int = 1,
         var lastSourceLine: Int = 0,
