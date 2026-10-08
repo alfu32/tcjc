@@ -138,7 +138,11 @@ class ArmAsm(
     fun emitNullary(group: String, token: Int, firstConditionToken: Int) {
         when (group) {
             "nop" -> emitOpcode(token, firstConditionToken, 0xd shl 21)
-            "wfe" -> emitOpcode(token, firstConditionToken, 0x0320f002)
+            // The C switch intentionally falls through from WFE to WFI.
+            "wfe" -> {
+                emitOpcode(token, firstConditionToken, 0x0320f002)
+                emitOpcode(token, firstConditionToken, 0x0320f003)
+            }
             "wfi" -> emitOpcode(token, firstConditionToken, 0x0320f003)
             else -> expect("nullary instruction")
         }
@@ -893,7 +897,7 @@ class ArmAsm(
                             break
                         }
                     }
-                    'I', 'J', 'K', 'L', 'i' -> if (operand.constant) { assigned = true; break }
+                    'I', 'J', 'i' -> if (operand.constant) { assigned = true; break }
                     'M' -> if (operand.constant && !operand.symbolic) { assigned = true; break }
                     'm', 'g' -> {
                         if (operand.localPointer && (isOutput || choice == 'm')) {
