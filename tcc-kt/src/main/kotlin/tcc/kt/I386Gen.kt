@@ -153,6 +153,87 @@ class I386Gen(
         }
     }
 
+    /** Emits the C backend's load operation for common scalar value forms. */
+    fun load(register: Int, value: I386Value) {
+        val kind = value.kind
+        val reg = if (kind == I386ValueKind.FLOAT || kind == I386ValueKind.DOUBLE) 0
+            else if (kind == I386ValueKind.LONG_DOUBLE) 5 else register
+        val opcode = when (kind) {
+            I386ValueKind.FLOAT -> 0xd9
+            I386ValueKind.DOUBLE -> 0xdd
+            I386ValueKind.LONG_DOUBLE -> 0xdb
+            I386ValueKind.BYTE, I386ValueKind.BOOL -> 0xbe0f
+            I386ValueKind.UBYTE, I386ValueKind.UBOOL -> 0xb60f
+            I386ValueKind.SHORT -> 0xbf0f
+            I386ValueKind.USHORT -> 0xb70f
+            else -> 0x8b
+        }
+        when (val location = value.location) {
+            is I386ValueLocation.Memory -> genModRm(opcode, reg, location.address)
+            is I386ValueLocation.Immediate -> {
+                val symbol = location.symbol
+                if (symbol?.isTls == true) {
+                    oad(0x058b65 or ((register and 7) shl 19), 0)
+                    oad(0xc081 or ((register and 7) shl 8), value.addend + location.value)
+                    relocations += Relocation(position - 4, RelocType.R386_TLS_LE, symbol, value.addend + location.value)
+                } else if (picEnabled && symbol != null) {
+                    if (symbol.isStatic) {
+                        getPcThunk(register, false)
+                        o(0x808d or ((register and 7) * 0x900))
+                        genAddrPc32(true, symbol, value.addend + location.value + 6)
+                    } else {
+                        getPcThunk(register, true)
+                        o(0x808b or ((register and 7) * 0x900))
+                        genGotPcRel(register, symbol, value.addend + location.value)
+                    }
+                } else {
+                    o(0xb8 + (register and 7))
+                    genAddr32(symbol != null, symbol, value.addend + location.value)
+                }
+            }
+            is I386ValueLocation.Register -> if (location.register != register) {
+                o(0x89)
+                o(0xc0 + (register and 7) + (location.register and 7) * 8)
+            }
+            is I386ValueLocation.Compare -> {
+                o(0x0f); o(location.condition); o(0xc0 + (register and 7))
+                o(0xc0b60f + (register and 7) * 0x90000)
+            }
+        }
+    }
+
+    /** Emits a scalar store from a register into memory or another register. */
+    fun store(register: Int, destination: I386Value) {
+        val opcode: Int
+        val opRegister: Int
+        when (destination.kind) {
+            I386ValueKind.FLOAT -> { opcode = 0xd9; opRegister = 2 }
+            I386ValueKind.DOUBLE -> { opcode = 0xdd; opRegister = 2 }
+            I386ValueKind.LONG_DOUBLE -> { o(0xc0d9); opcode = 0xdb; opRegister = 7 }
+            I386ValueKind.SHORT, I386ValueKind.USHORT -> { opcode = 0x8966; opRegister = register }
+            I386ValueKind.BYTE, I386ValueKind.UBYTE, I386ValueKind.BOOL, I386ValueKind.UBOOL -> { opcode = 0x88; opRegister = register }
+            else -> { opcode = 0x89; opRegister = register }
+        }
+        when (val location = destination.location) {
+            is I386ValueLocation.Memory -> {
+                val address = location.address
+                if (picEnabled && address is Address.Immediate && address.symbol != null && !address.symbol.isStatic && !address.symbol.isTls) {
+                    getPcThunk(3, true)
+                    o(0x9b8b)
+                    genGotPcRel(3, address.symbol, destination.addend + address.value)
+                    o(opcode)
+                    o(3 + (opRegister shl 3))
+                } else genModRm(opcode, opRegister, address)
+            }
+            is I386ValueLocation.Immediate -> genModRm(opcode, opRegister, Address.Immediate(location.value + destination.addend, location.symbol))
+            is I386ValueLocation.Register -> if (location.register != register) {
+                o(opcode)
+                o(0xc0 + (location.register and 7) + ((register and 7) shl 3))
+            }
+            is I386ValueLocation.Compare -> Unit
+        }
+    }
+
     fun read32(offset: Int): Int = (code[offset].toInt() and 0xff) or
         ((code[offset + 1].toInt() and 0xff) shl 8) or
         ((code[offset + 2].toInt() and 0xff) shl 16) or
@@ -162,3 +243,12 @@ class I386Gen(
         repeat(4) { code[offset + it] = (value ushr (it * 8)).toByte() }
     }
 }
+
+enum class I386ValueKind { INT, UNSIGNED_INT, FLOAT, DOUBLE, LONG_DOUBLE, BYTE, UBYTE, BOOL, UBOOL, SHORT, USHORT }
+sealed interface I386ValueLocation {
+    data class Memory(val address: I386Gen.Address) : I386ValueLocation
+    data class Immediate(val value: Int, val symbol: I386Gen.Symbol? = null) : I386ValueLocation
+    data class Register(val register: Int) : I386ValueLocation
+    data class Compare(val condition: Int) : I386ValueLocation
+}
+data class I386Value(val kind: I386ValueKind, val location: I386ValueLocation, val addend: Int = 0)
