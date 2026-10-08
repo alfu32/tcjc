@@ -182,6 +182,23 @@ object TccElf {
         val netBsd: Boolean = false,
         val machoTarget: Boolean = false,
     )
+    data class BacktraceStubRequest(
+        val data: ElfSection,
+        val text: ElfSection,
+        val dwarfLine: ElfSection?,
+        val dwarfLineStrings: ElfSection?,
+        val dwarfStrings: ElfSection?,
+        val stab: ElfSection?,
+        val stabStrings: ElfSection?,
+        val bounds: ElfSection?,
+        val dwarfVersion: Int,
+        val callerCount: Int,
+        val memoryOutput: Boolean,
+        val sharedLibrary: Boolean,
+        val peTarget: Boolean = false,
+        val boundsChecking: Boolean = false,
+        val leadingUnderscore: Boolean = false,
+    )
     data class RuntimeAction(val kind: String, val name: String = "")
     data class GeneratedCompileState(var debugEnabled: Boolean, var coverageEnabled: Boolean)
     data class InputSectionHeader(
@@ -619,6 +636,57 @@ object TccElf {
             state.debugEnabled = savedDebug
             state.coverageEnabled = savedCoverage
         }
+    }
+
+    fun addBacktraceStub(
+        state: ElfState,
+        request: BacktraceStubRequest,
+        dataPointerRelocationType: Int,
+        compileState: GeneratedCompileState,
+        compileGeneratedSource: (String) -> Unit,
+    ): Int {
+        val symbols = state.symbolTable ?: return -1
+        val data = request.data
+        sectionAdd(data, 0, state.wordSize)
+        val contextOffset = data.dataOffset
+        fun putPointer(section: ElfSection?, offset: Long) {
+            val symbolIndex = setGlobalSymbol(state, symbols, null, section, offset)
+            putElfRelocation(state, symbols, data, data.dataOffset.toLong(), dataPointerRelocationType, symbolIndex)
+            sectionAdd(data, state.wordSize, 1)
+        }
+        if (request.dwarfVersion != 0) {
+            putPointer(requireNotNull(request.dwarfLine), 0)
+            putPointer(request.dwarfLine, -1)
+            putPointer(if (request.dwarfVersion >= 5) request.dwarfLineStrings else request.dwarfStrings, 0)
+        } else {
+            val stab = requireNotNull(request.stab)
+            putPointer(stab, 0)
+            putPointer(stab, -1)
+            putPointer(request.stabStrings, 0)
+        }
+        sectionAdd(data, 3 * state.wordSize, 1)
+        if (request.memoryOutput && request.dwarfVersion == 0) putPointer(request.text, 0) else putPointer(null, 0)
+        var padding = 3 * state.wordSize
+        if (request.boundsChecking) {
+            putPointer(requireNotNull(request.bounds), 0)
+            padding -= state.wordSize
+        }
+        sectionAdd(data, padding, 1)
+        appendInt32(data, request.callerCount)
+        appendInt32(data, request.dwarfVersion)
+        data.outputSize = data.dataOffset.toLong()
+        val symbolName = if (request.leadingUnderscore) "___rt_info" else "__rt_info"
+        if (request.memoryOutput) return setGlobalSymbol(state, symbols, symbolName, data, contextOffset.toLong())
+        val source = buildString {
+            append("extern void __bt_init(),__bt_exit(),__bt_init_dll();static void *__rt_info[];")
+            append("__attribute__((constructor)) static void __bt_init_rt(){")
+            if (request.peTarget && request.sharedLibrary) append("__bt_init_dll(${if (request.boundsChecking) 1 else 0});")
+            append("__bt_init(__rt_info,${if (request.sharedLibrary) 0 else 1});}")
+            append("__attribute__((destructor)) static void __bt_exit_rt(){__bt_exit(__rt_info);}")
+        }
+        compileStringWithoutDebug(compileState, source, compileGeneratedSource)
+        setLocalSymbol(symbols, symbolName, data, contextOffset)
+        return contextOffset
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
