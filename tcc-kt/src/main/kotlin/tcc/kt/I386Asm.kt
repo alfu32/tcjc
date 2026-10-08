@@ -119,6 +119,12 @@ class I386Asm(
 
     private fun acceptsMnemonic(instruction: Instruction, requested: String): Boolean {
         if (instruction.mnemonic == requested) return true
+        if (instruction.instructionType and 0x70 == OPC_FARITH) {
+            val operations = listOf("fadd", "fmul", "fcom", "fcomp", "fsub", "fsubr", "fdiv", "fdivr")
+            val templateRoot = instruction.mnemonic.removeSuffix("p")
+            val requestedRoot = requested.removeSuffix("p")
+            if (templateRoot in operations && requestedRoot in operations) return true
+        }
         val template = instruction.mnemonic
         val templateRoot = template.dropLastWhile { it in "bwlq" }
         val requestedRoot = requested.dropLastWhile { it in "bwlq" }
@@ -219,7 +225,14 @@ class I386Asm(
         return when (instruction.instructionType and 0x70) {
             OPC_ARITH -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
             OPC_SHIFT -> mapOf("rol" to 0, "ror" to 1, "rcl" to 2, "rcr" to 3, "shl" to 4, "sal" to 4, "shr" to 5, "sar" to 7)[root]
-            OPC_FARITH -> mapOf("fadd" to 0, "fmul" to 1, "fcom" to 2, "fcomp" to 3, "fsub" to 4, "fsubr" to 5, "fdiv" to 6, "fdivr" to 7)[root.removeSuffix("p")]
+            OPC_FARITH -> {
+                val operations = listOf("fadd", "fmul", "fcom", "fcomp", "fsub", "fsubr", "fdiv", "fdivr")
+                val templateRoot = instruction.mnemonic.removeSuffix("p")
+                val requestedRoot = root.removeSuffix("p")
+                val templateOp = operations.indexOf(templateRoot)
+                val requestedOp = operations.indexOf(requestedRoot)
+                if (templateOp >= 0 && requestedOp >= templateOp) requestedOp - templateOp else null
+            }
             OPC_TEST -> {
                 val cc = root.removePrefix("cmov").removePrefix("set").removePrefix("j")
                 conditionNames.indexOf(cc).takeIf { it >= 0 }?.let { conditionCodes[it] }
