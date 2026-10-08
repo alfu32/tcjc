@@ -80,6 +80,34 @@ class Riscv64Gen(
     data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
     data class CompareState(val comparison: Comparison, val leftRegister: Int, val rightRegister: Int)
     data class StackValue(var register: Int, var constant: Long? = null, var comparison: CompareState? = null)
+    class CompilerValueStack {
+        private val entries = mutableListOf<StackValue>()
+        val size: Int get() = entries.size
+        val top: StackValue get() = entries.last()
+        operator fun get(depthFromTop: Int): StackValue = entries[entries.lastIndex - depthFromTop]
+        fun push(value: StackValue) { entries += value }
+        fun pop(): StackValue = entries.removeAt(entries.lastIndex)
+        fun swap() {
+            val last = entries.lastIndex
+            val value = entries[last]
+            entries[last] = entries[last - 1]
+            entries[last - 1] = value
+        }
+        /** Moves the top value below the preceding count-1 values (vrotb style). */
+        fun rotateTopToBottom(count: Int) {
+            require(count in 1..entries.size)
+            val value = entries.removeAt(entries.lastIndex)
+            entries.add(entries.size - count + 1, value)
+        }
+        /** Moves the bottom value of the top count entries to the top (vrott style). */
+        fun rotateBottomToTop(count: Int) {
+            require(count in 1..entries.size)
+            val index = entries.size - count
+            entries += entries.removeAt(index)
+        }
+        fun truncate(newSize: Int) { require(newSize in 0..entries.size); while (entries.size > newSize) entries.removeAt(entries.lastIndex) }
+        fun snapshot(): List<StackValue> = entries.toList()
+    }
     data class BoundsFrame(val tableOffset: Int, val prologOffset: Int, var needsEpilog: Boolean = false)
     data class FunctionFrame(
         val prologPosition: Int,
