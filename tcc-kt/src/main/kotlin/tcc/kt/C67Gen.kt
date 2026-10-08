@@ -219,4 +219,72 @@ class C67Gen(
             else -> throw IllegalArgumentException("unsupported C67 instruction: $mnemonic")
         }
     }
+
+    fun moveLow(register: Int, constant: Int) = asm("MVKL.", constant, register)
+    fun moveHigh(register: Int, constant: Int) = asm("MVKH.", constant, register)
+    fun storeByteStackA0(register: Int) = asm("STB.D *+SP[A0]", register)
+    fun storeHalfStackA0(register: Int) = asm("STH.D *+SP[A0]", register)
+    fun storeWordStackA0(register: Int) = asm("STW.D *+SP[A0]", register)
+    fun storeBytePointer(source: Int, base: Int) = asm("STB.D *", source, base)
+    fun storeHalfPointer(source: Int, base: Int) = asm("STH.D *", source, base)
+    fun storeWordPointer(source: Int, base: Int) = asm("STW.D *", source, base)
+    fun storeWordPreIncrement(source: Int, base: Int, increment: Int) = asm("STW.D +*", source, base, increment)
+    fun push(register: Int) = asm("STW.D SP POST DEC", register)
+    fun loadWordStackA0(register: Int) = asm("LDW.D *+SP[A0]", register)
+    fun loadDoubleWordStackA0(register: Int) = asm("LDDW.D *+SP[A0]", register)
+    fun loadHalfStackA0(register: Int) = asm("LDH.D *+SP[A0]", register)
+    fun loadByteStackA0(register: Int) = asm("LDB.D *+SP[A0]", register)
+    fun loadUnsignedHalfStackA0(register: Int) = asm("LDHU.D *+SP[A0]", register)
+    fun loadUnsignedByteStackA0(register: Int) = asm("LDBU.D *+SP[A0]", register)
+    fun loadWordPointer(base: Int, destination: Int) = asm("LDW.D *", base, destination)
+    fun loadDoubleWordPointer(base: Int, destination: Int) = asm("LDDW.D *", base, destination)
+    fun loadHalfPointer(base: Int, destination: Int) = asm("LDH.D *", base, destination)
+    fun loadBytePointer(base: Int, destination: Int) = asm("LDB.D *", base, destination)
+    fun loadUnsignedHalfPointer(base: Int, destination: Int) = asm("LDHU.D *", base, destination)
+    fun loadUnsignedBytePointer(base: Int, destination: Int) = asm("LDBU.D *", base, destination)
+    fun loadWordPreIncrement(base: Int, destination: Int) = asm("LDW.D +*", base, destination)
+    fun pop(register: Int) = asm("LDW.D SP PRE INC", register)
+    fun popDoubleWord(register: Int) = asm("LDDW.D SP PRE INC", register)
+
+    fun compareLess(left: Int, right: Int, destination: Int) = asm("CMPLT.L1", left, right, destination)
+    fun compareGreater(left: Int, right: Int, destination: Int) = asm("CMPGT.L1", left, right, destination)
+    fun compareEqual(left: Int, right: Int, destination: Int) = asm("CMPEQ.L1", left, right, destination)
+    fun compareLessUnsigned(left: Int, right: Int, destination: Int) = asm("CMPLTU.L1", left, right, destination)
+    fun compareGreaterUnsigned(left: Int, right: Int, destination: Int) = asm("CMPGTU.L1", left, right, destination)
+    fun compareLessFloat(left: Int, right: Int, destination: Int, double: Boolean = false) = asm(if (double) "CMPLTDP.S1" else "CMPLTSP.S1", left, right, destination)
+    fun compareGreaterFloat(left: Int, right: Int, destination: Int, double: Boolean = false) = asm(if (double) "CMPGTDP.S1" else "CMPGTSP.S1", left, right, destination)
+    fun compareEqualFloat(left: Int, right: Int, destination: Int, double: Boolean = false) = asm(if (double) "CMPEQDP.S1" else "CMPEQSP.S1", left, right, destination)
+    fun conditionalBranch(invert: Boolean, conditionRegister: Int, targetRegister: Int) = asm("B.S2", if (invert) 1 else 0, conditionRegister, targetRegister)
+    fun branchDisplacement(wordOffset: Int) = asm("B DISP", wordOffset + ((position() and 31) shr 2))
+    fun nop(cycles: Int) = asm("NOP", cycles)
+
+    fun addConstant(value: Int, register: Int, parallel: Boolean = false) {
+        require(kotlin.math.abs(value) < 32767)
+        asm(if (parallel) "||ADDK" else "ADDK", value, register)
+    }
+
+    fun adjustAddConstant(instruction: Int, value: Int): Int {
+        require(kotlin.math.abs(value) < 32767)
+        return (instruction and (0xffff shl 7).inv()) or ((value and 0xffff) shl 7)
+    }
+
+    fun move(destination: Int, source: Int) = asm("MV.L", 0, source, destination)
+    fun truncateDoubleToFloat(destination: Int, source: Int) = asm("DPTRUNC.L", 0, source, destination)
+    fun truncateFloatToDouble(destination: Int, source: Int) = asm("SPTRUNC.L", 0, source, destination)
+    fun convertIntToFloat(destination: Int, source: Int, unsigned: Boolean = false, double: Boolean = false) =
+        asm(when { double && unsigned -> "INTDPU.L"; double -> "INTDP.L"; unsigned -> "INTSPU.L"; else -> "INTSP.L" }, 0, source, destination)
+    fun convertFloatToDouble(destination: Int, source: Int) = asm("SPDP.L", 0, source, destination)
+    fun convertDoubleToFloat(destination: Int, source: Int) = asm("DPSP.L", 0, source, destination)
+    fun add(destination: Int, left: Int, right: Int) = asm("ADD.L", left, right, destination)
+    fun subtract(destination: Int, left: Int, right: Int) = asm("SUB.L", left, right, destination)
+    fun and(destination: Int, left: Int, right: Int) = asm("AND.L", left, right, destination)
+    fun or(destination: Int, left: Int, right: Int) = asm("OR.L", left, right, destination)
+    fun xor(destination: Int, left: Int, right: Int) = asm("XOR.L", left, right, destination)
+    fun addFloat(destination: Int, left: Int, right: Int, double: Boolean = false) = asm(if (double) "ADDDP.L" else "ADDSP.L", left, right, destination)
+    fun subtractFloat(destination: Int, left: Int, right: Int, double: Boolean = false) = asm(if (double) "SUBDP.L" else "SUBSP.L", left, right, destination)
+    fun multiplyFloat(destination: Int, left: Int, right: Int, double: Boolean = false) = asm(if (double) "MPYDP.M" else "MPYSP.M", left, right, destination)
+    fun multiplyInteger(destination: Int, left: Int, right: Int) = asm("MPYI.M", left, right, destination)
+    fun shiftLeft(destination: Int, value: Int, count: Int) = asm("SHL.S", value, count, destination)
+    fun shiftRightUnsigned(destination: Int, value: Int, count: Int) = asm("SHRU.S", value, count, destination)
+    fun shiftRight(destination: Int, value: Int, count: Int) = asm("SHR.S", value, count, destination)
 }
