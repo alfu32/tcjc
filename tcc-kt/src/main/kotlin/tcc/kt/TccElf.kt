@@ -41,6 +41,15 @@ object TccElf {
         var other: Int,
         var sectionIndex: Int,
     )
+    data class ElfRelocation(val offset: Long, var symbolIndex: Int, val type: Int, val addend: Long = 0)
+    data class SymbolAttributes(
+        var gotOffset: Long = 0,
+        var pltOffset: Long = 0,
+        var pltSymbol: Int = 0,
+        var dynamicIndex: Int = 0,
+        var linkerSymbol: Boolean = false,
+        var thumbStub: Boolean = false,
+    )
 
     data class ElfSection(
         val name: String,
@@ -62,6 +71,8 @@ object TccElf {
         val stringOffsets: MutableMap<String, Int> = mutableMapOf(),
         val hashBuckets: MutableList<Int> = mutableListOf(0),
         val hashChains: MutableList<Int> = mutableListOf(0),
+        val relocations: MutableList<ElfRelocation> = mutableListOf(),
+        var sectionInfo: Int = 0,
     ) {
         val size: Int get() = dataOffset
     }
@@ -74,6 +85,7 @@ object TccElf {
         var symbolTable: ElfSection? = null,
         val namedSections: MutableMap<String, ElfSection> = mutableMapOf(),
         val symbolTables: MutableMap<String, SymbolTablePair> = mutableMapOf(),
+        val symbolAttributes: MutableList<SymbolAttributes> = mutableListOf(),
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
@@ -307,6 +319,41 @@ object TccElf {
             return null
         }
         return symbol.value
+    }
+
+    fun putElfRelocation(
+        state: ElfState,
+        symbolTable: ElfSection,
+        target: ElfSection,
+        offset: Long,
+        type: Int,
+        symbolIndex: Int,
+        addend: Long = 0,
+        rela: Boolean = state.wordSize == 8,
+    ): ElfRelocation {
+        var relocationSection = target.relocation
+        if (relocationSection == null) {
+            val prefix = if (rela) ".rela" else ".rel"
+            relocationSection = newSection(state, "$prefix${target.name}", if (rela) SHT_RELA else SHT_REL, symbolTable.flags)
+            relocationSection.entrySize = if (state.wordSize == 8) if (rela) 24 else 16 else if (rela) 12 else 8
+            relocationSection.link = symbolTable
+            relocationSection.sectionInfo = target.index
+            target.relocation = relocationSection
+        }
+        if (!rela && addend != 0L) error("non-zero addend on REL architecture")
+        return ElfRelocation(offset, symbolIndex, type, addend).also {
+            relocationSection.relocations += it
+            sectionAdd(relocationSection, relocationSection.entrySize, 1)
+        }
+    }
+
+    fun getSymbolAttributes(state: ElfState, index: Int, allocate: Boolean): SymbolAttributes? {
+        if (index < state.symbolAttributes.size) return state.symbolAttributes[index]
+        if (!allocate) return null
+        var capacity = 1
+        while (index >= capacity) capacity *= 2
+        while (state.symbolAttributes.size < capacity) state.symbolAttributes += SymbolAttributes()
+        return state.symbolAttributes[index]
     }
 
     fun freeSection(section: ElfSection) {
