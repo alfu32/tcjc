@@ -43,9 +43,12 @@ class LibTcc(
         var generateDependencies: Boolean = false, var justDependencies: Boolean = false,
         var includeSystemDependencies: Boolean = false, var generatePhonyDependencies: Boolean = false,
         var dependencyOutputFile: String? = null, var runCommand: String? = null,
+        val files: MutableList<FileSpec> = mutableListOf(), var libraryCount: Int = 0,
     )
     data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
     data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
+    data class FileSpec(val filename: String, val fileType: Int)
+    data class OutputStatistics(val identifiers: Int, val lines: Long, val bytes: Long, val text: Long, val writableData: Long, val readOnlyData: Long, val bss: Long)
     data class LinkOptionMatch(val result: Int, val optionArgument: String?, val pendingSeparateArgument: Boolean = false)
     data class DllReference(val name: String, var level: Int = 0, var found: Boolean = false, var index: Int = 0, var handle: Any? = null)
     data class CompileHooks(
@@ -95,6 +98,7 @@ class LibTcc(
         const val TYPE_BINARY = 8
         const val TYPE_PRINT_ERROR = 16
         const val TYPE_WHOLE_ARCHIVE = 32
+        const val TYPE_LIBRARY = 64
         const val FILE_NOT_FOUND = -2
         const val FILE_NOT_RECOGNIZED = -3
         const val OPTION_HELP = -1
@@ -396,6 +400,7 @@ class LibTcc(
             index++
             if (!raw.startsWith('-') || raw == "-") {
                 compilerState.inputFiles += raw
+                addArgumentFile(compilerState, raw, compilerState.fileType)
                 empty = false
                 if (compilerState.runCommand != null) break
                 continue
@@ -427,7 +432,7 @@ class LibTcc(
                 "libPath" -> setLibraryPath(compilerState, optionArgument)
                 "define" -> defineSymbol(compilerState, optionArgument)
                 "undefine" -> undefineSymbol(compilerState, optionArgument)
-                "library" -> { compilerState.inputFiles += optionArgument; compilerState.linkerArguments += "-l$optionArgument" }
+                "library" -> { compilerState.inputFiles += optionArgument; addArgumentFile(compilerState, optionArgument, TYPE_LIBRARY or compilerState.fileType); compilerState.linkerArguments += "-l$optionArgument" }
                 "output" -> compilerState.outputFile = optionArgument
                 "soname" -> compilerState.soname = optionArgument
                 "object" -> compilerState.outputType = OUTPUT_OBJECT
@@ -515,6 +520,34 @@ class LibTcc(
             else -> return false
         }
         return true
+    }
+
+    fun insertArguments(arguments: MutableList<String>, index: Int, insertedText: String, separator: Char? = null) {
+        arguments.addAll(index.coerceIn(0, arguments.size), splitArguments(insertedText, separator))
+    }
+
+    fun addArgumentFile(compilerState: CompilerState, filename: String, fileType: Int) {
+        compilerState.files += FileSpec(filename, fileType)
+        if (fileType and TYPE_LIBRARY != 0) compilerState.libraryCount++
+    }
+
+    fun parseVersion(compilerState: CompilerState, version: String): Int {
+        val match = Regex("^(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?$").matchEntire(version)
+        val major = match?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        val minor = match?.groupValues?.get(2)?.toLongOrNull() ?: 0L
+        val patch = match?.groupValues?.get(3)?.toLongOrNull() ?: 0L
+        if (match == null || major > 0xffff || minor > 0xff || patch > 0xff)
+            reportError(compilerState, ERROR_NO_ABORT, "version a.b.c not correct: $version")
+        return (((major and 0xffff) shl 16) or ((minor and 0xff) shl 8) or (patch and 0xff)).toInt()
+    }
+
+    fun formatStatistics(stats: OutputStatistics, elapsedMillis: Long): List<String> {
+        val elapsed = elapsedMillis.coerceAtLeast(1)
+        return listOf(
+            "# ${stats.identifiers} idents, ${stats.lines} lines, ${stats.bytes} bytes",
+            "# %.3f s, %d lines/s, %.1f MB/s".format(elapsed / 1000.0, stats.lines * 1000 / elapsed, stats.bytes * 1000.0 / elapsed / 1_000_000.0),
+            "# text ${stats.text}, data.rw ${stats.writableData}, data.ro ${stats.readOnlyData}, bss ${stats.bss} bytes",
+        )
     }
 
     fun copyTruncated(destination: ByteArray, source: String): ByteArray {
