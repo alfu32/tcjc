@@ -176,6 +176,9 @@ object TccElf {
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
     const val ALWAYS_GOTPLT_ENTRY = 3
+    const val BINARY_TYPE_REL = 1
+    const val BINARY_TYPE_DYN = 2
+    const val BINARY_TYPE_ARCHIVE = 3
 
     fun getBigEndian(bytes: ByteArray, offset: Int, count: Int): Long {
         require(count in 0..8 && offset >= 0 && offset + count <= bytes.size)
@@ -207,6 +210,28 @@ object TccElf {
             readCount += amount
         }
         return if (readCount == count) buffer else buffer.copyOf(readCount)
+    }
+
+    /** Classifies relocatable/shared ELF inputs and Unix archives. */
+    fun objectType(header: ByteArray): Int {
+        if (header.size >= 18 && header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() &&
+            header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()) {
+            val fileType = when (header[5].toInt() and 0xff) {
+                1 -> (header[16].toInt() and 0xff) or ((header[17].toInt() and 0xff) shl 8)
+                2 -> ((header[16].toInt() and 0xff) shl 8) or (header[17].toInt() and 0xff)
+                else -> return 0
+            }
+            return when (fileType) {
+                1 -> BINARY_TYPE_REL
+                3 -> BINARY_TYPE_DYN
+                else -> 0
+            }
+        }
+        val archiveMagic = "!<arch>\n".toByteArray(Charsets.US_ASCII)
+        if (header.size >= archiveMagic.size && header.take(archiveMagic.size).toByteArray().contentEquals(archiveMagic)) {
+            return BINARY_TYPE_ARCHIVE
+        }
+        return 0
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
