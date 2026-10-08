@@ -688,6 +688,40 @@ object TccDbg {
     fun findDebugType(entries: List<DebugTypeEntry>, identity: Long): Int =
         entries.firstOrNull { it.identity == identity }?.offset ?: -1
 
+    fun isGlobalDebugSymbol(identity: Long, localStack: Iterable<Long>): Boolean =
+        localStack.none { it == identity }
+
+    /** Removes storage, qualifier, VLA, default-sign, and non-bitfield aggregate flags. */
+    fun removeDebugTypeFlags(
+        type: Int,
+        storageMask: Int,
+        qualifierMask: Int,
+        vlaMask: Int,
+        defaultSignMask: Int,
+        baseTypeMask: Int,
+        byteType: Int,
+        bitfieldMask: Int,
+        structMask: Int,
+        enumType: Int,
+    ): Int {
+        var result = type and (storageMask or qualifierMask or vlaMask).inv()
+        if (result and baseTypeMask != byteType) result = result and defaultSignMask.inv()
+        if (result and bitfieldMask == 0 && (result and structMask) > enumType) result = result and structMask.inv()
+        return result
+    }
+
+    fun isDebugFieldIgnored(
+        nodebug: Boolean,
+        token: Int,
+        firstAnonymousToken: Int,
+        baseType: Int,
+        byteType: Int,
+        boolType: Int,
+        shortType: Int,
+        intType: Int,
+        longLongType: Int,
+    ): Boolean = nodebug || (token >= firstAnonymousToken && baseType in setOf(byteType, boolType, shortType, intType, longLongType))
+
     fun rememberDebugType(entries: MutableList<DebugTypeEntry>, identity: Long, offset: Int): Int {
         entries += DebugTypeEntry(identity, offset)
         return offset
