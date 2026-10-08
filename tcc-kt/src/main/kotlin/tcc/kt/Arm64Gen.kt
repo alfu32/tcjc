@@ -18,6 +18,9 @@ class Arm64Gen(
         val register: Int = -1, val symbol: Symbol? = null, val lvalue: Boolean = false,
         val unsigned: Boolean = false, val secondRegister: Int = -1,
     )
+    data class BoundsPrologue(val sectionOffset: Long, val instructionOffset: Int, val addEpilogue: Boolean = false)
+    data class BoundsRelocation(val wordIndex: Int, val symbol: Symbol, val type: String, val addend: Long = 0)
+    data class BoundsEpilogue(val patchedPrologue: List<Int>, val body: List<Int>, val relocations: List<BoundsRelocation>, val terminator: Long?)
 
     companion object {
         const val NB_REGS = 28
@@ -401,4 +404,62 @@ class Arm64Gen(
             else -> error("unsupported AArch64 store value: $value")
         }
     }
+
+    fun emitBranchOrCall(branch: Boolean, directSymbol: Symbol? = null, indirectTargetRegister: Int = 30) {
+        if (directSymbol != null) {
+            addRelocation(directSymbol, if (branch) "R_AARCH64_JUMP26" else "R_AARCH64_CALL26", 0)
+            o(if (branch) ARM64_B else 0x94000000.toInt())
+        } else {
+            o((if (branch) 0xd61f0000L else 0xd63f0000L).toInt() or (intReg(indirectTargetRegister) shl 5))
+        }
+    }
+
+    fun emitStaticCall(helper: Symbol) {
+        addRelocation(helper, "R_AARCH64_CALL26", 0)
+        o(0x94000000.toInt())
+    }
+
+    fun emitBoundsPrologue(sectionOffset: Long, instructionOffset: Int): BoundsPrologue {
+        repeat(4) { o(ARM64_NOP) }
+        return BoundsPrologue(sectionOffset, instructionOffset)
+    }
+
+    fun boundsEpilogue(state: BoundsPrologue, sectionOffset: Long, boundsSymbol: Symbol,
+        newLocalHelper: Symbol, deleteLocalHelper: Symbol, addEpilogue: Boolean = state.addEpilogue): BoundsEpilogue {
+        val modified = state.sectionOffset != sectionOffset
+        if (!modified && !addEpilogue) return BoundsEpilogue(emptyList(), emptyList(), emptyList(), null)
+        val prologue = mutableListOf<Int>()
+        val body = mutableListOf<Int>()
+        val relocations = mutableListOf<BoundsRelocation>()
+        fun addAddress(words: MutableList<Int>) {
+            val index = words.size
+            words += ARM64_ADRP
+            relocations += BoundsRelocation(index, boundsSymbol, "R_AARCH64_ADR_PREL_PG_HI21")
+            words += ARM64_ADD_IMM or 0x80000000.toInt()
+            relocations += BoundsRelocation(index + 1, boundsSymbol, "R_AARCH64_ADD_ABS_LO12_NC")
+        }
+        fun addCall(words: MutableList<Int>, symbol: Symbol) {
+            relocations += BoundsRelocation(words.size, symbol, "R_AARCH64_CALL26")
+            words += 0x94000000.toInt()
+        }
+        if (modified) { addAddress(prologue); addCall(prologue, newLocalHelper) }
+        body += listOf(0xa9bf07e0.toInt(), 0x3c9f0fe0)
+        addAddress(body)
+        addCall(body, deleteLocalHelper)
+        body += listOf(0x3cc107e0, 0xa8c107e0.toInt())
+        return BoundsEpilogue(prologue, body, relocations, 0L)
+    }
+
+    fun fillNops(byteCount: Int) {
+        require(byteCount % 4 == 0) { "code size must be aligned to four bytes" }
+        repeat(byteCount.coerceAtLeast(0) / 4) { o(ARM64_NOP) }
+    }
+
+    fun generateJump(target: Int): Int {
+        val site = position()
+        o(ARM64_B or ((target - site shr 2) and 0x3ffffff))
+        return site
+    }
+
+    fun generateJumpAddress(address: Int) { o(ARM64_B or ((address - position() shr 2) and 0x3ffffff)) }
 }
