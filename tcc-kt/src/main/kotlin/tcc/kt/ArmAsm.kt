@@ -382,4 +382,31 @@ class ArmAsm(
         if (exclusive && shift != null) { error("shift not allowed with exclusive transfer"); return }
         emitOpcode(token, firstConditionToken, opcode)
     }
+
+    /** Encodes ARM block load/store and push/pop register-list instructions. */
+    fun emitBlockDataTransfer(
+        group: String, token: Int, firstConditionToken: Int,
+        operands: List<Operand>, writeback: Boolean = false,
+    ) {
+        if (group == "push" || group == "pop") {
+            if (operands.size != 1 || operands[0].kind != Kind.REGSET32) { expect("exactly one register list"); return }
+            val opcode = (if (group == "push") 0x92d else 0x8bd) shl 16
+            emitOpcode(token, firstConditionToken, opcode or operands[0].registerSet)
+            return
+        }
+        if (operands.size != 2 || operands[0].kind != Kind.REG32 || operands[1].kind != Kind.REGSET32) {
+            expect("base register and register list"); return
+        }
+        val mode = when (group) {
+            "stmda" -> 0x80; "ldmda" -> 0x81
+            "stm", "stmia" -> 0x88; "ldm", "ldmia" -> 0x89
+            "stmdb" -> 0x90; "ldmdb" -> 0x91
+            "stmib" -> 0x98; "ldmib" -> 0x99
+            else -> { expect("block data transfer instruction"); return }
+        }
+        var opcode = mode shl 20
+        if (writeback) opcode = opcode or (1 shl 21)
+        opcode = opcode or (operands[0].register shl 16) or operands[1].registerSet
+        emitOpcode(token, firstConditionToken, opcode)
+    }
 }
