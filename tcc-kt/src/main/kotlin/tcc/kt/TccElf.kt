@@ -152,6 +152,7 @@ object TccElf {
         val entrySize: Long = 0,
     )
     data class DynamicEntry(val tag: Long, val value: Long)
+    data class ArchiveHeader(val name: String, val sizeText: String)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -173,6 +174,24 @@ object TccElf {
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
     const val ALWAYS_GOTPLT_ENTRY = 3
+
+    fun getBigEndian(bytes: ByteArray, offset: Int, count: Int): Long {
+        require(count in 0..8 && offset >= 0 && offset + count <= bytes.size)
+        var value = 0L
+        repeat(count) { index -> value = (value shl 8) or (bytes[offset + index].toLong() and 0xff) }
+        return value
+    }
+
+    /** Parses the fixed-width header of one Unix archive member. */
+    fun parseArchiveHeader(bytes: ByteArray, offset: Int = 0): ArchiveHeader? {
+        val headerSize = 60
+        if (offset < 0 || offset + headerSize > bytes.size) return null
+        if (bytes[offset + 58] != '`'.code.toByte() || bytes[offset + 59] != '\n'.code.toByte()) return null
+        fun field(start: Int, length: Int): String =
+            bytes.copyOfRange(offset + start, offset + start + length)
+                .toString(Charsets.US_ASCII).trimEnd(' ')
+        return ArchiveHeader(field(0, 16), field(48, 10))
+    }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
         state.namedSections[".text"] = newSection(state, ".text", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR)
