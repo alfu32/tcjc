@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 30
+- **DONE:** 31
 - **DOING:** 1
-- **TODO:** 23
-- **Currently doing:** `x86_64-link.c` → `src/main/kotlin/tcc/kt/X8664Link.kt`
+- **TODO:** 22
+- **Currently doing:** `riscv64-link.c` → `src/main/kotlin/tcc/kt/Riscv64Link.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -45,7 +45,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `libtcc.c` | TODO |
 | `riscv64-asm.c` | TODO |
 | `riscv64-gen.c` | TODO |
-| `riscv64-link.c` | TODO |
+| `riscv64-link.c` | DOING |
 | `tcc.c` | DONE |
 | `tccasm.c` | TODO |
 | `tcccoff.c` | TODO |
@@ -67,4 +67,4 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `win32/lib/wincrt1w.c` | DONE |
 | `win32/lib/winex.c` | DONE |
 | `x86_64-gen.c` | TODO |
-| `x86_64-link.c` | DOING |
+| `x86_64-link.c` | DONE |
