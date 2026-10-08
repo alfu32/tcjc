@@ -213,7 +213,8 @@ object ArmGen {
             if (coreCount >= 4 && vfpCount >= 16) break
             if (eabi && hardFloat && !variadic && (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE) || parameter.homogeneousFloatAggregate)) {
                 val first = assignVfpRegister(vfp, parameter.alignment, parameter.size)
-                if (first >= 0) vfpCount = maxOf(vfpCount, first + (parameter.size + 3) / 4)
+                val lastSaved = first + (parameter.size + 3) / 4
+                if (lastSaved > vfpCount) vfpCount = lastSaved
             } else if (coreCount < 4) coreCount += (parameter.size + 3) / 4
         }
         if (variadic) coreCount = 4
