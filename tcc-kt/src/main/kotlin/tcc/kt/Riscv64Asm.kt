@@ -164,7 +164,7 @@ class Riscv64Asm(
             expression = expression)
         if (expression.symbol != null && isExternalOrStatic(expression.symbol)) {
             relocateSymbol(expression.symbol, false)
-            operand = operand.copy(type = OP_IM12S, expression = Expression(0))
+            operand = operand.copy(type = OP_IM12S, expression = Expression(0, expression.symbol))
         } else if (expression.symbol != null) {
             expect("operand")
         }
@@ -497,5 +497,50 @@ class Riscv64Asm(
         "c.slli" -> emitCompressedCi(name, 2, rd, source)
         "c.addi4spn" -> emitCompressedCiw(0, rd, source)
         else -> { expect("binary instruction"); false }
+    }
+
+    fun emitMemoryInstruction(name: String, operands: List<Operand>, isStaticSymbol: (String) -> Boolean = { false },
+        relocateAddress: (String) -> Unit = {}): Boolean {
+        if (operands.size != 3) { expect("memory access operands"); return false }
+        val (destination, parsedBase, parsedOffset) = operands
+        var base = parsedBase
+        var offset = parsedOffset
+        val symbol = base.expression.symbol
+        if (symbol != null && isStaticSymbol(symbol)) {
+            relocateAddress(symbol)
+            base = destination
+            offset = Operand(OP_IM12S)
+            if (!emitU(0x17, destination, Operand(OP_IM12S))) return false
+        }
+        val loads = mapOf("lb" to 0x03, "lh" to 0x1003, "lw" to 0x2003, "ld" to 0x3003,
+            "lbu" to 0x4003, "lhu" to 0x5003, "lwu" to 0x6003, "fld" to 0x3007)
+        loads[name]?.let { return emitI(it, destination, base, offset) }
+        val stores = mapOf("sb" to 0x23, "sh" to 0x1023, "sw" to 0x2023, "sd" to 0x3023, "fsd" to 0x3027)
+        stores[name]?.let { return emitS(it, base, destination, offset) }
+        expect("memory access instruction")
+        return false
+    }
+
+    fun emitBranchInstruction(name: String, operands: List<Operand>,
+        expandFarBranch: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> error("far branch relocation required") }): Boolean {
+        val zero = Operand(OP_REG, register = 0)
+        val offset: Operand
+        var first: Operand
+        var second: Operand
+        val comparison = when (name) {
+            "beq", "beqz" -> 0; "bne", "bnez" -> 1; "blt", "bgt", "bltz", "bgtz" -> 4
+            "bge", "ble", "blez", "bgez" -> 5; "bltu", "bgtu" -> 6; "bgeu", "bleu" -> 7
+            else -> { expect("branch instruction"); return false }
+        }
+        if (name in setOf("beqz", "bnez", "blez", "bgez", "bltz", "bgtz")) {
+            if (operands.size != 2) { expect("two branch operands"); return false }
+            first = operands[0]; offset = operands[1]
+            second = if (name == "bgez" || name == "bgtz") first.also { first = zero } else zero
+        } else {
+            if (operands.size != 3) { expect("three branch operands"); return false }
+            first = operands[0]; second = operands[1]; offset = operands[2]
+            if (name in setOf("bgt", "ble", "bgtu", "bleu")) { val swap = first; first = second; second = swap }
+        }
+        return emitB(0x63 or (comparison shl 12), first, second, offset, expandFarBranch)
     }
 }
