@@ -1405,6 +1405,65 @@ object TccElf {
         return ElfLinkPreparation(dynamicSections, gnuHash, versionOutput, gotSymbol, textRelocations, prefixSize)
     }
 
+    fun finalizeElfLinkAfterLayout(
+        state: ElfState,
+        preparation: ElfLinkPreparation,
+        dynamicOutput: Boolean,
+        executableOutput: Boolean,
+        staticLink: Boolean,
+        relocationEntrySize: Int,
+        debugEnabled: Boolean = false,
+        relocatePlt: () -> Unit = {},
+        relocateDynamicSymbols: (Int) -> Unit = {},
+        relocateMainSymbols: (Int) -> Unit = {},
+        relocateAllSections: () -> Unit = {},
+        hasErrors: () -> Boolean = { false },
+        fillStaticGot: () -> Unit = {},
+        fillLocalGot: () -> Unit = {},
+        reportDynamicAddressToGot: (Long) -> Unit = {},
+        relocateDynamicLibraryPlt: Boolean = false,
+    ): Pair<Long, Long>? {
+        val dynamicSections = preparation.dynamicSections
+        if (dynamicSections != null) {
+            reportDynamicAddressToGot(dynamicSections.dynamic.address)
+            if (executableOutput || dynamicOutput && relocateDynamicLibraryPlt) relocatePlt()
+            relocateDynamicSymbols(2)
+        }
+        relocateMainSymbols(0)
+        if (hasErrors()) return null
+        relocateAllSections()
+        if (dynamicSections != null) {
+            val pltRelocations = state.namedSections[".plt"]?.relocation
+            val relocationRange = compactDynamicRelocations(state, pltRelocations)
+            val versionOutput = preparation.versions
+            fillDynamic(DynamicTableLayout(
+                dynamic = dynamicSections.dynamic,
+                dynamicStrings = dynamicSections.strings,
+                dynamicSymbols = dynamicSections.symbols,
+                gnuHash = requireNotNull(preparation.gnuHash),
+                got = state.namedSections[".got"],
+                pltRelocations = pltRelocations,
+                relocationAddress = relocationRange.first,
+                relocationSize = relocationRange.second,
+                versionSymbols = versionOutput?.symbols,
+                versionNeeds = versionOutput?.needs,
+                versionNeedCount = versionOutput?.needCount ?: 0,
+                debugEnabled = debugEnabled,
+                startOffset = preparation.dynamicPrefixSize,
+                relocationEntrySize = relocationEntrySize,
+                sections = state.namedSections,
+            ))
+        }
+        if (executableOutput && staticLink) fillStaticGot()
+        else if (state.namedSections[".got"] != null) fillLocalGot()
+        if (preparation.gnuHash != null && dynamicSections != null) {
+            updateGnuHash(state, preparation.gnuHash, dynamicSections.symbols)
+        }
+        return if (dynamicSections == null) 0L to 0L else {
+            compactDynamicRelocations(state, state.namedSections[".plt"]?.relocation)
+        }
+    }
+
     /** Saves section offsets and suspends the main symbol hash during one input file. */
     fun beginInputFile(state: ElfState) {
         state.fileSectionMarks.clear()
