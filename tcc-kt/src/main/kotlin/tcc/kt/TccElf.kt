@@ -1,5 +1,7 @@
 package tcc.kt
 
+import java.io.InputStream
+
 /** ELF section and symbol table routines ported from tccelf.c. */
 object TccElf {
     const val SHT_NULL = 0
@@ -191,6 +193,20 @@ object TccElf {
             bytes.copyOfRange(offset + start, offset + start + length)
                 .toString(Charsets.US_ASCII).trimEnd(' ')
         return ArchiveHeader(field(0, 16), field(48, 10))
+    }
+
+    /** Reads until the requested byte count is reached or the stream reaches EOF. */
+    fun fullRead(input: InputStream, count: Int): ByteArray {
+        require(count >= 0)
+        val buffer = ByteArray(count)
+        var readCount = 0
+        while (readCount < count) {
+            val amount = input.read(buffer, readCount, count - readCount)
+            if (amount < 0) break
+            if (amount == 0) continue
+            readCount += amount
+        }
+        return if (readCount == count) buffer else buffer.copyOf(readCount)
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
