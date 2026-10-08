@@ -147,6 +147,7 @@ class I386Asm(
         segmentPrefix: Int = 0, addressSize16: Boolean = false,
         emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
         sameSectionAddress: (String) -> Int? = { null },
+        emitExpression64: (Expression) -> Unit = { e -> repeat(8) { emit(e.value ushr (it * 8)) } },
     ): Boolean {
         val instruction = selectMnemonic(mnemonic, operands, x64Target) ?: return false
         if (mnemonic == "int" && operands.size == 1 && operands[0].expression.symbol == null && operands[0].expression.value == 3) {
@@ -183,6 +184,8 @@ class I386Asm(
         }
         val group = groupForMnemonic(instruction, mnemonic)
         val finalOpcode = opcodeForMnemonic(instruction, mnemonic, opcode)
+        val disp32Type = if (instruction.x64) 28 else 25
+        val disp8Type = if (instruction.x64) 29 else 26
         if ((finalOpcode and 0xff) in setOf(0x9a, 0xea) && operands.size == 2) {
             emit(finalOpcode)
             emitExpression(operands[1].expression, false)
@@ -192,17 +195,28 @@ class I386Asm(
             emit(selector.value ushr 8)
             return true
         }
-        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == 25) {
+        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == disp32Type) {
             emit(finalOpcode)
             displacement32(operands[0].expression, currentPosition(), sameSectionAddress)
             return true
         }
-        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == 26) {
+        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == disp8Type) {
             branch(finalOpcode, operands[0].expression, currentPosition(), sameSectionAddress)
             return true
         }
         val multiplyGroup = if (mnemonic.startsWith("imul") && operands.size == 2 && operands[0].type and (OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32) != 0 && (finalOpcode and 0xff) in setOf(0x69, 0x6b)) operands[1].register else null
-        emitInstruction(instruction, operands, finalOpcode, groupOverride = multiplyGroup ?: group, emitExpression = emitExpression)
+        val widthBits = when {
+            mnemonic.endsWith('b') -> 8
+            mnemonic.endsWith('w') -> 16
+            mnemonic.endsWith('l') -> 32
+            mnemonic.endsWith('q') -> 64
+            operandSize16 -> 16
+            operands.any { it.type and OP_REG16 != 0 } -> 16
+            operands.any { it.type and X64_REG != 0 } -> 64
+            else -> 32
+        }
+        emitInstruction(instruction, operands, finalOpcode, groupOverride = multiplyGroup ?: group,
+            operandSizeBits = widthBits, emitExpression = emitExpression, emitExpression64 = emitExpression64)
         return true
     }
 
@@ -708,7 +722,9 @@ class I386Asm(
     fun emitInstruction(
         instruction: Instruction, operands: List<Operand>, opcode: Int,
         suffixOpcodeBits: Int = 0, groupOverride: Int? = null,
+        operandSizeBits: Int = 32,
         emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
+        emitExpression64: (Expression) -> Unit = { e -> repeat(8) { emit(e.value ushr (it * 8)) } },
     ) {
         var op = opcode + suffixOpcodeBits
         var modRmIndex = -1
@@ -740,18 +756,29 @@ class I386Asm(
         operands.forEachIndexed { index, operand ->
             if (index == modRmIndex) return@forEachIndexed
             val operandType = instruction.operandTypes[index] and 0x1f
-            if (operandType in 10..13 || operandType == 25 || operandType == 26 || operand.type and (OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32 or OP_ADDR) != 0) {
+            val immediateType = if (instruction.x64) operandType in setOf(12, 13, 14, 15, 16, 23, 26, 21) else operandType in setOf(10, 11, 12, 13, 20, 23, 18)
+            if (immediateType || operand.type and (OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32 or OP_IM64 or OP_ADDR) != 0) {
                 val value = operand.expression
-                when {
-                    operand.type and (OP_IM8 or OP_IM8S) != 0 -> {
-                        if (value.symbol != null) throw IllegalArgumentException("cannot relocate an 8 bit immediate")
-                        emit(value.value)
-                    }
-                    operand.type and OP_IM16 != 0 -> {
-                        if (value.symbol != null) throw IllegalArgumentException("cannot relocate a 16 bit immediate")
-                        emit(value.value); emit(value.value ushr 8)
-                    }
-                    else -> emitExpression(value, operandType == 25 || operandType == 26)
+                val compositeImmediate = if (instruction.x64) operandType == 23 else operandType == 20
+                val wordImmediate = if (instruction.x64) operandType == 26 else operandType == 23
+                val size = when {
+                    compositeImmediate -> when (operandSizeBits) { 8 -> 1; 16 -> 2; 64 -> if (instruction.x64) 8 else 4; else -> 4 }
+                    wordImmediate -> if (operandSizeBits == 16) 2 else 4
+                    instruction.x64 && operandType == 16 -> 8
+                    instruction.x64 && operandType == 15 -> 4
+                    instruction.x64 && operandType == 14 -> 2
+                    instruction.x64 && operandType in setOf(12, 13) -> 1
+                    !instruction.x64 && operandType in setOf(10, 11) -> 1
+                    !instruction.x64 && operandType == 12 -> 2
+                    else -> 4
+                }
+                if (size == 1 && value.symbol != null) throw IllegalArgumentException("cannot relocate an 8 bit immediate")
+                if (size == 2 && value.symbol != null && operandType !in setOf(18, 21)) throw IllegalArgumentException("cannot relocate a 16 bit immediate")
+                when (size) {
+                    1 -> emit(value.value)
+                    2 -> { emit(value.value); emit(value.value ushr 8) }
+                    8 -> emitExpression64(value)
+                    else -> emitExpression(value, operandType == if (instruction.x64) 28 else 25)
                 }
             }
         }
