@@ -266,4 +266,45 @@ class Arm64Gen(
             o(0x3c000000 or source or (base shl 5) or ((offset.toInt() and 511) shl 12) or ((size and 4) shl 21) or ((size and 3) shl 30))
         else { moveImmediate(30, offset); o(ARM64_STR_Q_REG or source or (base shl 5) or (30 shl 16) or (size shl 30) or ((size and 4) shl 21)) }
     }
+
+    private fun addRelocation(symbol: Symbol, type: String, addend: Long) {
+        relocation(symbol, position(), type, addend)
+    }
+
+    /** Emits the address sequence used for TLS, external, and local symbols. */
+    fun loadSymbolAddress(register: Int, symbol: Symbol, addend: Long = 0, peTarget: Boolean = false) {
+        val r = register and 31
+        if (symbol.isTls) {
+            if (peTarget) {
+                loadSymbolAddress(30, Symbol("__tls_index"), 0, true)
+                o(0xb94003de.toInt())
+                o(0xf9402e40.toInt() or r)
+                o(0x8b1e0c1e.toInt() or (r shl 5))
+                o(0xf94003c0.toInt() or r)
+            } else o(0xd53bd040.toInt() or r)
+            addRelocation(symbol, "R_AARCH64_TLSLE_ADD_TPREL_HI12", addend)
+            o(ARM64_ADD_IMM or 0x80000000.toInt() or (1 shl 22) or (r shl 5) or r)
+            addRelocation(symbol, "R_AARCH64_TLSLE_ADD_TPREL_LO12", addend)
+            o(ARM64_ADD_IMM or 0x80000000.toInt() or (r shl 5) or r)
+        } else if (!symbol.isStatic && !peTarget) {
+            addRelocation(symbol, "R_AARCH64_ADR_GOT_PAGE", 0)
+            o(ARM64_ADRP or r)
+            addRelocation(symbol, "R_AARCH64_LD64_GOT_LO12_NC", 0)
+            o(ARM64_LDR_X or (r shl 5) or r)
+            if (addend > 0xffffff) {
+                moveImmediate(16, addend.toULong())
+                o(ARM64_ADD_REG or 0x80000000.toInt() or (16 shl 16) or (r shl 5) or r)
+            } else {
+                val low = addend and 0xfff
+                if (low != 0L) o(ARM64_ADD_IMM or 0x80000000.toInt() or (r shl 5) or r or (low.toInt() shl 10))
+                val high = (addend shr 12) and 0xfff
+                if (high != 0L) o(ARM64_ADD_IMM or 0x80400000.toInt() or (r shl 5) or r or (high.toInt() shl 10))
+            }
+        } else {
+            addRelocation(symbol, "R_AARCH64_ADR_PREL_PG_HI21", addend)
+            o(ARM64_ADRP or r)
+            addRelocation(symbol, "R_AARCH64_ADD_ABS_LO12_NC", addend)
+            o(ARM64_ADD_IMM or 0x80000000.toInt() or (r shl 5) or r)
+        }
+    }
 }
