@@ -635,6 +635,40 @@ object TccElf {
         return gotSymbol
     }
 
+    fun prepareDynamicRelocations(
+        state: ElfState,
+        relocationSection: ElfSection,
+        symbols: ElfSection,
+        outputDll: Boolean,
+        absoluteDynamicTypes: Set<Int>,
+        pcRelativeTypes: Set<Int>,
+        hiddenLocalReplacements: Map<Int, Int> = emptyMap(),
+        undefinedAbsoluteType: Int? = null,
+        relativeType: Int = 0,
+    ): Int {
+        var count = 0
+        relocationSection.relocations.forEach { relocation ->
+            val symbol = symbols.symbols.getOrNull(relocation.symbolIndex) ?: return@forEach
+            val dynamicIndex = getSymbolAttributes(state, relocation.symbolIndex, false)?.dynamicIndex ?: 0
+            val type = relocation.type
+            if (undefinedAbsoluteType == type && dynamicIndex == 0 && symbol.sectionIndex == SHN_UNDEF) {
+                relocation.type = relativeType
+                return@forEach
+            }
+            if (type in absoluteDynamicTypes) {
+                count++
+                return@forEach
+            }
+            val replacement = hiddenLocalReplacements[type]
+            if (replacement != null && symbol.sectionIndex != SHN_UNDEF && (symbol.other and 3) == STV_HIDDEN) {
+                relocation.type = replacement
+                return@forEach
+            }
+            if (type in pcRelativeTypes && outputDll && dynamicIndex != 0) count++
+        }
+        return count
+    }
+
     fun relocateSection(
         state: ElfState,
         target: ElfSection,
