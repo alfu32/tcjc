@@ -481,6 +481,64 @@ class Riscv64Asm(
         return false
     }
 
+    fun parseRoundingMode(name: String?): Int = when (name) {
+        null -> 7; "rne" -> 0; "rtz" -> 1; "rdn" -> 2; "rup" -> 3; "rmm" -> 4
+        else -> { expect("rounding mode"); 7 }
+    }
+
+    fun emitFloatingInstruction(name: String, operands: List<Operand>, roundingMode: Int = 7): Boolean {
+        if (operands.size != 2 && operands.size != 3) { expect("two or three floating point operands"); return false }
+        val rd = operands[0]
+        val rs1 = operands[1]
+        val format = if (name.endsWith("_d") || name.endsWith(".d")) 1 else 0
+        val simple = mapOf("fadd" to (0 to 7), "fsub" to (1 to 7), "fmul" to (2 to 7), "fdiv" to (3 to 7),
+            "fsgnj" to (4 to 0), "fmin" to (5 to 0), "fmax" to (5 to 1))
+        val operation = name.removeSuffix("_s").removeSuffix("_d").removeSuffix(".s").removeSuffix(".d")
+        if (operation == "fsqrt") {
+            if (operands.size != 2) { expect("two floating point operands"); return false }
+            return emitFloatingUnary(0x53 or (11 shl 27) or (format shl 25) or (7 shl 12), rd, rs1)
+        }
+        if (operation in setOf("fneg", "fmv", "fabs")) {
+            val function3 = when (operation) { "fneg" -> 1; "fmv" -> 0; else -> 2 }
+            val function5 = if (operation == "fabs") 4 else 4
+            val opcode = 0x53 or (function5 shl 27) or (format shl 25) or (function3 shl 12)
+            return emitFloating(opcode, rd, rs1, rs1)
+        }
+        val comparison = mapOf("feq" to 2, "flt" to 1, "fle" to 0)
+        if (operation in comparison && operands.size == 3) {
+            val rs2 = operands[2]
+            val opcode = 0x53 or (0x14 shl 27) or (format shl 25) or (comparison.getValue(operation) shl 12)
+            emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register) or encodeRs2(rs2.register))
+            return true
+        }
+        val encoding = simple[operation]
+        if (encoding != null && operands.size == 3) {
+            val opcode = 0x53 or (encoding.first shl 27) or (format shl 25) or (encoding.second shl 12)
+            return emitFloating(opcode, rd, rs1, operands[2])
+        }
+        val convert = conversionEncoding(name.replace('_', '.')) ?: run { expect("floating point instruction"); return false }
+        val rm = if (convert.third < 0) roundingMode else convert.third
+        val opcode = 0x53 or (convert.first shl 25) or (rm shl 12) or (convert.second shl 20)
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register))
+        return true
+    }
+
+    private fun conversionEncoding(name: String): Triple<Int, Int, Int>? {
+        val encodings = mapOf(
+            "fcvt.w.s" to Triple(0x60, 0, -1), "fcvt.wu.s" to Triple(0x60, 1, -1),
+            "fcvt.l.s" to Triple(0x60, 2, -1), "fcvt.lu.s" to Triple(0x60, 3, -1),
+            "fcvt.w.d" to Triple(0x61, 0, -1), "fcvt.wu.d" to Triple(0x61, 1, -1),
+            "fcvt.l.d" to Triple(0x61, 2, -1), "fcvt.lu.d" to Triple(0x61, 3, -1),
+            "fcvt.s.w" to Triple(0x68, 0, 7), "fcvt.s.wu" to Triple(0x68, 1, 7),
+            "fcvt.s.l" to Triple(0x68, 2, 7), "fcvt.s.lu" to Triple(0x68, 3, 7),
+            "fcvt.d.w" to Triple(0x69, 0, 7), "fcvt.d.wu" to Triple(0x69, 1, 7),
+            "fcvt.d.l" to Triple(0x69, 2, 7), "fcvt.d.lu" to Triple(0x69, 3, 7),
+            "fcvt.s.d" to Triple(0x20, 1, 7), "fcvt.d.s" to Triple(0x21, 0, 7),
+            "fclass.s" to Triple(0x70, 0, 1), "fclass.d" to Triple(0x71, 0, 1),
+        )
+        return encodings[name]
+    }
+
     fun emitBinaryInstruction(name: String, rd: Operand, source: Operand): Boolean = when (name) {
         "lui" -> emitU(0x37, rd, source)
         "auipc" -> emitU(0x17, rd, source)
