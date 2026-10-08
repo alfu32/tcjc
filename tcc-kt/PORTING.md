@@ -1,9 +1,9 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 23
+- **DONE:** 24
 - **DOING:** 1
-- **TODO:** 30
+- **TODO:** 29
 - **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt` (current; test bodies pending)
 - **C tests retained:** all C test programs and test cases under `tests/` except the `tcctest.c` harness
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
@@ -21,7 +21,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `arm64-gen.c` | TODO |
 | `arm64-link.c` | TODO |
 | `c67-gen.c` | TODO |
-| `c67-link.c` | TODO |
+| `c67-link.c` | DONE |
 | `conftest.c` | DONE |
 | `i386-asm.c` | TODO |
 | `i386-gen.c` | TODO |
