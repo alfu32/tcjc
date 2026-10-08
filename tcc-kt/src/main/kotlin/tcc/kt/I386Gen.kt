@@ -155,6 +155,61 @@ class I386Gen(
         }
     }
 
+    enum class IntegerOperation { ADD, ADC, SUB, SBB, AND, XOR, OR, COMPARE, MULTIPLY, SHIFT_LEFT, SHIFT_RIGHT, SHIFT_ARITHMETIC, DIVIDE, UDIVIDE, MODULO, UMODULO, MULTIPLY_UNSIGNED_WIDE }
+    data class IntegerResult(val register: Int, val highRegister: Int? = null, val comparison: Boolean = false)
+
+    /** Emits the integer instruction sequences selected by i386-gen.c's gen_opi. */
+    fun integerOperation(operation: IntegerOperation, destination: Int, sourceRegister: Int? = null, immediate: Int? = null): IntegerResult {
+        val dst = destination and 7
+        val src = sourceRegister?.and(7)
+        val group = when (operation) {
+            IntegerOperation.ADD -> 0; IntegerOperation.OR -> 1; IntegerOperation.ADC -> 2
+            IntegerOperation.SBB -> 3; IntegerOperation.AND -> 4; IntegerOperation.SUB -> 5
+            IntegerOperation.XOR -> 6; IntegerOperation.COMPARE -> 7
+            else -> -1
+        }
+        if (group >= 0) {
+            if (immediate != null) {
+                if (immediate in -128..127 && (operation == IntegerOperation.ADD || operation == IntegerOperation.SUB) && (immediate == 1 || immediate == -1)) {
+                    val decrement = (immediate == 1) xor (operation == IntegerOperation.ADD)
+                    o((if (decrement) 0x48 else 0x40) + dst)
+                } else if (immediate in -128..127) {
+                    o(0x83); o(0xc0 or (group shl 3) or dst); g(immediate)
+                } else {
+                    o(0x81); oad(0xc0 or (group shl 3) or dst, immediate)
+                }
+            } else {
+                val rhs = src ?: throw IllegalArgumentException("register source required")
+                o((group shl 3) or 0x01)
+                o(0xc0 + dst + (rhs shl 3))
+            }
+            return IntegerResult(dst, comparison = operation == IntegerOperation.COMPARE)
+        }
+        when (operation) {
+            IntegerOperation.MULTIPLY -> {
+                val rhs = src ?: throw IllegalArgumentException("register source required")
+                o(0xaf0f); o(0xc0 + rhs + (dst shl 3)); return IntegerResult(dst)
+            }
+            IntegerOperation.SHIFT_LEFT, IntegerOperation.SHIFT_RIGHT, IntegerOperation.SHIFT_ARITHMETIC -> {
+                val groupCode = when (operation) { IntegerOperation.SHIFT_LEFT -> 4; IntegerOperation.SHIFT_RIGHT -> 5; else -> 7 }
+                if (immediate != null) { o(0xc1); o(0xc0 or (groupCode shl 3) or dst); g(immediate and 0x1f) }
+                else { o(0xd3); o(0xc0 or (groupCode shl 3) or dst) }
+                return IntegerResult(dst)
+            }
+            IntegerOperation.DIVIDE, IntegerOperation.UDIVIDE, IntegerOperation.MODULO, IntegerOperation.UMODULO -> {
+                val rhs = src ?: throw IllegalArgumentException("register source required")
+                if (operation == IntegerOperation.UDIVIDE || operation == IntegerOperation.UMODULO) { o(0xf7d231); o(0xf0 + rhs) }
+                else { o(0xf799); o(0xf8 + rhs) }
+                return IntegerResult(if (operation == IntegerOperation.MODULO || operation == IntegerOperation.UMODULO) 2 else 0)
+            }
+            IntegerOperation.MULTIPLY_UNSIGNED_WIDE -> {
+                val rhs = src ?: throw IllegalArgumentException("register source required")
+                o(0xf7); o(0xe0 + rhs); return IntegerResult(0, 2)
+            }
+            else -> throw IllegalArgumentException("unsupported i386 integer operation $operation")
+        }
+    }
+
     /** Emits the C backend's load operation for common scalar value forms. */
     fun load(register: Int, value: I386Value) {
         val kind = value.kind
