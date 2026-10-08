@@ -425,6 +425,23 @@ class Riscv64Gen(
         return CallPlan(info, stackAdjustment, temporarySpace, stackAdjustment + temporarySpace)
     }
 
+    /** Applies the outgoing stack reservation or release used around gfunc_call(). */
+    fun adjustOutgoingStack(byteCount: Int, reserve: Boolean) {
+        if (byteCount == 0) return
+        val adjustment = if (reserve) -byteCount else byteCount
+        if (byteCount >= 0x800) {
+            emitInstruction(0x37 or (5 shl 7) or lowOverflow(adjustment))
+            emitImmediate(0x13, 0, 5, 5, sign11(adjustment))
+            emitRegister(0x33, 0, 2, 2, 5, 0)
+        } else emitImmediate(0x13, 0, 2, 2, adjustment)
+    }
+
+    fun emitCall(plan: CallPlan, target: CallTarget) {
+        adjustOutgoingStack(plan.stackSize, true)
+        callOrJump(target, true)
+        adjustOutgoingStack(plan.stackSize, false)
+    }
+
     private fun integerRegistersOrFloatRegister(registerClass: Int, integerCount: Int, floatingCount: Int): Int =
         if (registerClass == RC_INT) integerCount else floatingCount
 
