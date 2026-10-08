@@ -24,6 +24,15 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OP_ADDR = 1 shl 18
         const val OP_INDIR = 1 shl 19
         const val OP_EA = 0x40000000
+
+        /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
+        val conditionCodes = intArrayOf(
+            0x00, 0x01, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03,
+            0x04, 0x04, 0x05, 0x05, 0x06, 0x06, 0x07, 0x07,
+            0x08, 0x09, 0x0a, 0x0a, 0x0b, 0x0b, 0x0c, 0x0c,
+            0x0d, 0x0d, 0x0e, 0x0e, 0x0f, 0x0f,
+        )
+        val segmentPrefixes = intArrayOf(0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65)
     }
 
     data class Expression(val value: Int = 0, val symbol: String? = null, val pcRelative: Boolean = false)
@@ -43,6 +52,26 @@ class I386Asm(private val emit: (Int) -> Unit) {
         8 -> 3
         else -> throw IllegalArgumentException("expected scale 1, 2, 4 or 8")
     }
+
+    /** Priority order used to choose among an operand's alternative constraints. */
+    fun constraintPriority(constraint: String): Int {
+        var priority = 0
+        for (code in constraint) {
+            val current = when (code) {
+                'A' -> 0
+                'a', 'b', 'c', 'd', 'S', 'D' -> 1
+                'q' -> 2
+                'r', 'R', 'p' -> 3
+                'N', 'M', 'I', 'e', 'i', 'm', 'g' -> 4
+                else -> throw IllegalArgumentException("unknown constraint '$code'")
+            }
+            priority = maxOf(priority, current)
+        }
+        return priority
+    }
+
+    fun skipConstraintModifiers(constraint: String): String =
+        constraint.dropWhile { it == '=' || it == '&' || it == '+' || it == '%' }
 
     fun immediate(value: Int): Operand {
         var type = OP_IM32
