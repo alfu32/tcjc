@@ -188,6 +188,50 @@ object ArmGen {
     data class Symbol(val name: String, val isStatic: Boolean = false)
     data class ConstantValue(val value: Int, val symbol: Symbol? = null)
 
+    data class AvailableVfpRegisters(
+        val holes: IntArray = IntArray(3), var firstHole: Int = 0,
+        var lastHole: Int = 0, var firstFree: Int = 0,
+    )
+
+    /** Allocates a VFP argument range using the AAPCS hole and alignment rules. */
+    fun assignVfpRegister(registers: AvailableVfpRegisters, alignment: Int, size: Int): Int {
+        if (registers.firstFree == -1) return -1
+        var first = registers.firstFree
+        if (alignment shr 3 != 0) {
+            if (first and 1 != 0) {
+                registers.holes[registers.lastHole++] = first
+                first++
+            }
+        } else if (size == 4 && registers.firstHole != registers.lastHole) {
+            return registers.holes[registers.firstHole++]
+        }
+        if (first + size / 4 <= 16) {
+            registers.firstFree = first + size / 4
+            return first
+        }
+        registers.firstFree = -1
+        return -1
+    }
+
+    enum class AggregateMemberType { FLOAT, DOUBLE, OTHER }
+
+    fun isHomogeneousFloatAggregate(isStruct: Boolean, memberTypes: List<AggregateMemberType>): Boolean {
+        if (!isStruct || memberTypes.isEmpty()) return false
+        val first = memberTypes.first()
+        return first != AggregateMemberType.OTHER && memberTypes.size <= 4 && memberTypes.all { it == first }
+    }
+
+    data class StructReturn(val registerCount: Int, val alignment: Int? = null, val registerSize: Int? = null, val type: String? = null)
+
+    /** Applies ARM EABI structure and homogeneous-float aggregate return rules. */
+    fun structureReturn(size: Int, hardFloat: Boolean, variadic: Boolean, isFloat: Boolean, homogeneousFloatAggregate: Boolean, eabi: Boolean): StructReturn {
+        if (!eabi) return StructReturn(0)
+        if (hardFloat && !variadic && (isFloat || homogeneousFloatAggregate))
+            return StructReturn((size + 7) shr 3, 8, 8, "double")
+        if (size in 1..4) return StructReturn(1, 4, 4, "int")
+        return StructReturn(0)
+    }
+
     /** Emits the literal-pool and relocation sequence used to load a C value into an ARM register. */
     fun emitLoadValue(
         value: ConstantValue, register: Int, cpuVersion: Int, pic: Boolean,
