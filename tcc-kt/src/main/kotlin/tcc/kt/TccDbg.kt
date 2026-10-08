@@ -179,7 +179,7 @@ object TccDbg {
     val dwarfLineOpcodes = byteArrayOf(0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1)
 
     /** Builds the DWARF abbreviation table in the exact numeric order expected by tccdbg.c. */
-    fun abbreviationTable(pointerSize: Int = 8): ByteArray {
+    fun abbreviationTable(pointerSize: Int = 8, dwarfVersion: Int = 5): ByteArray {
         val attrs: (Int, Int) -> AttributeForm = { attribute, form -> AttributeForm(attribute, form) }
         val highPc = if (pointerSize == 4) 0x06 else 0x07
         val lineString = 0x1f
@@ -216,13 +216,146 @@ object TccDbg {
             bytes += uleb128(abbreviation.code.toLong()).toList(); bytes += uleb128(abbreviation.tag.toLong()).toList()
             bytes += if (abbreviation.hasChildren) 1 else 0
             abbreviation.attributes.forEach { attribute ->
+                var form = attribute.form
+                if (dwarfVersion < 5 && form == lineString) form = 0x0e
+                if (dwarfVersion < 4 && form == 0x17) form = 0x06
+                if (dwarfVersion < 4 && form == 0x18) form = 0x0a
                 bytes += uleb128(attribute.attribute.toLong()).toList()
-                bytes += uleb128(attribute.form.toLong()).toList()
+                bytes += uleb128(form.toLong()).toList()
             }
             bytes += 0; bytes += 0
         }
         bytes += 0
         return bytes.toByteArray()
+    }
+
+    fun beginDwarfCompilationUnit(
+        state: DebugSections,
+        version: Int,
+        pointerSize: Int,
+        textStart: Long,
+        filename: String,
+        compilationDirectory: String,
+        producer: String,
+        cVersion: Int,
+        refs: DwarfSymbolRefs,
+        minimumInstructionLength: Int = 1,
+    ): DwarfUnitState {
+        require(version in 2..5 && pointerSize in setOf(4, 8))
+        val info = state.sections.getValue(".debug_info")
+        val abbrev = state.sections.getValue(".debug_abbrev")
+        val line = state.sections.getValue(".debug_line")
+        val abbrevStart = abbrev.size
+        abbrev.append(abbreviationTable(pointerSize, version))
+        val infoStart = info.size
+        val infoLengthOffset = info.size
+        writeData4(info, 0); writeData2(info, version)
+        if (version >= 5) {
+            writeData1(info, 1); writeData1(info, pointerSize)
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.abbrev)
+            writeData4(info, abbrevStart)
+        } else {
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.abbrev)
+            writeData4(info, abbrevStart); writeData1(info, pointerSize)
+        }
+        writeData1(info, 1)
+        writeStringReference(state, info, producer, refs.strings, pointerSize = pointerSize)
+        writeData1(info, if (cVersion == 201112) 0x1d else 0x0c)
+        val useLineStrings = version >= 5
+        val lineStringSymbol = if (useLineStrings) refs.lineStrings else refs.strings
+        writeStringReference(state, info, filename, lineStringSymbol, lineString = useLineStrings, pointerSize = pointerSize)
+        writeStringReference(state, info, compilationDirectory, lineStringSymbol, lineString = useLineStrings, pointerSize = pointerSize)
+        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", refs.text)
+        val highPcOffset = info.size + pointerSize
+        if (pointerSize == 4) { writeData4(info, textStart.toInt()); writeData4(info, 0) }
+        else { writeData8(info, textStart); writeData8(info, 0) }
+        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.line)
+        writeData4(info, line.size)
+
+        val lineStart = line.size
+        val lineLengthOffset = line.size
+        writeData4(line, 0); writeData2(line, version)
+        if (version >= 5) { writeData1(line, pointerSize); writeData1(line, 0) }
+        val prologueLengthOffset = line.size
+        writeData4(line, 0)
+        val prologueStart = line.size
+        writeData1(line, minimumInstructionLength)
+        if (version >= 4) writeData1(line, 1)
+        writeData1(line, 1); writeData1(line, DWARF_LINE_BASE); writeData1(line, DWARF_LINE_RANGE); writeData1(line, DWARF_OPCODE_BASE)
+        line.append(dwarfLineOpcodes)
+        val lineState = createDwarfLineState(filename, compilationDirectory, version)
+        lineState.operations += 0
+        lineState.operations.addAll(uleb128((1 + pointerSize).toLong()).toList())
+        lineState.operations += 2
+        repeat(pointerSize) { lineState.operations += 0 }
+        return DwarfUnitState(version, pointerSize, infoStart, infoLengthOffset, highPcOffset,
+            lineStart, lineLengthOffset, prologueLengthOffset, prologueStart, textStart, refs, lineState)
+    }
+
+    /** Completes the unit, aranges, file tables, and buffered line program. */
+    fun finishDwarfCompilationUnit(state: DebugSections, unit: DwarfUnitState, textSize: Int) {
+        val info = state.sections.getValue(".debug_info")
+        val line = state.sections.getValue(".debug_line")
+        val aranges = state.sections.getValue(".debug_aranges")
+        writeData1(info, 0)
+        patch32(info, unit.infoLengthOffset, info.size - unit.infoStart - 4)
+        if (unit.pointerSize == 4) patch32(info, unit.highPcOffset, textSize)
+        else patch64(info, unit.highPcOffset, textSize.toLong())
+
+        val arangesStart = aranges.size
+        writeData4(aranges, 0); writeData2(aranges, 2)
+        state.relocations.getOrPut(aranges.name) { mutableListOf() } += Relocation(aranges.size, "R_DATA_32DW", unit.refs.info)
+        writeData4(aranges, 0)
+        writeData1(aranges, unit.pointerSize); writeData1(aranges, 0); writeData4(aranges, 0)
+        state.relocations.getOrPut(aranges.name) { mutableListOf() } += Relocation(aranges.size, "R_DATA_PTR", unit.refs.text)
+        if (unit.pointerSize == 4) {
+            writeData4(aranges, 0); writeData4(aranges, textSize); writeData4(aranges, 0); writeData4(aranges, 0)
+        } else {
+            writeData8(aranges, 0); writeData8(aranges, textSize.toLong()); writeData8(aranges, 0); writeData8(aranges, 0)
+        }
+        patch32(aranges, arangesStart, aranges.size - arangesStart - 4)
+
+        if (unit.version >= 5) {
+            writeData1(line, 1)
+            writeUleb(line, 1); writeUleb(line, 0x1f); writeUleb(line, unit.lineState.directories.size.toLong())
+            unit.lineState.directories.forEach { writeStringReference(state, line, it, unit.refs.lineStrings, true, unit.pointerSize) }
+            writeData1(line, 2)
+            writeUleb(line, 1); writeUleb(line, 0x1f); writeUleb(line, 0x3b); writeUleb(line, 0x0f)
+            writeUleb(line, unit.lineState.files.size.toLong())
+            unit.lineState.files.forEach { file ->
+                writeStringReference(state, line, file.name, unit.refs.lineStrings, true, unit.pointerSize)
+                writeUleb(line, file.directoryIndex.toLong())
+            }
+        } else {
+            unit.lineState.directories.forEach { writeCString(line, it) }
+            writeData1(line, 0)
+            unit.lineState.files.forEach { file ->
+                writeCString(line, file.name)
+                writeUleb(line, file.directoryIndex.toLong()); writeUleb(line, 0); writeUleb(line, 0)
+            }
+            writeData1(line, 0)
+        }
+        unit.lineState.operations += 0
+        unit.lineState.operations.addAll(uleb128(1).toList())
+        unit.lineState.operations += 1 // DW_LNE_end_sequence
+        val prologueLength = line.size - unit.linePrologueStart
+        patch32(line, unit.linePrologueLengthOffset, prologueLength)
+        val programStart = line.size
+        repeat(3) { writeData1(line, 0) }
+        state.relocations.getOrPut(line.name) { mutableListOf() } += Relocation(line.size, "R_DATA_PTR", unit.refs.text)
+        repeat((unit.lineState.operations.size - 3).coerceAtLeast(0)) { writeData1(line, 0) }
+        unit.lineState.operations.forEachIndexed { index, byte -> line.bytes[programStart + index] = byte }
+        patch32(line, unit.lineLengthOffset, line.size - unit.lineStart - 4)
+        state.sections[".debug_str"]?.append(state.debugStrings.bytes())
+        state.sections[".debug_line_str"]?.append(state.lineStrings.bytes())
+    }
+
+    private fun writeCString(section: DwarfSection, value: String) {
+        section.append(value.toByteArray(Charsets.UTF_8)); section.append(0)
+    }
+
+    private fun patch64(section: DwarfSection, offset: Int, value: Long) {
+        repeat(8) { byte -> section.bytes[offset + byte] = (value ushr (byte * 8)).toByte() }
     }
 
     fun registerDwarfFile(state: DwarfLineState, filename: String, dwarfVersion: Int): Int {
@@ -288,6 +421,24 @@ object TccDbg {
 
     enum class EhTarget { I386, X86_64, ARM, ARM64, RISCV64 }
     data class EhFrameState(val section: DwarfSection, val startOffset: Int, val target: EhTarget)
+    data class DwarfSymbolRefs(
+        val info: Int, val abbrev: Int, val line: Int, val strings: Int,
+        val lineStrings: Int, val text: Int,
+    )
+    data class DwarfUnitState(
+        val version: Int,
+        val pointerSize: Int,
+        val infoStart: Int,
+        val infoLengthOffset: Int,
+        val highPcOffset: Int,
+        val lineStart: Int,
+        val lineLengthOffset: Int,
+        val linePrologueLengthOffset: Int,
+        val linePrologueStart: Int,
+        val textStart: Long,
+        val refs: DwarfSymbolRefs,
+        val lineState: DwarfLineState,
+    )
 
     /** Emits the target CIE and patches its length after alignment. */
     fun startEhFrame(unwindTables: Boolean, target: EhTarget): EhFrameState? {
