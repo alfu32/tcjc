@@ -41,7 +41,7 @@ object TccElf {
         var other: Int,
         var sectionIndex: Int,
     )
-    data class ElfRelocation(val offset: Long, var symbolIndex: Int, val type: Int, val addend: Long = 0)
+    data class ElfRelocation(var offset: Long, var symbolIndex: Int, val type: Int, val addend: Long = 0)
     data class SymbolAttributes(
         var gotOffset: Long = 0,
         var pltOffset: Long = 0,
@@ -498,6 +498,62 @@ object TccElf {
         }
     }
 
+    fun relocateSection(
+        state: ElfState,
+        target: ElfSection,
+        relocationSection: ElfSection,
+        symbols: ElfSection,
+        dwarfSectionIndices: IntRange = IntRange.EMPTY,
+        rela: Boolean = state.wordSize == 8,
+        dynamicOutput: Boolean = false,
+        applyRelocation: (ElfRelocation, MutableList<Byte>, Long, Long) -> Unit,
+    ) {
+        if (target.type == SHT_NOBITS) return
+        relocationSection.relocations.forEach { relocation ->
+            val symbol = symbols.symbols.getOrNull(relocation.symbolIndex) ?: return@forEach
+            val symbolSectionIndex = symbol.sectionIndex
+            val symbolValue = symbol.value + if (rela) relocation.addend else 0L
+            if (target.index in dwarfSectionIndices && symbolSectionIndex in dwarfSectionIndices) {
+                val offset = relocation.offset.toInt()
+                if (offset in 0..(target.data.size - 4)) {
+                    val relative = symbolValue - (state.sections[symbolSectionIndex]?.address ?: 0L)
+                    addInt32(target.data, offset, relative.toInt())
+                }
+                return@forEach
+            }
+            applyRelocation(relocation, target.data, target.address + relocation.offset, symbolValue)
+        }
+        if (relocationSection.flags and SHF_ALLOC != 0) {
+            state.dynamicSymbolTable?.let { relocationSection.link = it }
+            if (dynamicOutput) {
+                relocationSection.dataOffset = relocationSection.relocations.size * relocationSection.entrySize
+                if (state.wordSize == 8 && target.name == ".stab") relocationSection.dataOffset = 0
+            }
+        }
+    }
+
+    fun relocateSections(
+        state: ElfState,
+        symbols: ElfSection,
+        gotSection: ElfSection? = null,
+        staticLink: Boolean = false,
+        memoryOutput: Boolean = false,
+        dynamicOutput: Boolean = false,
+        dwarfSectionIndices: IntRange = IntRange.EMPTY,
+        applyRelocation: (ElfRelocation, MutableList<Byte>, Long, Long) -> Unit,
+    ) {
+        state.sections.drop(1).filterNotNull().forEach { relocationSection ->
+            if (relocationSection.type != SHT_REL && relocationSection.type != SHT_RELA) return@forEach
+            val target = state.sections.getOrNull(relocationSection.sectionInfo) ?: return@forEach
+            if (target === gotSection && !staticLink && !memoryOutput) return@forEach
+            relocateSection(state, target, relocationSection, symbols, dwarfSectionIndices,
+                relocationSection.type == SHT_RELA, dynamicOutput, applyRelocation)
+            if (relocationSection.flags and SHF_ALLOC != 0) {
+                relocationSection.relocations.forEach { it.offset += target.address }
+            }
+        }
+    }
+
     fun getSymbolAttributes(state: ElfState, index: Int, allocate: Boolean): SymbolAttributes? {
         if (index < state.symbolAttributes.size) return state.symbolAttributes[index]
         if (!allocate) return null
@@ -594,5 +650,8 @@ object TccElf {
             ((input[offset + 2].toInt() and 0xff) shl 16) or ((input[offset + 3].toInt() and 0xff) shl 24)
     private fun writeInt32(output: MutableList<Byte>, offset: Int, value: Int) {
         repeat(4) { shift -> output[offset + shift] = (value ushr (shift * 8)).toByte() }
+    }
+    private fun addInt32(output: MutableList<Byte>, offset: Int, value: Int) {
+        writeInt32(output, offset, readInt32(output, offset) + value)
     }
 }
