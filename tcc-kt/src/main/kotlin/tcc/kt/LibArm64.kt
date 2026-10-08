@@ -188,4 +188,182 @@ object LibArm64 {
         val (normalizedExponent, normalizedValue) = normalized(exponent, UInt128(xLow, xHigh))
         return round(a.sign xor b.sign, normalizedExponent, normalizedValue)
     }
+
+    fun extendsftf2(value: Float): UInt128 {
+        val bits = value.toRawBits().toUInt()
+        val raw = bits.toULong()
+        var low = 0uL
+        val high: ULong = when {
+            (bits shl 1) == 0u -> raw shl 32
+            ((bits shl 1) shr 24) == 255u -> 0x7fff000000000000uL or (raw shr 31 shl 63) or (raw shl 41 shr 16) or ((if (bits shl 9 != 0u) 1uL else 0uL) shl 47)
+            ((bits shl 1) shr 24) == 0u -> {
+                var adjustment = 0
+                while (((bits shl 1) shr 1 shr (23 - adjustment)) == 0u) adjustment++
+                (raw shr 31 shl 63) or ((16256 - adjustment + 1).toULong() shl 48) or (raw shl adjustment shl 41 shr 16)
+            }
+            else -> (raw shr 31 shl 63) or ((((raw shr 23) and 255uL) + 16256uL) shl 48) or (raw shl 41 shr 16)
+        }
+        return UInt128(low, high)
+    }
+
+    fun extenddftf2(value: Double): UInt128 {
+        val bits = value.toRawBits().toULong()
+        var low = bits shl 60
+        val high = when {
+            bits shl 1 == 0uL -> bits
+            (bits shl 1 shr 53) == 2047uL -> 0x7fff000000000000uL or (bits shr 63 shl 63) or (bits shl 12 shr 16) or ((if (bits shl 12 != 0uL) 1uL else 0uL) shl 47)
+            (bits shl 1 shr 53) == 0uL -> {
+                var adjustment = 0
+                while ((bits shl 1 shr 1 shr (52 - adjustment)) == 0uL) adjustment++
+                low = low shl adjustment
+                (bits shr 63 shl 63) or ((15360 - adjustment + 1).toULong() shl 48) or (bits shl adjustment shl 12 shr 16)
+            }
+            else -> (bits shr 63 shl 63) or ((((bits shr 52) and 2047uL) + 15360uL) shl 48) or (bits shl 12 shr 16)
+        }
+        return UInt128(low, high)
+    }
+
+    fun trunctfsf2(value: UInt128): Float {
+        val unpacked = unpack(value)
+        val mantissa = unpacked.mantissa
+        val bits = when {
+            unpacked.exponent == 32767 && (mantissa.low or (mantissa.high shl 16)) != 0uL -> 0x7fc00000u or (unpacked.sign.toUInt() shl 31) or ((mantissa.high shr 25).toUInt() and 0x007fffffu)
+            unpacked.exponent > 16510 -> 0x7f800000u or (unpacked.sign.toUInt() shl 31)
+            unpacked.exponent < 16233 -> unpacked.sign.toUInt() shl 31
+            else -> {
+                var exp = unpacked.exponent - 16257
+                var x = (mantissa.high shr 23) or (if ((mantissa.low or (mantissa.high shl 41)) != 0uL) 1uL else 0uL)
+                if (exp < 0) { x = (x shr -exp) or (if (x shl (32 + exp) != 0uL) 1uL else 0uL); exp = 0 }
+                if ((x and 3uL) == 3uL || (x and 7uL) == 6uL) x += 4uL
+                (((x shr 2) + (exp.toULong() shl 23)).toUInt()) or (unpacked.sign.toUInt() shl 31)
+            }
+        }
+        return Float.fromBits(bits.toInt())
+    }
+
+    fun trunctfdf2(value: UInt128): Double {
+        val unpacked = unpack(value)
+        val mantissa = unpacked.mantissa
+        val bits = when {
+            unpacked.exponent == 32767 && (mantissa.low or (mantissa.high shl 16)) != 0uL -> 0x7ff8000000000000uL or (unpacked.sign.toULong() shl 63) or (mantissa.high shl 16 shr 12) or (mantissa.low shr 60)
+            unpacked.exponent > 17406 -> 0x7ff0000000000000uL or (unpacked.sign.toULong() shl 63)
+            unpacked.exponent < 15308 -> unpacked.sign.toULong() shl 63
+            else -> {
+                var exp = unpacked.exponent - 15361
+                var x = (mantissa.high shl 6) or (mantissa.low shr 58) or (if (mantissa.low shl 6 != 0uL) 1uL else 0uL)
+                if (exp < 0) { x = (x shr -exp) or (if (x shl (64 + exp) != 0uL) 1uL else 0uL); exp = 0 }
+                if ((x and 3uL) == 3uL || (x and 7uL) == 6uL) x += 4uL
+                ((x shr 2) + (exp.toULong() shl 52)) or (unpacked.sign.toULong() shl 63)
+            }
+        }
+        return Double.fromBits(bits.toLong())
+    }
+
+    fun fixtfsi(value: UInt128): Int {
+        val a = unpack(value)
+        if (a.exponent < 16369) return 0
+        if (a.exponent > 16413) return if (a.sign != 0) Int.MIN_VALUE else Int.MAX_VALUE
+        val x = (a.mantissa.high shr (16431 - a.exponent)).toInt()
+        return if (a.sign != 0) -x else x
+    }
+
+    fun fixtfdi(value: UInt128): Long {
+        val a = unpack(value)
+        if (a.exponent < 16383) return 0
+        if (a.exponent > 16445) return if (a.sign != 0) Long.MIN_VALUE else Long.MAX_VALUE
+        val x = ((a.mantissa.high shl 15) or (a.mantissa.low shr 49)) shr (16446 - a.exponent)
+        return if (a.sign != 0) 0uL.minus(x).toLong() else x.toLong()
+    }
+
+    fun fixunstfsi(value: UInt128): UInt = when (val a = unpack(value)) {
+        else -> when {
+            a.sign != 0 || a.exponent < 16369 -> 0u
+            a.exponent > 16414 -> UInt.MAX_VALUE
+            else -> (a.mantissa.high shr (16431 - a.exponent)).toUInt()
+        }
+    }
+
+    fun fixunstfdi(value: UInt128): ULong {
+        val a = unpack(value)
+        if (a.sign != 0 || a.exponent < 16383) return 0uL
+        if (a.exponent > 16446) return ULong.MAX_VALUE
+        return ((a.mantissa.high shl 15) or (a.mantissa.low shr 49)) shr (16446 - a.exponent)
+    }
+
+    fun floatsitf(value: Int): UInt128 {
+        var sign = 0
+        var exponent = 16414
+        var mantissa = value.toUInt()
+        if (value == 0) return UInt128(0uL, 0uL)
+        if (value < 0) { sign = 1; mantissa = 0u - mantissa }
+        var shift = 16
+        while (shift > 0) {
+            if (mantissa shr (32 - shift) == 0u) { mantissa = mantissa shl shift; exponent -= shift }
+            shift = shift shr 1
+        }
+        val high = (sign.toULong() shl 63) or (exponent.toULong() shl 48) or ((mantissa shl 1).toULong() shl 16)
+        return UInt128(0uL, high)
+    }
+
+    fun floatunsitf(value: UInt): UInt128 {
+        var exponent = 16414
+        var mantissa = value
+        if (value == 0u) return UInt128(0uL, 0uL)
+        var shift = 16
+        while (shift > 0) {
+            if (mantissa shr (32 - shift) == 0u) { mantissa = mantissa shl shift; exponent -= shift }
+            shift = shift shr 1
+        }
+        return UInt128(0uL, (exponent.toULong() shl 48) or ((mantissa shl 1).toULong() shl 16))
+    }
+
+    fun floatditf(value: Long): UInt128 {
+        var sign = 0
+        var exponent = 16446
+        var mantissa = value.toULong()
+        if (value == 0L) return UInt128(0uL, 0uL)
+        if (value < 0) { sign = 1; mantissa = 0uL - mantissa }
+        var shift = 32
+        while (shift > 0) {
+            if (mantissa shr (64 - shift) == 0uL) { mantissa = mantissa shl shift; exponent -= shift }
+            shift = shift shr 1
+        }
+        val low = mantissa shl 49
+        val high = (sign.toULong() shl 63) or (exponent.toULong() shl 48) or (mantissa shl 1 shr 16)
+        return UInt128(low, high)
+    }
+
+    fun floatunditf(value: ULong): UInt128 {
+        var exponent = 16446
+        var mantissa = value
+        if (value == 0uL) return UInt128(0uL, 0uL)
+        var shift = 32
+        while (shift > 0) {
+            if (mantissa shr (64 - shift) == 0uL) { mantissa = mantissa shl shift; exponent -= shift }
+            shift = shift shr 1
+        }
+        return UInt128(mantissa shl 49, (exponent.toULong() shl 48) or (mantissa shl 1 shr 16))
+    }
+
+    private fun compare(left: UInt128, right: UInt128): Int {
+        val a = left; val b = right
+        if ((a.low or (a.high shl 1) or b.low or (b.high shl 1)) == 0uL) return 0
+        fun nanBits(v: UInt128) = ((v.high shl 1) shr 49) == 0x7fffuL && (v.low or (v.high shl 16)) != 0uL
+        if (nanBits(a) || nanBits(b)) return 2
+        val aSign = (a.high shr 63).toInt(); val bSign = (b.high shr 63).toInt()
+        if (aSign != bSign) return bSign - aSign
+        val negativeFactor = if (aSign != 0) -1 else 1
+        if (a.high < b.high) return -negativeFactor
+        if (a.high > b.high) return negativeFactor
+        if (a.low < b.low) return -negativeFactor
+        if (a.low > b.low) return negativeFactor
+        return 0
+    }
+
+    fun eqtf2(a: UInt128, b: UInt128): Int = if (compare(a, b) != 0) 1 else 0
+    fun netf2(a: UInt128, b: UInt128): Int = if (compare(a, b) != 0) 1 else 0
+    fun lttf2(a: UInt128, b: UInt128): Int = compare(a, b)
+    fun letf2(a: UInt128, b: UInt128): Int = compare(a, b)
+    fun gttf2(a: UInt128, b: UInt128): Int = -compare(b, a)
+    fun getf2(a: UInt128, b: UInt128): Int = -compare(b, a)
 }
