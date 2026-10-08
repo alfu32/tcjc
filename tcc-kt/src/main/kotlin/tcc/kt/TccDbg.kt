@@ -719,16 +719,20 @@ object TccDbg {
                 name(current.name); writeUleb(context.section, current.byteSize.toLong())
                 writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
                 val sibling = if (hasMembers) context.section.size.also { writeData4(context.section, 0) } else -1
+                val memberFixups = mutableListOf<Pair<Int, DebugType>>()
                 current.members.forEach { member ->
-                    val memberType = emit(member.type)
                     writeData1(context.section, if (member.bitSize > 0) 15 else 14); name(member.name)
                     writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
-                    val typeOffset = context.section.size; writeData4(context.section, ref(memberType))
+                    val typeOffset = context.section.size; writeData4(context.section, 0)
                     if (member.bitSize > 0) { writeUleb(context.section, member.bitSize.toLong()); writeUleb(context.section, member.bitOffset.toLong()) }
                     context.strings.relocations.getOrPut(context.section.name) { mutableListOf() }
                         .add(Relocation(typeOffset, "R_DATA_32DW", context.refs.info))
+                    memberFixups += typeOffset to member.type
                 }
-                if (hasMembers) { writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)) }
+                if (hasMembers) {
+                    writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size))
+                    memberFixups.forEach { (referenceOffset, memberType) -> patch32(context.section, referenceOffset, ref(emit(memberType))) }
+                }
                 offset
             }
             is DebugType.Enumeration -> {
@@ -746,14 +750,19 @@ object TccDbg {
             is DebugType.Function -> {
                 val result = emit(current.result); val offset = context.section.size
                 writeData1(context.section, if (current.parameters.isEmpty()) 25 else 24)
+                val resultReference = context.section.size
                 writeData4(context.section, ref(result))
                 if (current.parameters.isNotEmpty()) {
                     val sibling = context.section.size; writeData4(context.section, 0)
+                    val parameterFixups = mutableListOf<Pair<Int, DebugType>>()
                     current.parameters.forEach { parameter ->
-                        val parameterType = emit(parameter)
-                        writeData1(context.section, 26); writeData4(context.section, ref(parameterType))
+                        writeData1(context.section, 26)
+                        parameterFixups += context.section.size to parameter
+                        writeData4(context.section, 0)
                     }
                     writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size))
+                    patch32(context.section, resultReference, ref(result))
+                    parameterFixups.forEach { (referenceOffset, parameter) -> patch32(context.section, referenceOffset, ref(emit(parameter))) }
                 }
                 offset
             }
