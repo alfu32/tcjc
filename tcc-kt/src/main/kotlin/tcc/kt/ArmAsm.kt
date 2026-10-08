@@ -156,4 +156,95 @@ class ArmAsm(
         }
         emitOpcode(token, firstConditionToken, opcode)
     }
+
+    /** Parses and encodes optional ARM barrel-shifter directives. */
+    fun parseOptionalShift(group: String, amount: Operand? = null): Pair<Int, Operand?> {
+        val mode = when (group) {
+            "asl", "lsl" -> 0 shl 5
+            "lsr" -> 1 shl 5
+            "asr" -> 2 shl 5
+            "ror", "rrx" -> 3 shl 5
+            else -> { expect("shift directive"); 0 }
+        }
+        return mode to if (group == "rrx") null else amount
+    }
+
+    fun encodeShift(shift: Operand): Int = when (shift.kind) {
+        Kind.REG32 -> {
+            if (shift.register == 15) { error("r15 cannot be used as a shift count"); 0 }
+            else (1 shl 4) or (shift.register shl 8)
+        }
+        Kind.IMM8 -> {
+            val value = shift.value.value
+            if (value in 1..31) value shl 7 else { error("shift count out of range"); 0 }
+        }
+        else -> { error("unknown shift amount"); 0 }
+    }
+
+    /** Emits ARM register shifts, including implicit-source and RRX spellings. */
+    fun emitShift(group: String, token: Int, firstConditionToken: Int, operands: List<Operand>, setFlags: Boolean = false) {
+        if (operands.size !in 2..3) { expect("two or three operands"); return }
+        val destination = operands[0]
+        if (destination.kind != Kind.REG32) { expect("(destination operand) register"); return }
+        var opcode = 0xd shl 21
+        var encoded = destination.register shl 12
+        if (setFlags) opcode = opcode or (1 shl 20)
+        if (operands.size == 2 && group == "rrx") {
+            if (operands[1].kind != Kind.REG32) { expect("(first source operand) register"); return }
+            emitOpcode(token, firstConditionToken, opcode or encoded or operands[1].register or (3 shl 5))
+            return
+        }
+        val source: Operand
+        val shift: Operand
+        if (operands.size == 2) { source = destination; shift = operands[1] }
+        else { source = operands[1]; shift = operands[2] }
+        if (source.kind != Kind.REG32) { expect("(first source operand) register"); return }
+        encoded = encoded or source.register
+        if (shift.kind == Kind.REG32 && (destination.register == 15 || source.register == 15))
+            error("Using the 'pc' register with a register-controlled shift is not implemented by ARM")
+        val mode = when (group) { "lsl" -> 0; "lsr" -> 1; "asr" -> 2; "ror" -> 3; else -> { expect("shift instruction"); 0 } }
+        if (shift.kind == Kind.IMM8) {
+            val value = shift.value.value
+            if (value == 0) {
+                emitOpcode(token, firstConditionToken, opcode or encoded)
+                return
+            }
+            encoded = encoded or encodeShift(shift)
+        } else encoded = encoded or encodeShift(shift)
+        encoded = encoded or (mode shl 5)
+        emitOpcode(token, firstConditionToken, opcode or encoded)
+    }
+
+    /** Emits ARM MUL, MLA, MLS, SDIV, and UDIV encodings. */
+    fun emitMultiply(group: String, token: Int, firstConditionToken: Int, operands: List<Operand>, setFlags: Boolean = false) {
+        val long = group in setOf("smull", "umull", "smlal", "umlal")
+        if (long) { emitLongMultiply(group, token, firstConditionToken, operands, setFlags); return }
+        val isMla = group == "mla" || group == "mls"
+        val actual = if (group == "mul" && operands.size == 2) listOf(operands[0], operands[1], operands[0]) else operands
+        if (actual.size != if (isMla) 4 else 3) { expect(if (isMla) "four operands" else "three operands"); return }
+        var opcode = 0x90
+        val rd = actual[0].register
+        if (actual.any { it.kind != Kind.REG32 }) { expect("register operands"); return }
+        opcode = opcode or (rd shl 16) or actual[1].register or (actual[2].register shl 8)
+        if (isMla) opcode = opcode or (1 shl 21) or (actual[3].register shl 12)
+        if (setFlags) opcode = opcode or (1 shl 20)
+        when (group) {
+            "mul", "mla" -> Unit
+            "mls" -> opcode = opcode or (1 shl 22)
+            "sdiv" -> opcode = (opcode and 0xffffff7f.toInt()) or 0x0710f010
+            "udiv" -> opcode = (opcode and 0xffffff7f.toInt()) or 0x0730f010
+            else -> { expect("known multiplication instruction"); return }
+        }
+        emitOpcode(token, firstConditionToken, opcode)
+    }
+
+    private fun emitLongMultiply(group: String, token: Int, firstConditionToken: Int, operands: List<Operand>, setFlags: Boolean) {
+        if (operands.size != 4 || operands.any { it.kind != Kind.REG32 }) { expect("four register operands"); return }
+        var opcode = 0x90 or (1 shl 23) or (operands[0].register shl 12) or
+            (operands[1].register shl 16) or operands[2].register or (operands[3].register shl 8)
+        if (group == "smull" || group == "smlal") opcode = opcode or (1 shl 22)
+        if (group == "smlal" || group == "umlal") opcode = opcode or (1 shl 21)
+        if (setFlags) opcode = opcode or (1 shl 20)
+        emitOpcode(token, firstConditionToken, opcode)
+    }
 }
