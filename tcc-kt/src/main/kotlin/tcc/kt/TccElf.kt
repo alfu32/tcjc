@@ -125,12 +125,10 @@ object TccElf {
     }
 
     fun putElfString(section: ElfSection, text: String): Int {
-        section.stringOffsets[text]?.let { return it }
         val offset = section.dataOffset
         text.toByteArray(Charsets.UTF_8).forEach { section.data += it }
         section.data += 0
         section.dataOffset = section.data.size
-        section.stringOffsets[text] = offset
         return offset
     }
 
