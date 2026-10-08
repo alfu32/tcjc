@@ -61,6 +61,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
     }
 
     private fun expandOperandType(type: Int): Int = when (type and 0x1f) {
+        in 0..19 -> 1 shl (type and 0x1f)
         20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
         21 -> OP_REG8 or OP_REG16 or OP_REG32
         22 -> OP_REG16 or OP_REG32
