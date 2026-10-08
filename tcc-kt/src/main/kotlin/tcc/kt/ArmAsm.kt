@@ -368,7 +368,7 @@ class ArmAsm(
         val transferOffset = offset ?: Operand(Kind.IMM8, value = Expression(0))
         when (transferOffset.kind) {
             Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
-                if (subtractOffset && transferOffset.value.value < 0) { error("minus before immediate is unsupported"); return }
+                if (subtractOffset) { error("minus before immediate is unsupported"); return }
                 val value = transferOffset.value.value
                 val magnitude = if (value < 0) -value else value
                 if (magnitude >= 0x1000) { error("offset out of range for '$group'"); return }
@@ -434,7 +434,7 @@ class ArmAsm(
         when (transferOffset.kind) {
             Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
                 val value = transferOffset.value.value
-                if (subtractOffset && value < 0) { error("minus before immediate is unsupported"); return }
+                if (subtractOffset) { error("minus before immediate is unsupported"); return }
                 val magnitude = if (value < 0) -value else value
                 if (magnitude >= 0x100) { error("offset out of range for '$group'"); return }
                 if ((value >= 0) xor subtractOffset) opcode = opcode or (1 shl 23)
@@ -527,7 +527,7 @@ class ArmAsm(
         when (offset.kind) {
             Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
                 val value = offset.value.value
-                if (offsetMinus && value < 0) { error("minus before immediate is unsupported"); return }
+                if (offsetMinus) { error("minus before immediate is unsupported"); return }
                 val magnitude = if (value < 0) -value else value
                 if (value >= 0 && !offsetMinus) opcode = opcode or (1 shl 23)
                 if (magnitude and 3 != 0) { error("immediate offset must be a multiple of 4"); return }
