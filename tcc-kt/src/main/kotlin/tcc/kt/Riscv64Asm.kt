@@ -94,6 +94,78 @@ class Riscv64Asm(
         return Operand(type = type, expression = expression)
     }
 
+    fun parseOperand(source: String, csrValue: (String) -> Int? = { null },
+        relocateSymbol: (String, Boolean) -> Unit = { _, _ -> }, isExternalOrStatic: (String) -> Boolean = { false }): Operand {
+        val text = source.trim()
+        parseRegister(text)?.let { return Operand(type = OP_REG, register = it) }
+        val expressionText = text.removePrefix("$")
+        val csr = csrValue(expressionText)
+        val expression = if (csr != null) Expression(csr.toLong()) else parseExpression(expressionText)
+        var operand = Operand(type = if (expression.value in -0x1000..0x0fff && expression.symbol == null) OP_IM12S else OP_IM32,
+            expression = expression)
+        if (expression.symbol != null && isExternalOrStatic(expression.symbol)) {
+            relocateSymbol(expression.symbol, false)
+            operand = operand.copy(type = OP_IM12S, expression = Expression(0))
+        } else if (expression.symbol != null) {
+            expect("operand")
+        }
+        return operand
+    }
+
+    fun parseBranchOffset(source: String, isExternalOrStatic: (String) -> Boolean = { false }): Operand {
+        val expression = parseExpression(source)
+        val type = if (expression.symbol == null && expression.value in -0x1000..0x0fff) OP_IM12S else OP_IM32
+        if (expression.symbol != null && !isExternalOrStatic(expression.symbol)) expect("operand")
+        return Operand(type, expression = if (expression.symbol != null) Expression(0, expression.symbol) else expression)
+    }
+
+    fun parseJumpOffset(source: String, isExternalOrStatic: (String) -> Boolean = { false },
+        relocateSymbol: (String, Boolean) -> Unit = { _, _ -> }): Operand {
+        val expression = parseExpression(source)
+        if (expression.symbol != null) {
+            if (!isExternalOrStatic(expression.symbol)) expect("operand") else relocateSymbol(expression.symbol, true)
+            return Operand(OP_IM12S, expression = Expression(0, expression.symbol))
+        }
+        return Operand(if (expression.value in -0x1000..0x0fff) OP_IM12S else OP_IM32, expression = expression)
+    }
+
+    fun parseOperands(source: String, count: Int, csrValue: (String) -> Int? = { null }): List<Operand> {
+        val parts = splitOperands(source)
+        if (parts.size != count) expect("$count operands")
+        return parts.take(count).map { parseOperand(it, csrValue) }
+    }
+
+    /** Parses `X, imm(Y)` into destination, base register, and offset operands. */
+    fun parseMemoryAccessOperands(source: String): List<Operand> {
+        val parts = splitOperands(source)
+        if (parts.size != 2) { expect("memory access operands"); return listOf(Operand(), Operand(), Operand()) }
+        val destination = parseOperand(parts[0])
+        val address = parts[1].trim()
+        val open = address.indexOf('(')
+        if (address.startsWith('(') && address.endsWith(')')) {
+            val base = parseOperand(address.substring(1, address.length - 1))
+            return listOf(destination, base, Operand(OP_IM12S))
+        }
+        if (open >= 0 && address.endsWith(')')) {
+            val immediate = parseOperand(address.substring(0, open).ifBlank { "0" })
+            val base = parseOperand(address.substring(open + 1, address.length - 1))
+            return listOf(destination, base, immediate)
+        }
+        val base = parseOperand(address)
+        return listOf(destination, base, Operand(OP_IM12S))
+    }
+
+    private fun splitOperands(source: String): List<String> {
+        val parts = mutableListOf<String>()
+        var depth = 0
+        var start = 0
+        source.forEachIndexed { index, char ->
+            when (char) { '(' -> depth++; ')' -> depth-- ; ',' -> if (depth == 0) { parts += source.substring(start, index).trim(); start = index + 1 } }
+        }
+        if (source.isNotBlank()) parts += source.substring(start).trim()
+        return parts
+    }
+
     private fun requireRegister(operand: Operand, description: String): Boolean {
         if (operand.type == OP_REG) return true
         error("Expected $description to be a register")
