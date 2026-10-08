@@ -363,6 +363,39 @@ class Riscv64Asm(
         return emitFloatingQuaternary(0x43 or (format shl 25) or (7 shl 12), operands[0], operands[1], operands[2], operands[3])
     }
 
+    fun emitCsrTernary(name: String, operands: List<Operand>): Boolean {
+        if (operands.size != 3) { expect("three CSR operands"); return false }
+        val rd = operands[0]
+        val csr = operands[1].expression.value.toInt()
+        val source = operands[2]
+        val function = when (name) { "csrrw" -> 1; "csrrs" -> 2; "csrrc" -> 3; "csrrwi" -> 5; "csrrsi" -> 6; "csrrci" -> 7; else -> { expect("CSR instruction"); return false } }
+        val immediate = name.endsWith('i')
+        val sourceField = if (immediate) source.expression.value.toInt() else source.register
+        emitOpcode(0x73 or (function shl 12) or (csr shl 20) or encodeRd(rd.register) or ((sourceField and 31) shl 15))
+        return true
+    }
+
+    fun emitCsrUnary(name: String, operands: List<Operand>): Boolean {
+        if (operands.size != 1 && operands.size != 2) { expect("one or two CSR operands"); return false }
+        val rdOrCsr = operands[0]
+        val source = operands.getOrNull(1)
+        val opcode = when (name) {
+            "csrr" -> 0x73 or (2 shl 12) or (rdOrCsr.register shl 7) or (rdOrCsr.expression.value.toInt() shl 20)
+            "csrw" -> 0x73 or (1 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
+            "csrs" -> 0x73 or (2 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
+            "csrc" -> 0x73 or (3 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
+            "fsrm" -> 0x73 or (1 shl 12) or (2 shl 20) or encodeRd(rdOrCsr.register) or encodeRs1(source?.register ?: 0)
+            "fscsr" -> 0x73 or (1 shl 12) or (3 shl 20) or encodeRd(rdOrCsr.register) or encodeRs1(source?.register ?: 0)
+            "csrwi", "csrsi", "csrci" -> {
+                val funct = when (name) { "csrwi" -> 5; "csrsi" -> 6; else -> 7 }
+                0x73 or (funct shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or ((source?.expression?.value?.toInt() ?: 0) shl 15)
+            }
+            else -> { expect("CSR pseudo instruction"); return false }
+        }
+        emitOpcode(opcode)
+        return true
+    }
+
     fun emitS(opcode: Int, rs1: Operand, rs2: Operand, immediate: Operand): Boolean {
         if (!requireRegister(rs1, "first source operand") || !requireRegister(rs2, "second source operand")) return false
         if (immediate.type != OP_IM12S) { error("Expected immediate value between 0 and 8191"); return false }
