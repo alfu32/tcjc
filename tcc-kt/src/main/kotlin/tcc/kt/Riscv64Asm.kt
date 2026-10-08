@@ -52,6 +52,22 @@ class Riscv64Asm(
     fun emitExpression32(expression: Expression) = emitLittleEndian32(expression.value.toInt())
     fun emitOpcode(opcode: Int) = emitLittleEndian32(opcode)
 
+    fun emitNullaryOpcode(name: String): Int? {
+        val opcode = when (name) {
+            "fence.i" -> (3 shl 2) or 3 or (1 shl 12)
+            "ecall" -> (0x1c shl 2) or 3
+            "ebreak" -> (0x1c shl 2) or 3 or (1 shl 20)
+            "nop" -> 0x13
+            "wfi" -> (0x1c shl 2) or 3 or (0x105 shl 20)
+            "ret" -> 0x67 or encodeRs1(1)
+            "c.ebreak" -> 2 or (9 shl 12)
+            "c.nop" -> 1
+            else -> { expect("nullary instruction"); return null }
+        }
+        if (name.startsWith("c.")) emitLittleEndian16(opcode) else emitOpcode(opcode)
+        return opcode
+    }
+
     fun parseRegister(name: String): Int? {
         val text = name.trim().lowercase()
         if (text == "zero") return 0
