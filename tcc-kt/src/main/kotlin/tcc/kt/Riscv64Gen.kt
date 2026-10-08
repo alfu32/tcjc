@@ -726,11 +726,11 @@ class Riscv64Gen(
         emitStore(0x23, 3, addressRegister, valueRegister, 0)
     }
 
-    fun generateIntegerOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int, longWidth: Boolean = false) =
-        integerOperation(operation, left, right, destination, longWidth)
+    fun generateIntegerOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int) =
+        integerOperation(operation, left, right, destination, true)
 
     fun generateLongOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int) =
-        integerOperation(operation, left, right, destination, true)
+        integerOperation(operation, left, right, destination, false)
 
     fun generateGoto(target: CallTarget) = callOrJump(target, false)
 
