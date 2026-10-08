@@ -30,6 +30,15 @@ class ArmAsm(
         var kind: Kind = Kind.IMM32, var register: Int = 0,
         var registerSet: Int = 0, var value: Expression = Expression(0),
     )
+    enum class ValueKind { CONSTANT, LOCAL, LOCAL_LVALUE, REGISTER_LVALUE, REGISTER }
+    data class AsmValue(
+        val kind: ValueKind, val value: Int = 0, val register: Int = -1,
+        val symbol: String? = null, val pointer: Boolean = false,
+    )
+    data class AsmCodegenOperand(
+        val value: AsmValue, val register: Int = -1, val memory: Boolean = false,
+        val readWrite: Boolean = false, val isLongLong: Boolean = false,
+    )
 
     fun g(value: Int) { if (!noCode()) output(value and 0xff) }
     fun genLe16(value: Int) { g(value); g(value ushr 8) }
@@ -945,5 +954,73 @@ class ArmAsm(
         val register = coreRegister(name)
         require(register in registers.indices) { "invalid clobber register '$name'" }
         registers[register] = true
+    }
+
+    /** Produces the ARM spelling substituted for an extended-asm operand. */
+    fun substituteAsmOperand(
+        value: AsmValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false,
+        registerSymbol: (String) -> Unit = {},
+    ): String = when (value.kind) {
+        ValueKind.CONSTANT -> buildString {
+            if (!value.pointer && modifier !in setOf('c', 'n', 'P')) append('#')
+            value.symbol?.let { symbol ->
+                if (leadingUnderscore) append('_')
+                append(symbol)
+                registerSymbol(symbol)
+                if (value.value == 0) return@buildString
+                append('+')
+            }
+            append(if (modifier == 'n') -value.value else value.value)
+        }
+        ValueKind.LOCAL -> "[fp,#${value.value}]"
+        ValueKind.LOCAL_LVALUE, ValueKind.REGISTER_LVALUE -> "[${armRegisterName(value.register)}]"
+        ValueKind.REGISTER -> armRegisterName(value.register)
+    }
+
+    /** Emits ARM inline-asm save, load, store, and restore operations through compiler callbacks. */
+    fun emitAsmCode(
+        operands: List<AsmCodegenOperand>, outputs: Int, isOutput: Boolean, clobbers: BooleanArray,
+        outputScratch: Int, load: (Int, AsmValue) -> Unit, store: (Int, AsmValue) -> Unit,
+    ) {
+        val savedRegisters = listOf(4, 5, 6, 7, 8, 9, 10, 11)
+        val allocated = clobbers.copyOf()
+        var savedSet = 0
+        operands.forEach { if (it.register in allocated.indices) allocated[it.register] = true }
+        savedRegisters.forEach { if (allocated.getOrElse(it) { false }) savedSet = savedSet or (1 shl it) }
+        if (!isOutput) {
+            if (savedSet != 0) genLe32(0xe92d0000.toInt() or savedSet)
+            operands.forEachIndexed { index, operand ->
+                if (operand.register < 0) return@forEachIndexed
+                val value = operand.value
+                if (value.kind == ValueKind.LOCAL_LVALUE && operand.memory) {
+                    load(operand.register, value.copy(kind = ValueKind.LOCAL, pointer = true))
+                } else if (index >= outputs || operand.readWrite) {
+                    load(operand.register, value)
+                    if (operand.isLongLong) error("long long not implemented")
+                }
+            }
+        } else {
+            operands.take(outputs).forEach { operand ->
+                if (operand.register < 0) return@forEach
+                val value = operand.value
+                if (value.kind == ValueKind.LOCAL_LVALUE) {
+                    if (!operand.memory) {
+                        val address = value.copy(kind = ValueKind.LOCAL, pointer = true)
+                        load(outputScratch, address)
+                        store(operand.register, value.copy(kind = ValueKind.REGISTER, register = outputScratch))
+                    }
+                } else {
+                    store(operand.register, value)
+                    if (operand.isLongLong) error("long long not implemented")
+                }
+            }
+            if (savedSet != 0) genLe32(0xe8bd0000.toInt() or savedSet)
+        }
+    }
+
+    private fun armRegisterName(register: Int): String = when (register) {
+        13 -> "sp"; 14 -> "lr"; 15 -> "pc"
+        in 0..12 -> "r$register"
+        else -> error("invalid ARM register $register").let { "" }
     }
 }
