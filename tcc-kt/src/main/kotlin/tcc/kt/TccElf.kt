@@ -163,6 +163,7 @@ object TccElf {
         val symbolVersions: MutableList<Int> = mutableListOf(),
     )
     data class VersionRecords(val definitions: ByteArray? = null, val requirements: ByteArray? = null)
+    enum class UnixPlatform { OPENBSD, FREEBSD, NETBSD, ANDROID, OTHER }
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -303,6 +304,41 @@ object TccElf {
                 if (next < 0 || record + next <= record) break
                 record += next
             }
+        }
+    }
+
+    fun crtBeginFiles(platform: UnixPlatform, sharedLibrary: Boolean, staticLink: Boolean): List<String> = buildList {
+        when (platform) {
+            UnixPlatform.OPENBSD -> {
+                if (!sharedLibrary) add("crt0.o")
+                add(if (sharedLibrary) "crtbeginS.o" else "crtbegin.o")
+            }
+            UnixPlatform.FREEBSD, UnixPlatform.NETBSD -> {
+                if (!sharedLibrary) add(if (platform == UnixPlatform.FREEBSD) "crt1.o" else "crt0.o")
+                add("crti.o")
+                add(when {
+                    staticLink -> "crtbeginT.o"
+                    sharedLibrary -> "crtbeginS.o"
+                    else -> "crtbegin.o"
+                })
+            }
+            UnixPlatform.ANDROID -> add(if (sharedLibrary) "crtbegin_so.o" else "crtbegin_dynamic.o")
+            UnixPlatform.OTHER -> {
+                if (!sharedLibrary) add("crt1.o")
+                add("crti.o")
+            }
+        }
+    }
+
+    fun crtEndFiles(platform: UnixPlatform, sharedLibrary: Boolean): List<String> = buildList {
+        when (platform) {
+            UnixPlatform.OPENBSD -> add(if (sharedLibrary) "crtendS.o" else "crtend.o")
+            UnixPlatform.FREEBSD, UnixPlatform.NETBSD -> {
+                add(if (sharedLibrary) "crtendS.o" else "crtend.o")
+                add("crtn.o")
+            }
+            UnixPlatform.ANDROID -> add(if (sharedLibrary) "crtend_so.o" else "crtend_android.o")
+            UnixPlatform.OTHER -> add("crtn.o")
         }
     }
 
