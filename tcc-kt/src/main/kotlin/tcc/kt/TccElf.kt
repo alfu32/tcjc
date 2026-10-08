@@ -389,7 +389,7 @@ object TccElf {
                     tlsAlignment = maxOf(tlsAlignment, section.alignment)
                     0x40 + if (section.type == SHT_NOBITS) 1 else 0
                 }
-                section.type == 0x6ffffffa -> 0x42
+                section.type == SHT_PREINIT_ARRAY -> 0x42
                 section.type == SHT_INIT_ARRAY -> 0x43
                 section.type == SHT_FINI_ARRAY -> 0x44
                 section.type == SHT_DYNAMIC -> 0x48
