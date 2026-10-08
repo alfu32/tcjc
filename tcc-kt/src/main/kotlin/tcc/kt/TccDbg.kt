@@ -11,6 +11,7 @@ object TccDbg {
     const val N_SO = 0x64
     const val N_GSYM = 0x20
     const val N_STSYM = 0x26
+    const val N_LCSYM = 0x28
     const val N_LSYM = 0x80
     const val N_SOL = 0x84
     const val N_PSYM = 0xa0
@@ -1036,7 +1037,7 @@ object TccDbg {
     ): Int {
         if (!state.dwarfEnabled) {
             val letter = when { global -> 'G'; staticData -> 'S'; else -> 'V' }
-            val stabType = if (global) N_GSYM else N_STSYM
+            val stabType = if (global) N_GSYM else if (staticData) N_STSYM else N_LCSYM
             val record = "$name:$letter${stabsType(type, typeContext)}"
             if (global || sectionName == null) putStabs(state, record, stabType, 0, 0, value)
             else putStabsReloc(state, record, stabType, 0, 0, value, symbolIndex)
