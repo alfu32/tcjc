@@ -114,6 +114,27 @@ class ArmAsm(
         emitUnconditionalOpcode((highNibble shl 28) or word)
     }
 
+    /** Encodes CDP/CDP2 and MCR/MRC instructions from decoded operands. */
+    fun emitCoprocessorInstruction(
+        group: String, token: Int, firstConditionToken: Int, coprocessor: Int,
+        opcode1: Int, registers: List<Int>, opcode2: Int = 0,
+    ) {
+        if (coprocessor !in 0..15 || opcode1 !in 0..15 || opcode2 !in 0..15 || registers.size != 3 || registers.any { it !in 0..15 }) {
+            expect("coprocessor operands in range"); return
+        }
+        when (group) {
+            "cdp", "cdp2" -> emitCoprocessorOpcode(if (group == "cdp2") 15 else conditionCode(token, firstConditionToken),
+                coprocessor, opcode1, registers[0], registers[1], registers[2], opcode2, false)
+            "mcr", "mrc" -> {
+                if (opcode1 > 7) { error("opcode1 must be between 0 and 7 for '$group'"); return }
+                val encodedOpcode = (opcode1 shl 1) or if (group == "mrc") 1 else 0
+                emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor,
+                    encodedOpcode, registers[0], registers[1], registers[2], opcode2, true)
+            }
+            else -> expect("known coprocessor instruction")
+        }
+    }
+
     fun emitNullary(group: String, token: Int, firstConditionToken: Int) {
         when (group) {
             "nop" -> emitOpcode(token, firstConditionToken, 0xd shl 21)
