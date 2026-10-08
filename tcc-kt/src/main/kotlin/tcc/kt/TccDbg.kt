@@ -86,7 +86,12 @@ object TccDbg {
         val lineState: DwarfLineState,
     )
     data class DebugTypeEntry(val identity: Long, val offset: Int)
-    data class ForwardTypeEntry(val identity: Long, val pendingOffsets: MutableList<Int> = mutableListOf())
+    data class ForwardTypeEntry(
+        val identity: Long,
+        val pendingOffsets: MutableList<Int> = mutableListOf(),
+        val name: String = "",
+        val isUnion: Boolean = false,
+    )
     sealed interface DebugType {
         data class Base(val code: Int) : DebugType
         data class Pointer(val target: DebugType) : DebugType
@@ -736,6 +741,28 @@ object TccDbg {
         pending.pendingOffsets.forEach { patch32(it, offset) }
         entries.remove(pending)
         return true
+    }
+
+    fun finalizeForwardTypes(
+        section: DwarfSection,
+        entries: MutableList<ForwardTypeEntry>,
+        unitStart: Int,
+        file: Int,
+        line: Int,
+        strings: DebugSections,
+        refs: DwarfSymbolRefs,
+        pointerSize: Int,
+    ) {
+        entries.forEach { forward ->
+            val offset = section.size
+            writeData1(section, if (forward.isUnion) 19 else 17)
+            writeStringReference(strings, section, forward.name, refs.strings, pointerSize = pointerSize)
+            writeUleb(section, 0)
+            writeUleb(section, file.toLong())
+            writeUleb(section, line.toLong())
+            forward.pendingOffsets.forEach { patch32(section, it, offset - unitStart) }
+        }
+        entries.clear()
     }
 
     fun addScopeSymbol(scope: DebugScope, symbol: DebugSymbol) { scope.symbols += symbol }
