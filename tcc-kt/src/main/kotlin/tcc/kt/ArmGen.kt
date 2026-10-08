@@ -227,7 +227,8 @@ object ArmGen {
     data class ParameterCopyPlan(val actions: List<ParameterCopyAction>, val extraStackValues: Int)
 
     data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
-    data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
+    data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int,
+        val hiddenStructReturn: Boolean, val stackAdjustmentPatchWord: Int)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
     data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
     data class FloatingOperationPlan(val words: List<Int>, val comparison: Condition? = null, val consumedOperands: Int = 1)
@@ -257,7 +258,9 @@ object ArmGen {
         val words = mutableListOf(0xe1a0c00d.toInt())
         if (coreCount != 0) words += 0xe92d0000.toInt() or ((1 shl coreCount) - 1)
         if (vfpCount != 0) words += 0xed2d0a00.toInt() or vfpCount
-        words.addAll(listOf(0xe92d5800.toInt(), 0xe1a0b00d.toInt(), 0xe1a00000.toInt()))
+        words.addAll(listOf(0xe92d5800.toInt(), 0xe1a0b00d.toInt()))
+        val stackAdjustmentPatchWord = words.size
+        words += 0xe1a00000.toInt()
 
         var core = if (structReturnInMemory) 1 else 0
         var stack = 0
@@ -284,7 +287,7 @@ object ArmGen {
             }
             addresses += address + 12
         }
-        return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory)
+        return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory, stackAdjustmentPatchWord)
     }
 
     /** Computes ARM function epilogue instructions and the deferred stack-frame adjustment patch. */
