@@ -307,4 +307,98 @@ class Arm64Gen(
             o(ARM64_ADD_IMM or 0x80000000.toInt() or (r shl 5) or r)
         }
     }
+
+    private fun isFloatRegister(register: Int): Boolean = register in TREG_F_BASE..TREG_F_BASE + 7
+    private fun intReg(register: Int): Int = integerRegister(register)
+    private fun floatReg(register: Int): Int = floatingRegister(register)
+
+    /** Loads a TCC value into a target register. Jump and compare values use callbacks for compiler state. */
+    fun loadValue(
+        register: Int,
+        value: Value,
+        patchJumpChain: (Long) -> Unit = {},
+        loadCompare: (Int, Value) -> Unit = { _, _ -> error("compare value requires a comparison loader") },
+    ) {
+        val size = typeSize(value.type)
+        val signed = !value.unsigned
+        val floating = isFloatRegister(register)
+        val dst = if (floating) floatReg(register) else intReg(register)
+        val baseReg = if (value.register >= 0) intReg(value.register) else 0
+        val offset = value.constant.toInt().toLong().toULong()
+        if (value.lvalue && value.location == ValueLocation.LOCAL) {
+            if (floating) loadVector(size, floatReg(register), 29, offset) else loadInteger(signed, size, dst, 29, offset)
+            return
+        }
+        if (value.lvalue && value.location == ValueLocation.CONSTANT) {
+            moveImmediate(30, value.constant.toULong())
+            if (floating) loadVector(size, floatReg(register), 30, 0uL) else loadInteger(signed, size, dst, 30, 0uL)
+            return
+        }
+        if (value.lvalue && value.location == ValueLocation.REGISTER) {
+            if (floating) loadVector(size, floatReg(register), baseReg, 0uL) else loadInteger(signed, size, dst, baseReg, 0uL)
+            return
+        }
+        if (value.lvalue && value.location == ValueLocation.INDIRECT_LOCAL) {
+            loadInteger(false, 3, 30, 29, offset)
+            if (floating) loadVector(size, floatReg(register), 30, 0uL) else loadInteger(signed, size, dst, 30, 0uL)
+            return
+        }
+        if (value.lvalue && value.symbol != null) {
+            val mask = checkOffset(size, offset)
+            loadSymbolAddress(30, value.symbol, (offset and mask.inv()).toLong())
+            if (floating) loadVector(size, floatReg(register), 30, offset and mask) else loadInteger(signed, size, dst, 30, offset and mask)
+            return
+        }
+        if (value.symbol != null && value.location == ValueLocation.CONSTANT) {
+            loadSymbolAddress(dst, value.symbol, value.constant)
+            return
+        }
+        when (value.location) {
+            ValueLocation.CONSTANT -> moveImmediate(dst, if (size == 3) value.constant.toULong() else value.constant.toInt().toUInt().toULong())
+            ValueLocation.LOCAL -> {
+                val delta = -value.constant.toInt()
+                if (delta < 0x1000) o(0xd10003a0.toInt() or dst or (delta shl 10))
+                else { moveImmediate(30, delta.toLong().toULong()); o(0xcb0003a0.toInt() or dst or (30 shl 16)) }
+            }
+            ValueLocation.REGISTER -> {
+                val srcIsFloat = isFloatRegister(value.register)
+                if (floating && srcIsFloat) {
+                    if (value.type == Type.LONG_DOUBLE) o(0x4ea01c00 or dst or (floatReg(value.register) shl 5))
+                    else o(0x1e604000 or dst or (floatReg(value.register) shl 5))
+                } else if (!floating && !srcIsFloat) o(0xaa0003e0.toInt() or dst or (intReg(value.register) shl 16))
+                else error("cannot move between integer and floating register classes")
+            }
+            ValueLocation.JUMP, ValueLocation.JUMP_INDIRECT -> {
+                val indirect = if (value.location == ValueLocation.JUMP_INDIRECT) 1 else 0
+                moveImmediate(dst, indirect.toULong())
+                o(ARM64_B or 2)
+                patchJumpChain(value.constant)
+                moveImmediate(dst, (indirect xor 1).toULong())
+            }
+            ValueLocation.COMPARE -> loadCompare(register, value)
+            else -> error("unsupported AArch64 value location: ${value.location}")
+        }
+    }
+
+    /** Stores a target register through an lvalue represented by the TCC value model. */
+    fun storeValue(register: Int, value: Value) {
+        val size = typeSize(value.type)
+        val floating = isFloatRegister(register)
+        val src = if (floating) floatReg(register) else intReg(register)
+        val offset = value.constant.toInt().toLong().toULong()
+        when {
+            value.lvalue && value.location == ValueLocation.LOCAL -> if (floating) storeVector(size, src, 29, offset) else storeInteger(size, src, 29, offset)
+            value.lvalue && value.location == ValueLocation.CONSTANT -> {
+                moveImmediate(30, value.constant.toULong())
+                if (floating) storeVector(size, src, 30, 0uL) else storeInteger(size, src, 30, 0uL)
+            }
+            value.lvalue && value.location == ValueLocation.REGISTER -> if (floating) storeVector(size, src, intReg(value.register), 0uL) else storeInteger(size, src, intReg(value.register), 0uL)
+            value.lvalue && value.symbol != null -> {
+                val mask = checkOffset(size, offset)
+                loadSymbolAddress(30, value.symbol, (offset and mask.inv()).toLong())
+                if (floating) storeVector(size, src, 30, offset and mask) else storeInteger(size, src, 30, offset and mask)
+            }
+            else -> error("unsupported AArch64 store value: $value")
+        }
+    }
 }
