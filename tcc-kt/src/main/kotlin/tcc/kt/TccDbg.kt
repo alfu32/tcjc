@@ -1053,9 +1053,7 @@ object TccDbg {
         writeData4(info, typeOffset - context.unitStart)
         if (global) writeData1(info, 1)
         writeData1(info, context.pointerSize + 1); writeData1(info, 0x03)
-        if (staticData && sectionName != null) {
-            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", symbolIndex)
-        }
+        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", symbolIndex)
         if (context.pointerSize == 4) writeData4(info, value.toInt()) else writeData8(info, value)
         return typeOffset
     }
