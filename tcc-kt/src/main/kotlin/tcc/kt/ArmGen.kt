@@ -312,7 +312,7 @@ object ArmGen {
 
     fun integerToFloat(source: ValueType, target: ValueType, unsigned: Boolean, sourceCoreRegister: Int,
         destinationFloatRegister: Int, vfp: Boolean, instructionOffset: Int = 0, lastMagicLiteralOffset: Int = 0,
-        unsignedTempFloatRegister: Int = destinationFloatRegister): ConversionPlan {
+        unsignedTempFloatRegister: Int = destinationFloatRegister, longDoubleSize: Int = 8): ConversionPlan {
         if (source in setOf(ValueType.BYTE, ValueType.SHORT, ValueType.INT)) {
             val sourceRegister = integerRegister(sourceCoreRegister)
             val destination = floatingRegister(destinationFloatRegister, vfp)
@@ -346,7 +346,7 @@ object ArmGen {
             val helper = when (target) {
                 ValueType.FLOAT -> if (unsigned) "__floatundisf" else "__floatdisf"
                 ValueType.DOUBLE -> if (unsigned) "__floatundidf" else "__floatdidf"
-                ValueType.LONG_DOUBLE -> if (unsigned) "__floatundixf" else "__floatdixf"
+                ValueType.LONG_DOUBLE -> if (longDoubleSize != 8) { if (unsigned) "__floatundixf" else "__floatdixf" } else null
                 else -> null
             }
             return ConversionPlan(helper = helper)
@@ -355,7 +355,7 @@ object ArmGen {
     }
 
     fun floatToInteger(source: ValueType, target: ValueType, unsigned: Boolean, sourceFloatRegister: Int,
-        destinationCoreRegister: Int, vfp: Boolean): ConversionPlan {
+        destinationCoreRegister: Int, vfp: Boolean, longDoubleSize: Int = 8): ConversionPlan {
         val sourceRegister = floatingRegister(sourceFloatRegister, vfp)
         if (target == ValueType.INT && vfp) {
             val signedBit = if (unsigned) 0 else 0x10000
@@ -374,13 +374,13 @@ object ArmGen {
             ValueType.INT -> when (source) {
                 ValueType.FLOAT -> "__fixunssfsi"
                 ValueType.DOUBLE -> "__fixunsdfsi"
-                ValueType.LONG_DOUBLE -> "__fixunsxfsi"
+                ValueType.LONG_DOUBLE -> if (longDoubleSize != 8) "__fixunsxfsi" else null
                 else -> null
             }
             ValueType.LONG_LONG -> when (source) {
                 ValueType.FLOAT -> "__fixsfdi"
                 ValueType.DOUBLE -> "__fixdfdi"
-                ValueType.LONG_DOUBLE -> "__fixxfdi"
+                ValueType.LONG_DOUBLE -> if (longDoubleSize != 8) "__fixxfdi" else null
                 else -> null
             }
             else -> null
