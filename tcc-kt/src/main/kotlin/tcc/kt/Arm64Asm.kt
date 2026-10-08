@@ -338,6 +338,130 @@ class Arm64Asm(
         return emitInstruction(base or ((option and 15) shl 8))
     }
 
+    data class ConstraintValue(val isConstant: Boolean = false, val symbolic: Boolean = false,
+        val constant: Long = 0, val memory: MemoryValue = MemoryValue(MemoryValueLocation.CONSTANT),
+        val localVariableRegister: Int = -1)
+    data class ConstraintOperand(
+        val constraint: String, val id: String = "", val value: ConstraintValue = ConstraintValue(),
+        var register: Int = -1, var reference: Int = -1, var inputReference: Int = -1,
+        var isMemory: Boolean = false, var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
+    )
+    data class ConstraintAllocation(val operands: List<ConstraintOperand>, val outputRegister: Int)
+
+    fun allocateConstraints(operands: MutableList<ConstraintOperand>, outputs: Int, clobbers: ByteArray,
+        peTarget: Boolean = false): ConstraintAllocation {
+        val occupied = ByteArray(64)
+        for (i in occupied.indices) if (i < clobbers.size && clobbers[i].toInt() != 0) occupied[i] = 3
+        val priority = IntArray(operands.size)
+        operands.forEachIndexed { index, operand ->
+            val text = skipConstraintModifiers(operand.constraint)
+            val reference = when {
+                text.startsWith('[') && ']' in text -> operands.indexOfFirst { it.id == text.substringAfter('[').substringBefore(']') }
+                text.firstOrNull()?.isDigit() == true -> text.takeWhile(Char::isDigit).toIntOrNull() ?: -1
+                else -> -1
+            }
+            if (reference >= 0) {
+                require(reference < index && index >= outputs) { "invalid reference in constraint $index ('$text')" }
+                require(operands[reference].inputReference < 0) { "cannot reference twice the same operand" }
+                operand.reference = reference
+                operands[reference].inputReference = index
+                priority[index] = 5
+            } else if (operand.value.localVariableRegister >= 0) {
+                priority[index] = 1; operand.register = operand.value.localVariableRegister
+            } else priority[index] = constraintPriority(text)
+        }
+        val order = operands.indices.sortedBy { priority[it] }
+        order.forEach { index ->
+            val operand = operands[index]
+            if (operand.reference >= 0) return@forEach
+            val output = index < outputs
+            var mask = when {
+                operand.inputReference >= 0 -> 3
+                output -> 1
+                else -> 2
+            }
+            if (operand.register >= 0) {
+                require(occupied[operand.register].toInt() and mask == 0) { "asm regvar requests register that's taken already" }
+                allocateRegister(operand, operand.register, mask, occupied)
+                return@forEach
+            }
+            val constraint = operand.constraint
+            var cursor = 0
+            var assigned = false
+            while (cursor < constraint.length && !assigned) {
+                when (val code = constraint[cursor++]) {
+                    '=' -> Unit
+                    '+' -> { operand.isReadWrite = true; if (!output) error("'+' modifier can only be applied to outputs"); mask = 3 }
+                    '&' -> { if (!output) error("'&' modifier can only be applied to outputs"); mask = 3 }
+                    'r' -> {
+                        val reg = (0..30).firstOrNull { integerRegisterIsAllocatable(it, peTarget) && occupied[it].toInt() and mask == 0 }
+                        if (reg != null) { allocateRegister(operand, reg, mask, occupied); assigned = true }
+                    }
+                    'w', 'f', 'x', 'y' -> {
+                        val reg = (FREG_BASE..FREG_BASE + 7).firstOrNull { occupied[it].toInt() and mask == 0 }
+                        if (reg != null) { allocateRegister(operand, reg, mask, occupied); assigned = true }
+                    }
+                    'm', 'g' -> {
+                        if (index < outputs || code == 'm') {
+                            val prep = prepareMemoryOperand(operand.value.memory, occupied, peTarget)
+                            if (prep == null) continue
+                            if (prep >= 0) { operand.register = prep; operand.isMemory = true }
+                        }
+                        assigned = true
+                    }
+                    'Q' -> {
+                        if (memoryIsBaseOnly(operand.value.memory)) {
+                            val prep = prepareMemoryOperand(operand.value.memory, occupied, peTarget)
+                            if (prep != null) { if (prep >= 0) { operand.register = prep; operand.isMemory = true }; assigned = true }
+                        }
+                    }
+                    'S' -> assigned = operand.value.isConstant && operand.value.symbolic
+                    'U' -> if (constraint.startsWith("Ump", cursor - 1) && memoryIsPairSuitable(operand.value.memory)) {
+                        cursor += 2
+                        val prep = prepareMemoryOperand(operand.value.memory, occupied, peTarget)
+                        if (prep != null) { if (prep >= 0) { operand.register = prep; operand.isMemory = true }; assigned = true }
+                    }
+                    'i', 'n' -> assigned = operand.value.isConstant
+                    'I' -> assigned = operand.value.isConstant && !operand.value.symbolic && validAddImmediate(operand.value.constant)
+                    'J' -> assigned = operand.value.isConstant && !operand.value.symbolic && validAddImmediate(-operand.value.constant)
+                    'K' -> assigned = operand.value.isConstant && !operand.value.symbolic && validLogicalImmediate(operand.value.constant, 32)
+                    'L' -> assigned = operand.value.isConstant && !operand.value.symbolic && validLogicalImmediate(operand.value.constant, 64)
+                    'M', 'N' -> assigned = operand.value.isConstant && !operand.value.symbolic && validMoveWideImmediate(operand.value.constant)
+                    'Z' -> assigned = operand.value.isConstant && !operand.value.symbolic && operand.value.constant == 0L
+                    '%', ' ' -> Unit
+                    else -> throw IllegalArgumentException("asm constraint $index ('${operand.constraint}') could not be satisfied")
+                }
+            }
+            require(assigned) { "asm constraint $index ('${operand.constraint}') could not be satisfied" }
+            if (operand.inputReference >= 0) {
+                operands[operand.inputReference].register = operand.register
+                operands[operand.inputReference].isLongLong = operand.isLongLong
+            }
+        }
+        operands.forEach { if (it.reference >= 0) it.register = operands[it.reference].register }
+        var out = -1
+        operands.forEach { operand ->
+            if (operand.register >= 0 && operand.value.memory.location == MemoryValueLocation.INDIRECT_LOCAL && !operand.isMemory) {
+                out = (0..30).firstOrNull { occupied[it].toInt() and 1 == 0 } ?: -1
+                require(out >= 0) { "could not find free output register for reloading" }
+            }
+        }
+        return ConstraintAllocation(operands, out)
+    }
+
+    private fun allocateRegister(operand: ConstraintOperand, register: Int, mask: Int, occupied: ByteArray) {
+        operand.isLongLong = false
+        operand.register = register
+        occupied[register] = (occupied[register].toInt() or mask).toByte()
+    }
+
+    fun markClobber(name: String, clobbers: ByteArray) {
+        if (name in setOf("memory", "cc", "flags")) return
+        val register = parseRegisterVariable(name) ?: throw IllegalArgumentException("invalid clobber register '$name'")
+        require(register in clobbers.indices) { "invalid clobber register '$name'" }
+        clobbers[register] = 1
+    }
+
     fun emitMoveImmediate(register: Int, immediate: Long, is64Bit: Boolean) {
         var first = true
         for (halfword in 0 until if (is64Bit) 4 else 2) {
