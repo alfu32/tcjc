@@ -493,10 +493,11 @@ class I386Asm(
                 val reg = candidates.firstOrNull { candidate -> candidate < 0 || allocated[candidate] and registerMask == 0 }
                 if (reg != null) {
                     if (reg >= 0) {
-                        allocated[reg] = allocated[reg] or registerMask
+                        val reservedMask = if (operand.isLocalPointer && (choice == 'm' || (choice == 'g' && isOutput))) 2 else registerMask
+                        allocated[reg] = allocated[reg] or reservedMask
                         operand.register = reg
                         if (choice == 'A') {
-                            allocated[2] = allocated[2] or registerMask
+                            allocated[2] = allocated[2] or reservedMask
                             operand.isLongLong = true
                         }
                         if (operand.isLocalPointer && (choice == 'm' || (choice == 'g' && isOutput))) operand.isMemory = true
@@ -514,7 +515,7 @@ class I386Asm(
                 operand.isLongLong = operands[operand.tiedTo].isLongLong
             }
         }
-        if (operands.any { it.isLocalPointer && it.register >= 0 })
+        if (operands.any { it.isLocalPointer && !it.isMemory && it.register >= 0 })
             return (0 until registerCount).firstOrNull { allocated[it] and 1 == 0 } ?: -1
         return -1
     }
