@@ -155,6 +155,7 @@ object TccElf {
     )
     data class DynamicEntry(val tag: Long, val value: Long)
     data class ArchiveHeader(val name: String, val sizeText: String)
+    data class ArchiveMember(val name: String, val headerOffset: Int, val dataOffset: Int, val size: Int)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -196,6 +197,24 @@ object TccElf {
             bytes.copyOfRange(offset + start, offset + start + length)
                 .toString(Charsets.US_ASCII).trimEnd(' ')
         return ArchiveHeader(field(0, 16), field(48, 10))
+    }
+
+    fun archiveMembers(bytes: ByteArray): List<ArchiveMember> {
+        val magic = "!<arch>\n".toByteArray(Charsets.US_ASCII)
+        if (bytes.size < magic.size || !bytes.copyOfRange(0, magic.size).contentEquals(magic)) return emptyList()
+        val members = mutableListOf<ArchiveMember>()
+        var offset = magic.size
+        while (offset < bytes.size) {
+            val header = parseArchiveHeader(bytes, offset) ?: break
+            val sizeText = header.sizeText.trim()
+            val size = (if (sizeText.startsWith('0') && sizeText.length > 1) sizeText.toIntOrNull(8)
+                else sizeText.toIntOrNull()) ?: break
+            if (size < 0 || offset + 60L + size > bytes.size) break
+            val dataOffset = offset + 60
+            members += ArchiveMember(header.name, offset, dataOffset, size)
+            offset = (dataOffset + size + 1) and -2
+        }
+        return members
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
