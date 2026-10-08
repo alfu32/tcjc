@@ -554,7 +554,6 @@ object TccElf {
     ): ByteArray {
         val symbols = state.symbolTable
         if (symbols != null) sortSymbols(state, symbols)
-        state.dynamicOutputSymbols?.let { sortSymbols(state, it) }
         state.sections.drop(1).filterNotNull().forEach(::encodeSectionRecords)
         val is64 = state.wordSize == 8
         val ehdrSize = if (is64) 64 else 52
