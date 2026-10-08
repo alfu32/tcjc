@@ -242,6 +242,17 @@ object TccElf {
         val dynamic: ElfSection,
         val interpreter: ElfSection?,
     )
+    data class DynamicMetadataOptions(
+        val neededLibraries: List<Pair<String, Int>> = emptyList(),
+        val rpath: String? = null,
+        val newDtags: Boolean = false,
+        val outputDynamic: Boolean = false,
+        val outputExecutable: Boolean = false,
+        val soname: String? = null,
+        val textRelocations: Boolean = false,
+        val noDelete: Boolean = false,
+        val symbolic: Boolean = false,
+    )
     data class LinkerScriptToken(val type: Int, val text: String)
 
     class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
@@ -1650,6 +1661,30 @@ object TccElf {
         }
         dynamic.dataOffset = dynamic.data.size
         dynamic.outputSize = dynamic.dataOffset.toLong()
+    }
+
+    fun fillDynamicMetadata(dynamic: ElfSection, strings: ElfSection, options: DynamicMetadataOptions, wordSize: Int): Int {
+        dynamic.data.clear()
+        dynamic.dataOffset = 0
+        dynamic.outputSize = 0
+        options.neededLibraries.filter { it.second == 0 }.forEach { (name, _) ->
+            appendDynamicTag(dynamic, 1, putElfString(strings, name).toLong(), wordSize)
+        }
+        options.rpath?.takeIf { it.isNotEmpty() }?.let { path ->
+            val tag = if (options.newDtags) 29L else 15L
+            appendDynamicTag(dynamic, tag, putElfString(strings, path).toLong(), wordSize)
+        }
+        var flags1 = 1L // DF_1_NOW
+        if (options.outputDynamic) {
+            options.soname?.let { appendDynamicTag(dynamic, 14, putElfString(strings, it).toLong(), wordSize) }
+            if (options.textRelocations) appendDynamicTag(dynamic, 22, 0, wordSize)
+            if (options.outputExecutable) flags1 = flags1 or 0x08000000L // DF_1_PIE
+            if (options.noDelete) flags1 = flags1 or 8L // DF_1_NODELETE
+        }
+        appendDynamicTag(dynamic, 30, 8, wordSize) // DT_FLAGS / DF_BIND_NOW
+        appendDynamicTag(dynamic, 0x6ffffffb, flags1, wordSize) // DT_FLAGS_1
+        if (options.symbolic) appendDynamicTag(dynamic, 16, 0, wordSize)
+        return dynamic.dataOffset
     }
 
     fun compactDynamicRelocations(state: ElfState, pltRelocations: ElfSection?): Pair<Long, Long> {
