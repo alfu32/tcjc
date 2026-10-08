@@ -73,6 +73,16 @@ class I386Asm(private val emit: (Int) -> Unit) {
     fun skipConstraintModifiers(constraint: String): String =
         constraint.dropWhile { it == '=' || it == '&' || it == '+' || it == '%' }
 
+    /** Records a named i386 clobber; condition-code and memory clobbers need no register slot. */
+    fun markClobber(name: String, registers: BooleanArray) {
+        if (name == "memory" || name == "cc" || name == "flags") return
+        val names32 = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+        val names16 = listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+        val register = names32.indexOf(name).takeIf { it >= 0 } ?: names16.indexOf(name)
+        require(register >= 0 && register < registers.size) { "invalid clobber register '$name'" }
+        registers[register] = true
+    }
+
     fun immediate(value: Int): Operand {
         var type = OP_IM32
         if (value == (value.toByte().toInt())) type = type or OP_IM8
