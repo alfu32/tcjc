@@ -44,6 +44,32 @@ class I386Asm(private val emit: (Int) -> Unit) {
         var expression: Expression = Expression(),
     )
 
+    data class Instruction(
+        val token: Int, val opcode: Int, val instructionType: Int,
+        val operandTypes: List<Int>,
+    )
+
+    /** Selects the first instruction template whose arity and operand masks match. */
+    fun selectInstruction(instructions: List<Instruction>, token: Int, operands: List<Operand>): Instruction? {
+        return instructions.firstOrNull { instruction ->
+            instruction.token == token && instruction.operandTypes.size == operands.size &&
+                instruction.operandTypes.indices.all { index ->
+                    val accepted = expandOperandType(instruction.operandTypes[index])
+                    operands[index].type and accepted != 0
+                }
+        }
+    }
+
+    private fun expandOperandType(type: Int): Int = when (type and 0x1f) {
+        20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
+        21 -> OP_REG8 or OP_REG16 or OP_REG32
+        22 -> OP_REG16 or OP_REG32
+        23 -> OP_IM16 or OP_IM32
+        24 -> OP_MMX or OP_SSE
+        25, 26 -> OP_ADDR
+        else -> type
+    } or (type and OP_EA)
+
     /** Maps the legal x86 scale constants to the SIB shift field. */
     fun registerShift(scale: Int): Int = when (scale) {
         1 -> 0
