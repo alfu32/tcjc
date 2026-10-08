@@ -158,6 +158,7 @@ object TccElf {
     data class DynamicEntry(val tag: Long, val value: Long)
     data class ArchiveHeader(val name: String, val sizeText: String)
     data class ArchiveMember(val name: String, val headerOffset: Int, val dataOffset: Int, val size: Int)
+    data class ArchiveSymbolIndexEntry(val symbol: String, val memberHeaderOffset: Long)
     data class SymbolVersion(val library: String, val version: String, var outputIndex: Int = 0, val previousForLibrary: Int = -1)
     data class VersionRegistry(
         val versions: MutableList<SymbolVersion> = mutableListOf(),
@@ -259,6 +260,54 @@ object TccElf {
             offset = (dataOffset + size + 1) and -2
         }
         return members
+    }
+
+    fun parseArchiveSymbolIndex(data: ByteArray, offsetWidth: Int): List<ArchiveSymbolIndexEntry>? {
+        if (offsetWidth != 4 && offsetWidth != 8 || data.size < offsetWidth) return null
+        val countLong = getBigEndian(data, 0, offsetWidth)
+        if (countLong > Int.MAX_VALUE) return null
+        val count = countLong.toInt()
+        val namesOffsetLong = offsetWidth.toLong() + count.toLong() * offsetWidth
+        if (namesOffsetLong > data.size) return null
+        val namesOffset = namesOffsetLong.toInt()
+        var nameOffset = namesOffset
+        val entries = ArrayList<ArchiveSymbolIndexEntry>(count)
+        repeat(count) { index ->
+            if (nameOffset >= data.size) return null
+            var end = nameOffset
+            while (end < data.size && data[end] != 0.toByte()) end++
+            if (end == data.size) return null
+            val symbol = data.copyOfRange(nameOffset, end).toString(Charsets.UTF_8)
+            val memberOffset = getBigEndian(data, offsetWidth + index * offsetWidth, offsetWidth)
+            entries += ArchiveSymbolIndexEntry(symbol, memberOffset)
+            nameOffset = end + 1
+        }
+        return entries
+    }
+
+    fun loadAlacarteArchive(
+        indexData: ByteArray,
+        offsetWidth: Int,
+        members: List<ArchiveMember>,
+        isUndefined: (String) -> Boolean,
+        loadMember: (ArchiveMember) -> Boolean,
+    ): List<ArchiveMember>? {
+        val entries = parseArchiveSymbolIndex(indexData, offsetWidth) ?: return null
+        val membersByOffset = members.associateBy { it.headerOffset.toLong() }
+        val loadedOffsets = mutableSetOf<Long>()
+        val loaded = mutableListOf<ArchiveMember>()
+        while (true) {
+            var loadedThisPass = false
+            entries.forEach { entry ->
+                if (!isUndefined(entry.symbol) || entry.memberHeaderOffset in loadedOffsets) return@forEach
+                val member = membersByOffset[entry.memberHeaderOffset] ?: return null
+                if (!loadMember(member)) return null
+                loadedOffsets += entry.memberHeaderOffset
+                loaded += member
+                loadedThisPass = true
+            }
+            if (!loadedThisPass) return loaded
+        }
     }
 
     /** Associates a local version index with a shared library/version registry entry. */
