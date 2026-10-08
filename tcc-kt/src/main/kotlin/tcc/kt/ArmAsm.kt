@@ -886,8 +886,9 @@ class ArmAsm(
             val operand = operands[index]
             if (operand.reference >= 0) return@forEach
             val isOutput = index < outputs
-            if (operand.constraint.startsWith('+')) operand.readWrite = true
-            val earlyClobber = operand.constraint.startsWith('&')
+            val modifiers = operand.constraint.takeWhile { it in "=&+%" }
+            if ('+' in modifiers) operand.readWrite = true
+            val earlyClobber = '&' in modifiers
             require((!operand.readWrite && !earlyClobber) || isOutput) { "asm modifier can only be applied to outputs" }
             val mask = if (operand.readWrite || earlyClobber || index in tiedOutputs) 3 else if (isOutput) 1 else 2
             val choices = skipConstraintModifiers(operand.constraint)
