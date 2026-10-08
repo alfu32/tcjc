@@ -18,6 +18,8 @@ class I386Gen(
     }
 
     private val code = ArrayList<Byte>()
+    private var localCursor = 0
+    private var functionReturnPop = 0
     private val TREG_MEM = 0x20
     val relocations: MutableList<Relocation> = mutableListOf()
     val bytes: ByteArray get() = code.toByteArray()
@@ -202,6 +204,55 @@ class I386Gen(
         }
     }
 
+    data class CallArgument(val kind: I386ValueKind, val register: Int, val size: Int = 4, val secondRegister: Int? = null, val emitStructure: ((I386Gen, Int) -> Unit)? = null)
+
+    /** Emits already-evaluated arguments and performs the i386 call cleanup. */
+    fun functionCall(arguments: List<CallArgument>, target: Any, convention: CallingConvention = CallingConvention.CDECL, returnsStructurePointer: Boolean = false, isJump: Boolean = false) {
+        var argumentBytes = 0
+        for (argument in arguments) {
+            when (argument.kind) {
+                I386ValueKind.FLOAT, I386ValueKind.DOUBLE, I386ValueKind.LONG_DOUBLE -> {
+                    val size = when (argument.kind) { I386ValueKind.FLOAT -> 4; I386ValueKind.DOUBLE -> 8; else -> 12 }
+                    oad(0xec81, size)
+                    if (size == 12) o(0x7cdb) else { o(0x5cd9 + size - 4); g(0x24); g(0) }
+                    argumentBytes += size
+                }
+                else -> if (argument.emitStructure != null) {
+                    val size = (argument.size + 3) and -4
+                    oad(0xec81, size)
+                    argument.emitStructure.invoke(this, size)
+                    argumentBytes += size
+                } else {
+                    if (argument.secondRegister != null) {
+                        o(0x50 + (argument.secondRegister and 7))
+                        argumentBytes += 4
+                    }
+                    o(0x50 + (argument.register and 7))
+                    argumentBytes += if (argument.secondRegister != null) 4 else 4
+                }
+            }
+        }
+        val fastRegisters = when (convention) {
+            CallingConvention.FASTCALL1 -> intArrayOf(0)
+            CallingConvention.FASTCALL2 -> intArrayOf(0, 2)
+            CallingConvention.FASTCALL3 -> intArrayOf(0, 2, 1)
+            CallingConvention.FASTCALLW -> intArrayOf(1, 2)
+            CallingConvention.THISCALL -> intArrayOf(1)
+            else -> intArrayOf()
+        }
+        var left = argumentBytes
+        for (register in fastRegisters) {
+            if (left <= 0) break
+            o(0x58 + register)
+            left -= 4
+        }
+        if (returnsStructurePointer && convention !in setOf(CallingConvention.FASTCALL1, CallingConvention.FASTCALL2, CallingConvention.FASTCALL3, CallingConvention.FASTCALLW, CallingConvention.THISCALL))
+            left -= 4
+        callOrJump(isJump, target)
+        if (left > 0 && convention != CallingConvention.STDCALL && convention != CallingConvention.THISCALL && convention != CallingConvention.FASTCALLW)
+            gaddSp(left)
+    }
+
     /** Emits a scalar store from a register into memory or another register. */
     fun store(register: Int, destination: I386Value) {
         val opcode: Int
@@ -274,15 +325,95 @@ class I386Gen(
             if (picEnabled && !target.isStatic) {
                 getPcThunk(3, true)
                 val at = oad(opcode, addend - 4)
-                relocations += Relocation(at, RelocType.R386_PLT32, target, addend)
+                relocations += Relocation(at, RelocType.R386_PLT32, target, addend - 4)
             } else {
                 val at = oad(opcode, addend - 4)
-                relocations += Relocation(at, RelocType.R386_PC32, target, addend)
+                relocations += Relocation(at, RelocType.R386_PC32, target, addend - 4)
             }
         } else if (target is Int) {
             o(0xff)
             o(0xd0 + (target and 7) + (if (isJump) 0x10 else 0))
         } else throw IllegalArgumentException("i386 call target must be a symbol or register")
+    }
+
+    enum class CallingConvention { CDECL, STDCALL, FASTCALL1, FASTCALL2, FASTCALL3, FASTCALLW, THISCALL }
+    enum class ReturnKind { POINTER, BYTE, SHORT, INT }
+    data class StructReturn(val registerCount: Int, val kind: ReturnKind, val alignment: Int, val registerSize: Int)
+    data class FunctionFrame(val prologOffset: Int, val prologSize: Int, val parameterOffsets: List<Int>, val cleanupBytes: Int, val localBytes: Int)
+
+    /** Port of the i386 ABI's small-structure return selection. */
+    fun structReturn(size: Int, targetOs: String): StructReturn {
+        val registerAbi = targetOs == "windows" || targetOs == "freebsd" || targetOs == "openbsd"
+        if (!registerAbi || size > 8 || size <= 0 || (size and (size - 1)) != 0)
+            return StructReturn(0, ReturnKind.POINTER, 1, 4)
+        val kind = when (size) { 1 -> ReturnKind.BYTE; 2 -> ReturnKind.SHORT; else -> ReturnKind.INT }
+        return StructReturn(if (size == 8) 2 else 1, kind, 1, 4)
+    }
+
+    /** Reserves and later fills the fixed size i386 function prolog. */
+    fun functionProlog(parameterSizes: List<Int>, convention: CallingConvention, hasStructureReturnPointer: Boolean, targetOs: String = "linux", peTarget: Boolean = false): FunctionFrame {
+        val prologOffset = position
+        val prologSize = (if (peTarget) 10 else 9) + if (picEnabled) 1 else 0
+        repeat(prologSize) { g(0) }
+        localCursor = 0
+        var stackAddress = 8
+        val offsets = ArrayList<Int>(parameterSizes.size)
+        if (hasStructureReturnPointer) { offsets += stackAddress; stackAddress += 4 }
+        val fastRegisters = when (convention) {
+            CallingConvention.FASTCALL1 -> intArrayOf(0)
+            CallingConvention.FASTCALL2 -> intArrayOf(0, 2)
+            CallingConvention.FASTCALL3 -> intArrayOf(0, 2, 1)
+            CallingConvention.FASTCALLW -> intArrayOf(1, 2)
+            CallingConvention.THISCALL -> intArrayOf(1)
+            else -> intArrayOf()
+        }
+        parameterSizes.forEachIndexed { index, rawSize ->
+            val size = (rawSize + 3) and -4
+            if (index < fastRegisters.size) {
+                localCursor -= 4
+                genModRm(0x89, fastRegisters[index], Address.Local(localCursor))
+                offsets += localCursor
+            } else {
+                offsets += stackAddress
+                stackAddress += size
+            }
+        }
+        functionReturnPop = when {
+            convention == CallingConvention.STDCALL || convention == CallingConvention.FASTCALLW || convention == CallingConvention.THISCALL -> stackAddress - 8
+            hasStructureReturnPointer && targetOs != "windows" && targetOs != "freebsd" -> 4
+            else -> 0
+        }
+        return FunctionFrame(prologOffset, prologSize, offsets, functionReturnPop, (-localCursor + 3) and -4)
+    }
+
+    fun functionEpilog(frame: FunctionFrame, peTarget: Boolean = false) {
+        val localSize = (-localCursor + 3) and -4
+        o(0xc9)
+        if (functionReturnPop == 0) o(0xc3) else { o(0xc2); g(functionReturnPop); g(functionReturnPop ushr 8) }
+        val prolog = ArrayList<Byte>()
+        fun emit(value: Int) { prolog += value.toByte() }
+        fun emitWord(value: Int) {
+            var word = value
+            while (word != 0) { emit(word); word = word ushr 8 }
+        }
+        fun emitLong(value: Int) { repeat(4) { emit(value ushr (it * 8)) } }
+        if (peTarget && localSize >= 4096) {
+            emit(0xb8); emitLong(localSize)
+            emit(0xe8)
+            val callOffset = frame.prologOffset + prolog.size
+            val relocation = Symbol("__chkstk", isStatic = true)
+            repeat(4) { emit(0) }
+            relocations += Relocation(callOffset, RelocType.R386_PC32, relocation, -4)
+        } else {
+            emitWord(0xe58955)
+            emitWord(0xec81)
+            emitLong(localSize)
+            if (peTarget) emit(0x90)
+        }
+        if (picEnabled) emit(0x53)
+        while (prolog.size < frame.prologSize) emit(0x90)
+        if (prolog.size > frame.prologSize) throw IllegalStateException("i386 prolog exceeded its reserved size")
+        prolog.forEachIndexed { index, byte -> code[frame.prologOffset + index] = byte }
     }
 
     fun read32(offset: Int): Int = (code[offset].toInt() and 0xff) or
