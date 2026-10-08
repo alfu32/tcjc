@@ -74,6 +74,15 @@ class LibTcc(
         val compile: (CompilerState, Int, String, Int) -> Int = { _, _, _, _ -> 0 },
         val binaryType: (Int) -> Int = { 0 }, val loadBinary: (CompilerState, Int, String, Int) -> Int = { _, _, _, _ -> 0 },
     )
+    data class BinaryHooks(
+        val objectType: (Int) -> Int = { 0 }, val loadRelocatable: (Int) -> Int = { 0 },
+        val loadArchive: (Int, Boolean) -> Int = { _, _ -> 0 }, val loadDynamic: (Int, String, Boolean) -> Int = { _, _, _ -> 0 },
+        val loadScript: (Int) -> Int = { -3 }, val openDynamic: (String) -> Any? = { null },
+        val loadMachODynamic: (Int, String, Boolean) -> Int = { _, _, _ -> 0 },
+        val loadMachOTbd: (Int, String, Boolean) -> Int = { _, _, _ -> 0 },
+        val machOTbdSoname: (Int) -> String? = { null }, val loadPe: (Int, String) -> Int = { _, _ -> 0 },
+        val loadCoff: (Int) -> Int = { 0 }, val close: (Int) -> Unit = {},
+    )
     data class FunctionContext(var callingConvention: Int = 0)
     data class BufferedSource(
         var filename: String, var trueFilename: String = filename, var lineNumber: Int = 1,
@@ -105,6 +114,11 @@ class LibTcc(
         const val TYPE_PRINT_ERROR = 16
         const val TYPE_WHOLE_ARCHIVE = 32
         const val TYPE_LIBRARY = 64
+        const val BINARY_RELOCATABLE = 1
+        const val BINARY_ARCHIVE = 2
+        const val BINARY_DYNAMIC = 3
+        const val BINARY_C67 = 4
+        const val BINARY_TBD = 5
         const val FILE_NOT_FOUND = -2
         const val FILE_NOT_RECOGNIZED = -3
         const val OPTION_HELP = -1
@@ -302,6 +316,49 @@ class LibTcc(
                 hooks.compile(compilerState, fileType, filename, descriptor)
             }
         } finally { hooks.close(descriptor) }
+    }
+
+    fun addBinary(compilerState: CompilerState, flags: Int, filename: String, descriptor: Int,
+        hooks: BinaryHooks, targetPlatform: String = "unix", native: Boolean = true): Int {
+        val savedFilename = compilerState.currentFilename
+        compilerState.currentFilename = filename
+        var objectType = hooks.objectType(descriptor)
+        var result = 0
+        try {
+            if (targetPlatform == "macho" && objectType != BINARY_DYNAMIC) {
+                val extension = fileExtension(filename)
+                if (extension == ".tbd") objectType = BINARY_TBD
+                else if (extension == ".dylib") objectType = BINARY_DYNAMIC
+            }
+            result = when (objectType) {
+                BINARY_RELOCATABLE -> hooks.loadRelocatable(descriptor)
+                BINARY_ARCHIVE -> hooks.loadArchive(descriptor, flags and TYPE_WHOLE_ARCHIVE == 0)
+                BINARY_DYNAMIC -> when (targetPlatform) {
+                    "macho" -> if (compilerState.outputType == OUTPUT_MEMORY) {
+                        val soname = if (objectType == BINARY_TBD) hooks.machOTbdSoname(descriptor) ?: filename else filename
+                        hooks.openDynamic(soname)?.let { handle -> addDllReference(compilerState, soname, 0)?.handle = handle; 0 } ?: FILE_NOT_RECOGNIZED
+                    } else hooks.loadMachODynamic(descriptor, filename, flags and TYPE_LIBRARY != 0)
+                    else -> if (compilerState.outputType == OUTPUT_MEMORY) {
+                        if (!native) 0 else hooks.openDynamic(filename)?.let { handle -> addDllReference(compilerState, filename, 0)?.handle = handle; 0 } ?: FILE_NOT_RECOGNIZED
+                    } else hooks.loadDynamic(descriptor, filename, flags and TYPE_LIBRARY != 0)
+                }
+                BINARY_TBD -> if (compilerState.outputType == OUTPUT_MEMORY) {
+                    val soname = hooks.machOTbdSoname(descriptor) ?: filename
+                    hooks.openDynamic(soname)?.let { handle -> addDllReference(compilerState, soname, 0)?.handle = handle; 0 } ?: FILE_NOT_RECOGNIZED
+                } else hooks.loadMachOTbd(descriptor, filename, flags and TYPE_LIBRARY != 0)
+                BINARY_C67 -> hooks.loadCoff(descriptor)
+                else -> when (targetPlatform) {
+                    "unix" -> hooks.loadScript(descriptor)
+                    "pe" -> if (hooks.loadPe(descriptor, filename) != 0) FILE_NOT_RECOGNIZED else 0
+                    else -> FILE_NOT_RECOGNIZED
+                }
+            }
+        } finally {
+            hooks.close(descriptor)
+            compilerState.currentFilename = savedFilename
+        }
+        if (result == FILE_NOT_RECOGNIZED) reportError(compilerState, ERROR_NO_ABORT, "$filename: unrecognized file type")
+        return result
     }
 
     fun addLibraryInternal(compilerState: CompilerState, formats: List<String>, name: String, flags: Int,
