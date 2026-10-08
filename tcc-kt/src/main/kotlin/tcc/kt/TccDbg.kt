@@ -473,11 +473,19 @@ object TccDbg {
     ): DebugUnit {
         val sections = createSections(dwarfVersion, backtrace)
         val line = if (dwarfVersion > 0) createDwarfLineState(filename, compilationDirectory, dwarfVersion) else DwarfLineState()
+        line.currentFilename = filename
         val session = DebugSession(sections, line, minimumInstructionLength)
         val unit = if (dwarfVersion > 0) beginDwarfCompilationUnit(
             sections, dwarfVersion, pointerSize, textStart, filename, compilationDirectory,
             producer, cVersion, refs, minimumInstructionLength,
         ) else null
+        if (dwarfVersion == 0) {
+            val directoryName = if (compilationDirectory.endsWith('/')) compilationDirectory else "$compilationDirectory/"
+            putStabs(sections, directoryName, N_SO, 0, 0, textStart)
+            putStabs(sections, filename, N_SO, 0, 0, textStart)
+            defaultTypes(pointerSize, charUnsignedByDefault = false).forEach { putStabs(sections, it.stabs, N_LSYM, 0, 0, 0) }
+            putStabs(sections, filename, N_BINCL, 0, 0, 0)
+        }
         return DebugUnit(session, unit, startEhFrame(unwindTables, target))
     }
 
