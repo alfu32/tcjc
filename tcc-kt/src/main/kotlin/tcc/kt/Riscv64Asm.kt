@@ -323,4 +323,71 @@ class Riscv64Asm(
             (((offset ushr 5) and 0x1f) shl 25) or (((offset ushr 11) and 1) shl 7) or (((offset ushr 12) and 1) shl 31))
         return true
     }
+
+    private fun compactRegister(operand: Operand, role: String): Int? {
+        if (!requireRegister(operand, role)) return null
+        val register = registerValue(operand.register) - 8
+        if (register !in 0..7 || isFloatRegister(operand.register)) { error("Expected $role to use a valid C-extension register"); return null }
+        return register
+    }
+
+    fun emitCompressedCa(opcode: Int, rd: Operand, rs2: Operand): Boolean {
+        val dst = compactRegister(rd, "destination operand") ?: return false
+        val src = compactRegister(rs2, "source operand") ?: return false
+        emitLittleEndian16(opcode or encodeCompressedRs2(src) or encodeCompressedRs1(dst))
+        return true
+    }
+
+    fun emitCompressedCb(name: String, opcode: Int, rs1: Operand, immediate: Operand): Boolean {
+        val source = compactRegister(rs1, "source operand") ?: return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val offset = immediate.expression.value.toInt()
+        if (offset and 1 != 0) { error("Expected an even immediate value"); return false }
+        val encoded = if (name == "c.beqz" || name == "c.bnez") {
+            ((nthBit(offset, 5) or (((offset ushr 1) and 3) shl 1) or (((offset ushr 6) and 3) shl 3)) shl 2) or
+                ((((offset ushr 3) and 3) or nthBit(offset, 8)) shl 10)
+        } else ((offset and 0x1f) shl 2) or (nthBit(offset, 5) shl 12)
+        emitLittleEndian16(opcode or encodeCompressedRs1(source) or encoded)
+        return true
+    }
+
+    fun emitCompressedCi(name: String, opcode: Int, rd: Operand, immediate: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand")) return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val value = immediate.expression.value.toInt()
+        val encoded = when (name) {
+            "c.addi", "c.addiw", "c.li", "c.slli" -> ((value and 0x1f) shl 2) or encodeRd(rd.register) or (nthBit(value, 5) shl 12)
+            "c.addi16sp" -> nthBit(value, 5) shl 2 or (((value ushr 7) and 3) shl 3) or (nthBit(value, 6) shl 5) or
+                (nthBit(value, 4) shl 6) or encodeRd(rd.register) or (nthBit(value, 9) shl 12)
+            "c.lui" -> (((value ushr 12) and 0x1f) shl 2) or encodeRd(rd.register) or (nthBit(value, 17) shl 12)
+            "c.fldsp", "c.ldsp" -> (((value ushr 6) and 7) shl 2) or (((value ushr 3) and 2) shl 5) or encodeRd(rd.register) or (nthBit(value, 5) shl 12)
+            "c.flwsp", "c.lwsp" -> (((value ushr 6) and 3) shl 2) or (((value ushr 2) and 7) shl 4) or encodeRd(rd.register) or (nthBit(value, 5) shl 12)
+            "c.nop" -> 0
+            else -> { expect("known compressed instruction"); return false }
+        }
+        emitLittleEndian16(opcode or encoded)
+        return true
+    }
+
+    fun emitCompressedCiw(opcode: Int, rd: Operand, immediate: Operand): Boolean {
+        val dst = compactRegister(rd, "destination operand") ?: return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val value = immediate.expression.value.toInt()
+        if (value > 0x3fc) { error("Expected immediate value between 0 and 0x3ff"); return false }
+        if (value and 3 != 0) { error("Expected non-zero immediate divisible by 4"); return false }
+        val field = nthBit(value, 3) or (nthBit(value, 2) shl 1) or (((value ushr 6) and 0xf) shl 2) or (((value ushr 4) and 3) shl 6)
+        emitLittleEndian16(opcode or encodeCompressedRs2(dst) or (field shl 5))
+        return true
+    }
+
+    fun emitCompressedCj(opcode: Int, immediate: Operand): Boolean {
+        if (immediate.type != OP_IM12S) { error("Expected 12-bit immediate value"); return false }
+        val offset = immediate.expression.value.toInt()
+        if (offset and 1 != 0) { error("Expected an even immediate value"); return false }
+        val encoded = (nthBit(offset, 5) shl 2) or (((offset ushr 1) and 7) shl 3) or (nthBit(offset, 7) shl 6) or
+            (nthBit(offset, 6) shl 7) or (nthBit(offset, 10) shl 8) or (((offset ushr 8) and 3) shl 9) or
+            (nthBit(offset, 4) shl 11) or (nthBit(offset, 11) shl 12)
+        emitLittleEndian16(opcode or encoded)
+        return true
+    }
 }
