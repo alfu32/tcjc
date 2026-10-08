@@ -356,17 +356,17 @@ object ArmGen {
         val precision = if (single) 0 else 0x100
         var lhs = floatingRegister(left, true)
         var rhs = floatingRegister(right, true)
-        val dest = floatingRegister(destination, true)
+        val dest by lazy { floatingRegister(destination, true) }
         var opcode = 0xee000a00.toInt() or precision
         when (operation) {
             "+" -> {
                 if (leftIsZero) { val swap = lhs; lhs = rhs; rhs = swap }
-                if (rightIsZero) return FloatingOperationPlan(emptyList(), consumedOperands = 2)
+                if (rightIsZero) return FloatingOperationPlan(emptyList())
                 opcode = opcode or 0x300000
             }
             "-" -> {
                 opcode = opcode or 0x300040
-                if (rightIsZero) return FloatingOperationPlan(emptyList(), consumedOperands = 2)
+                if (rightIsZero) return FloatingOperationPlan(emptyList())
                 if (leftIsZero) {
                     opcode = opcode or 0x810000
                     val swap = lhs; lhs = rhs; rhs = swap
