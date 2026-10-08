@@ -437,4 +437,28 @@ object BoundCheck {
         return task
     }
 
+
+    @JvmStatic fun aeabiMemCopy(dest: ByteArray, d: Int, src: ByteArray, s: Int, n: Int) = memCopy(dest, d, src, s, n)
+    @JvmStatic fun aeabiMemMove(dest: ByteArray, d: Int, src: ByteArray, s: Int, n: Int) = memMove(dest, d, src, s, n)
+    @JvmStatic fun aeabiMemMove4(dest: ByteArray, d: Int, src: ByteArray, s: Int, n: Int) = memMove(dest, d, src, s, n)
+    @JvmStatic fun aeabiMemMove8(dest: ByteArray, d: Int, src: ByteArray, s: Int, n: Int) = memMove(dest, d, src, s, n)
+    @JvmStatic fun aeabiMemSet(dest: ByteArray, value: Int, n: Int) = memSet(dest, value, n)
+
+    @JvmStatic fun regionsSnapshot(): List<Region> = lock.withLock { regions.values.toList() }
+
+    @JvmStatic
+    fun reset() = lock.withLock {
+        regions.clear()
+        allocations.clear()
+        frameRegions.clear()
+        mappedRegions.clear()
+        signalHandlers.clear()
+        signalActions.clear()
+        statistics.clear()
+        checkingDepth.set(0)
+        neverFatal = 0
+        initialized = false
+        nextAddress = 0x10000L
+    }
+
 }

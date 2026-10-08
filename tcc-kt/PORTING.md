@@ -1,11 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 25
+- **DONE:** 26
 - **DOING:** 3
 - **TODO:** 27
-- **Currently doing:** `lib/bcheck.c` → `src/main/kotlin/tcc/kt/BoundCheck.kt`
-- **Other partial port:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
+- **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
 - **C tests retained:** all C test programs and test cases under `tests/` except the `tcctest.c` harness
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -31,7 +30,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `legacy-c/conftest.c` | DONE |
 | `lib/armeabi.c` | DONE |
 | `lib/armflush.c` | DONE |
-| `lib/bcheck.c` | DOING |
+| `lib/bcheck.c` | DONE |
 | `lib/bt-dll.c` | DONE |
 | `lib/bt-exe.c` | DONE |
 | `lib/bt-log.c` | DONE |
