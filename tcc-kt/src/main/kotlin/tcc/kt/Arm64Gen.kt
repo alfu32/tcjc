@@ -28,6 +28,7 @@ class Arm64Gen(
         val arrayCount: Int? = null, val elementType: AbiType? = null,
     )
     data class AbiAssignment(val stackBytes: Int, val locations: List<Int>)
+    data class CallPlan(val stackBytes: Int, val argumentLocations: List<Int>, val structureTemporaryOffsets: Map<Int, Int>)
 
     companion object {
         const val NB_REGS = 28
@@ -565,5 +566,52 @@ class Arm64Gen(
             stack += size
         }
         return AbiAssignment(stack - 32, locations)
+    }
+
+    fun functionArgumentCount(argumentTypes: List<AbiType>): Int = argumentTypes.size
+
+    /** Emits stack subtraction, including the Windows large allocation helper path. */
+    fun subtractStackPointer(byteCount: ULong, peTarget: Boolean = false, checkStackHelper: Symbol = Symbol("__chkstk")) {
+        if (byteCount == 0uL) return
+        if (peTarget && byteCount >= 4096uL) {
+            moveImmediate(15, byteCount shr 4)
+            emitStaticCall(checkStackHelper)
+            o(0xcb2f73ff.toInt())
+            return
+        }
+        if (byteCount shr 24 == 0uL) {
+            val low = byteCount and 0xfffuL
+            val high = byteCount shr 12
+            if (low != 0uL) o(0xd10003ff.toInt() or (low.toInt() shl 10))
+            if (high != 0uL) o(0xd14003ff.toInt() or ((high.toInt() and 0xfff) shl 10))
+        } else {
+            moveImmediate(16, byteCount)
+            o(0xcb3063ff.toInt())
+        }
+    }
+
+    /** Plans argument placement and stack copies for a call after applying the PCS rules. */
+    fun planCall(arguments: List<AbiType>, variadicIndex: Int = 0, macho: Boolean = false, pe: Boolean = false): CallPlan {
+        val abi = assignAbiArguments(arguments, variadicIndex, macho, pe)
+        var stack = abi.stackBytes
+        val temporaries = linkedMapOf<Int, Int>()
+        for (i in arguments.indices.reversed()) {
+            if (abi.locations[i] and 1 != 0) {
+                val type = arguments[i]
+                stack = (stack + type.alignment - 1) and -type.alignment
+                temporaries[i] = stack
+                stack += type.size
+            }
+        }
+        stack = (stack + 15) and -16
+        require(stack < 0x1000000) { "stack size too big: $stack" }
+        return CallPlan(stack, abi.locations, temporaries)
+    }
+
+    fun restoreStackPointer(byteCount: ULong) {
+        val low = byteCount and 0xfffuL
+        val high = byteCount shr 12
+        if (low != 0uL) o(0x910003ff.toInt() or (low.toInt() shl 10))
+        if (high != 0uL) o(0x914003ff.toInt() or (high.toInt() shl 10))
     }
 }
