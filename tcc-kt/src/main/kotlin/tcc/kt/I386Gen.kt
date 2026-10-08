@@ -322,6 +322,11 @@ class I386Gen(
         else -> "__fixdfdi"
     }
 
+    /** The i386 backend converts between floating types by materializing ST0. */
+    fun convertFloatToFloat(materializeFloatRegister: () -> Unit) {
+        materializeFloatRegister()
+    }
+
     /** Emits the signed/unsigned byte or short extension into a 32 bit register. */
     fun convertCharShortToInt(register: Int, kind: I386ValueKind) {
         val signed = kind == I386ValueKind.BYTE || kind == I386ValueKind.SHORT
