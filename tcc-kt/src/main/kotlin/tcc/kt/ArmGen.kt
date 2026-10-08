@@ -1163,7 +1163,7 @@ object ArmGen {
 
     fun fillNops(bytes: Int, output: (Int) -> Unit) {
         require(bytes and 3 == 0) { "alignment of code section not multiple of 4" }
-        repeat(bytes / 4) { output(0xe1a00000.toInt()) }
+        repeat(bytes.coerceAtLeast(0) / 4) { output(0xe1a00000.toInt()) }
     }
 
     fun adjustStackPointer(byteCount: Int, output: (Int) -> Unit) {
