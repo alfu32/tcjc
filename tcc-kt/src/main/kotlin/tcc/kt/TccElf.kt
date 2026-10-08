@@ -197,6 +197,8 @@ object TccElf {
         val memoryOutput: Boolean,
         val sharedLibrary: Boolean,
         val peTarget: Boolean = false,
+        val machoTarget: Boolean = false,
+        val executableOutput: Boolean = false,
         val boundsChecking: Boolean = false,
         val leadingUnderscore: Boolean = false,
     )
@@ -812,7 +814,12 @@ object TccElf {
             putPointer(request.stabStrings, 0)
         }
         sectionAdd(data, 3 * state.wordSize, 1)
-        if (request.memoryOutput && request.dwarfVersion == 0) putPointer(request.text, 0) else putPointer(null, 0)
+        if (request.memoryOutput && request.dwarfVersion == 0) putPointer(request.text, 0) else {
+            putPointer(null, 0)
+            if (request.machoTarget && request.dwarfVersion == 0 && request.executableOutput && state.wordSize == 8) {
+                writeInt64(data.data, data.dataOffset - state.wordSize, 1L shl 32)
+            }
+        }
         var padding = 3 * state.wordSize
         if (request.boundsChecking) {
             putPointer(requireNotNull(request.bounds), 0)
