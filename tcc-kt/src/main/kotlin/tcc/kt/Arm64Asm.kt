@@ -338,6 +338,205 @@ class Arm64Asm(
         return emitInstruction(base or ((option and 15) shl 8))
     }
 
+    fun emitMoveImmediate(register: Int, immediate: Long, is64Bit: Boolean) {
+        var first = true
+        for (halfword in 0 until if (is64Bit) 4 else 2) {
+            val value = (immediate.toULong() shr (halfword * 16)).toInt() and 0xffff
+            if (value != 0 || halfword == 0) {
+                if (first) { emitMovz(register, value, halfword, is64Bit); first = false }
+                else emitMovk(register, value, halfword, is64Bit)
+            } else if (!first) emitMovk(register, value, halfword, is64Bit)
+        }
+    }
+
+    enum class RelocationType { JUMP26, CALL26, CONDBR19 }
+    data class Relocation(val symbol: String, val offset: Int, val type: RelocationType)
+
+    /** Translates one parsed AArch64 instruction and returns any emitted relocation records. */
+    fun assemble(mnemonic: String, operands: List<String>, position: Int,
+        relocate: (Relocation) -> Unit = {}): List<Relocation> {
+        val name = mnemonic.lowercase()
+        val branchConditions = mapOf("beq" to "eq", "bne" to "ne", "bcs" to "cs", "bhs" to "cs", "bcc" to "cc", "blo" to "cc",
+            "bmi" to "mi", "bpl" to "pl", "bvs" to "vs", "bvc" to "vc", "bhi" to "hi", "bls" to "ls",
+            "bge" to "ge", "blt" to "lt", "bgt" to "gt", "ble" to "le")
+        val branchExpression = name in setOf("b", "bl") || name in branchConditions
+        val ops = operands.mapIndexed { index, operand ->
+            if (name == "mrs" && index == 1 || name == "msr" && index == 0)
+                Operand(tokenName = operand.trim())
+            else if (name in setOf("movz", "movn", "movk") && index == 2)
+                Operand(OperandType.IMMEDIATE)
+            else if (name in setOf("isb", "dsb", "dmb") && parseBarrierOption(operand) >= 0)
+                Operand(OperandType.IMMEDIATE, value = Expression(parseBarrierOption(operand).toLong()))
+            else if (branchExpression && index == 0 || name in setOf("cbz", "cbnz") && index == 1) parseExpressionOperand(operand)
+            else parseOperand(operand)
+        }
+        val relocations = mutableListOf<Relocation>()
+        fun relocation(expression: Expression, type: RelocationType) {
+            val symbol = expression.symbol ?: return
+            val record = Relocation(symbol, position, type)
+            relocations += record; relocate(record)
+        }
+        fun requireCount(count: Int): Boolean {
+            if (ops.size != count) { expect("$count operands"); return false }
+            return true
+        }
+        when (name) {
+            "nop" -> { requireCount(0); emitNop() }
+            "mov" -> if (requireCount(2)) {
+                val destination = ops[0]; val source = ops[1]
+                if (destination.type != OperandType.REGISTER) { expect("register in first operand"); return relocations }
+                val is64 = destination.registerType == RegisterType.X
+                when (source.type) {
+                    OperandType.IMMEDIATE -> {
+                        if (isStackPointer(destination)) error("cannot move an immediate into sp")
+                        emitMoveImmediate(destination.register, source.value.value, is64)
+                    }
+                    OperandType.REGISTER -> if (isStackPointer(destination) || isStackPointer(source))
+                        emitAddImmediate(destination.register, source.register, 0, true)
+                    else emitMoveRegister(destination.register, source.register, is64)
+                    else -> error("invalid operand for mov")
+                }
+            }
+            "add", "adds", "sub", "subs", "and", "ands", "orr", "eor", "mul" -> {
+                if (!requireCount(3)) return relocations
+                val (destination, first, second) = ops
+                if (destination.type != OperandType.REGISTER || first.type != OperandType.REGISTER) { expect("register operands"); return relocations }
+                val opcode = when (name) {
+                    "add" -> 0x0b000000; "adds" -> 0x2b000000; "sub" -> 0x4b000000; "subs" -> 0x6b000000
+                    "and" -> 0x0a000000; "ands" -> 0x6a000000; "orr" -> 0x2a000000; "eor" -> 0x4a000000; else -> 0x1b000000
+                }
+                val is64 = destination.registerType == RegisterType.X
+                if (second.type == OperandType.IMMEDIATE) {
+                    if (second.value.symbol != null) { error("immediate operand not valid for this instruction"); return relocations }
+                    when (name) {
+                        "add", "adds" -> emitAddImmediate(destination.register, first.register, second.value.value, is64, name == "adds")
+                        "sub", "subs" -> emitSubImmediate(destination.register, first.register, second.value.value, is64, name == "subs")
+                        "and" -> emitLogicalImmediate(0x12000000, destination.register, first.register, second.value.value, is64)
+                        "ands" -> emitLogicalImmediate(0x72000000, destination.register, first.register, second.value.value, is64)
+                        "orr" -> emitLogicalImmediate(0x32000000, destination.register, first.register, second.value.value, is64)
+                        "eor" -> emitLogicalImmediate(0x52000000, destination.register, first.register, second.value.value, is64)
+                        else -> error("immediate operand not valid for this instruction")
+                    }
+                } else if (second.type == OperandType.REGISTER) {
+                    if (is64 != (first.registerType == RegisterType.X) || is64 != (second.registerType == RegisterType.X)) { error("mismatched register widths"); return relocations }
+                    emitDataProcessingRegister(opcode, destination.register, first.register, second.register, is64)
+                } else { expect("register in third operand"); return relocations }
+            }
+            "lsl", "lsr", "asr", "ror" -> {
+                if (!requireCount(3)) return relocations
+                val (destination, source, shift) = ops
+                if (destination.type != OperandType.REGISTER || source.type != OperandType.REGISTER) { error("expected register operands"); return relocations }
+                val is64 = destination.registerType == RegisterType.X
+                if (is64 != (source.registerType == RegisterType.X)) { error("mismatched register widths"); return relocations }
+                val type = when (name) { "lsl" -> 0; "lsr" -> 1; "asr" -> 2; else -> 3 }
+                if (shift.type == OperandType.IMMEDIATE) emitShift(destination.register, source.register, shift.value.value.toInt(), type, true, is64)
+                else if (shift.type == OperandType.REGISTER && is64 == (shift.registerType == RegisterType.X))
+                    emitShift(destination.register, source.register, shift.register, type, false, is64)
+                else error("shift requires immediate or register operand")
+            }
+            "ldr", "ldrb", "ldrh", "str", "strb", "strh" -> {
+                if (!requireCount(2)) return relocations
+                val data = ops[0]; val address = ops[1]
+                if (data.type != OperandType.REGISTER) { error("expected register in first operand"); return relocations }
+                if (address.type != OperandType.ADDRESS) { error("expected address operand in second operand"); return relocations }
+                if (address.addressMode != AddressMode.OFFSET) { error("only offset addressing is implemented for ldr/str"); return relocations }
+                val load = name.startsWith("ldr")
+                val (base, size) = when (name) {
+                    "ldr", "str" -> when (data.registerType) {
+                        RegisterType.X -> (if (load) 0xf9400000.toInt() else 0xf9000000.toInt()) to 3
+                        RegisterType.W -> (if (load) 0xb9400000.toInt() else 0xb9000000.toInt()) to 2
+                        RegisterType.D -> (if (load) 0xfd400000.toInt() else 0xfd000000.toInt()) to 3
+                        else -> { error("${name} requires a w, x, or d register"); return relocations }
+                    }
+                    "ldrb", "strb" -> (if (load) 0x39400000 else 0x39000000) to 0
+                    else -> (if (load) 0x79400000 else 0x79000000) to 1
+                }
+                emitLoadStoreImmediate(base, data.register, address.register, address.value.value.toInt(), size)
+            }
+            "ldp", "stp" -> {
+                if (!requireCount(3)) return relocations
+                val first = ops[0]; val second = ops[1]; val address = ops[2]
+                if (first.type != OperandType.REGISTER || second.type != OperandType.REGISTER || address.type != OperandType.ADDRESS) { error("pair load/store requires registers and an address"); return relocations }
+                val base = when {
+                    first.registerType == RegisterType.X && second.registerType == RegisterType.X -> when (name to address.addressMode) {
+                        "ldp" to AddressMode.OFFSET -> 0xa9400000.toInt(); "ldp" to AddressMode.PRE -> 0xa9c00000.toInt(); "ldp" to AddressMode.POST -> 0xa8c00000.toInt()
+                        "stp" to AddressMode.OFFSET -> 0xa9000000.toInt(); "stp" to AddressMode.PRE -> 0xa9800000.toInt(); else -> 0xa8800000.toInt()
+                    }
+                    first.registerType == RegisterType.D && second.registerType == RegisterType.D -> when (name to address.addressMode) {
+                        "ldp" to AddressMode.OFFSET -> 0x6d400000; "ldp" to AddressMode.PRE -> 0x6dc00000; "ldp" to AddressMode.POST -> 0x6cc00000
+                        "stp" to AddressMode.OFFSET -> 0x6d000000; "stp" to AddressMode.PRE -> 0x6d800000; else -> 0x6c800000
+                    }
+                    else -> { error("stp/ldp requires matching x or d registers"); return relocations }
+                }
+                emitLoadStorePair(base, first.register, second.register, address.register, address.value.value.toInt(), 3)
+            }
+            "br", "blr", "ret" -> {
+                if (name == "ret" && ops.isEmpty()) emitReturn()
+                else if (requireCount(1) && ops[0].type == OperandType.REGISTER) {
+                    when (name) { "br" -> emitBranchRegister(ops[0].register); "blr" -> emitBranchRegister(ops[0].register, true); else -> emitReturn(ops[0].register) }
+                } else if (ops.isNotEmpty()) error("expected register for $name")
+            }
+            "b", "bl" -> if (requireCount(1)) {
+                val target = ops[0].value
+                if (target.symbol != null) {
+                    emitBranch(0, name == "bl")
+                    relocation(target, if (name == "bl") RelocationType.CALL26 else RelocationType.JUMP26)
+                } else emitBranch((target.value - position).toInt(), name == "bl")
+            }
+            in branchConditions.keys -> if (requireCount(1)) {
+                val condition = parseCondition(branchConditions.getValue(name))
+                val target = ops[0].value
+                if (target.symbol != null) {
+                    emitConditionalBranch(condition, 0)
+                    relocation(target, RelocationType.CONDBR19)
+                } else emitConditionalBranch(condition, (target.value - position).toInt())
+            }
+            "cbz", "cbnz" -> if (requireCount(2)) {
+                val register = ops[0]
+                val target = ops[1].value
+                if (register.type != OperandType.REGISTER) { expect("register"); return relocations }
+                val is64 = register.registerType == RegisterType.X
+                val offset = if (target.symbol == null) (target.value - position).toInt() else 0
+                emitCompareBranch(register.register, offset, is64, name == "cbnz")
+                if (target.symbol != null) relocation(target, RelocationType.CONDBR19)
+            }
+            "movz", "movn", "movk" -> if (ops.size in 2..3) {
+                val destination = ops[0]; val immediate = ops[1]
+                if (destination.type != OperandType.REGISTER) { expect("register"); return relocations }
+                if (immediate.type != OperandType.IMMEDIATE || immediate.value.symbol != null || immediate.value.value.toULong() > 0xffffuL) {
+                    error("move wide immediate out of range"); return relocations
+                }
+                val is64 = destination.registerType == RegisterType.X
+                val shift = if (ops.size == 3) {
+                    val shiftText = operands[2].trim().lowercase().removePrefix("lsl").trim().removePrefix("#").trim()
+                    val shiftValue = shiftText.toIntOrNull()
+                    if (shiftValue == null || !validMoveWideShift(shiftValue, is64)) { error("move wide shift out of range"); return relocations }
+                    shiftValue / 16
+                } else 0
+                when (name) { "movz" -> emitMovz(destination.register, immediate.value.value.toInt(), shift, is64)
+                    "movn" -> emitMovn(destination.register, immediate.value.value.toInt(), shift, is64)
+                    else -> emitMovk(destination.register, immediate.value.value.toInt(), shift, is64) }
+            }
+            "mrs", "msr" -> if (requireCount(2)) {
+                val register = if (name == "mrs") ops[0] else ops[1]
+                val sysregName = if (name == "mrs") operands[1] else operands[0]
+                if (register.type != OperandType.REGISTER) { expect("register"); return relocations }
+                val sysreg = parseSystemRegister(sysregName)
+                if (sysreg < 0) { error("unsupported system register"); return relocations }
+                if (name == "mrs") emitMrs(register.register, sysreg) else emitMsr(register.register, sysreg)
+            }
+            "isb", "dsb", "dmb" -> {
+                if (ops.size > 1) { expect("at most one barrier option"); return relocations }
+                val option = if (operands.isEmpty()) 15 else parseBarrierOption(operands[0]).takeIf { it >= 0 }
+                    ?: ops[0].value.value.toInt().takeIf { ops[0].type == OperandType.IMMEDIATE && ops[0].value.symbol == null && it in 0..15 }
+                    ?: run { error("barrier option out of range"); return relocations }
+                emitBarrier(when (name) { "isb" -> 0; "dsb" -> 1; else -> 2 }, option)
+            }
+            else -> error("ARM64 instruction '$mnemonic' not implemented")
+        }
+        return relocations
+    }
+
     fun emitBranch(offset: Int, link: Boolean = false) = emitInstruction((if (link) 0x94000000.toInt() else 0x14000000) or ((offset shr 2) and 0x03ffffff))
     fun emitBranchRegister(register: Int, link: Boolean = false) = emitInstruction((if (link) 0xd63f0000.toInt() else 0xd61f0000.toInt()) or ((register and 31) shl 5))
     fun emitReturn(register: Int = 30) = emitInstruction(0xd65f0000.toInt() or ((register and 31) shl 5))
