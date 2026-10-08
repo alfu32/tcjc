@@ -14,6 +14,8 @@ object TccGen {
     const val VT_ENUM_VAL = 3 shl VT_STRUCT_SHIFT
     const val VT_VALMASK = 0x003f
     const val VT_CMP = 0x0033
+    const val VT_LLOCAL = 0x0031
+    const val VT_LOCAL = 0x0032
     const val VT_JMP = 0x0034
     const val VT_JMPI = 0x0035
     const val VT_LVAL = 0x0100
@@ -97,6 +99,8 @@ object TccGen {
         val loadCompare: (Int) -> Unit = {},
         val outputOpcode: (Int) -> Unit = {},
         val tokenName: (Int) -> String = { it.toString() },
+        val saveRegister: (Int) -> Unit = {},
+        val temporaryTypeSize: (Int) -> Pair<Int, Int> = { 0 to 1 },
     )
     data class SymbolEmissionHooks(
         val tokenName: (Int) -> String = { it.toString() },
@@ -122,7 +126,11 @@ object TccGen {
         var noCodeWanted: Int = 0,
         var debugModes: Int = 0,
         val hooks: RuntimeHooks = RuntimeHooks(),
+        var registerClasses: IntArray = intArrayOf(),
+        val temporaryLocals: MutableList<TemporaryLocal> = mutableListOf(),
+        var localIndex: Int = 0,
     )
+    data class TemporaryLocal(var location: Int, var size: Int, var alignment: Int)
     data class GeneratorState(
         var returnSymbol: Int = 0,
         var anonymousSymbol: Int = 0,
@@ -1012,6 +1020,98 @@ object TccGen {
         if (registerClass == target.floatingReturnClass && target.floatingSecondReturnRegister != null) return target.floatingSecondReturnClass
         return if (registerClass and target.floatingClass != 0) target.floatingClass else target.integerClass
     }
+
+    fun saveRegisters(state: RuntimeState, depth: Int) {
+        val end = (state.values.size - depth).coerceAtMost(state.values.size)
+        for (index in 0 until end.coerceAtLeast(0)) saveRegister(state, state.values[index].register)
+    }
+
+    fun saveRegister(state: RuntimeState, register: Int) = saveRegisterUpStack(state, register, 0)
+
+    fun saveRegisterUpStack(state: RuntimeState, rawRegister: Int, depth: Int) {
+        val register = rawRegister and VT_VALMASK
+        if (register >= VT_CONST || state.noCodeWanted != 0) return
+        var slot: Int? = null
+        var second = VT_CONST
+        val end = (state.values.size - depth).coerceAtMost(state.values.size)
+        for (index in 0 until end.coerceAtLeast(0)) {
+            val value = state.values[index]
+            if ((value.register and VT_VALMASK != register) && value.secondRegister != register) continue
+            if (slot == null) {
+                var baseType = value.type.type and VT_BTYPE
+                if (baseType == VT_VOID) continue
+                if (value.register and VT_LVAL != 0 || baseType == VT_FUNC) baseType = VT_PTR
+                val (size, alignment) = state.hooks.temporaryTypeSize(baseType)
+                slot = temporaryLocal(state, size, alignment).first
+                second = temporaryLocalIndex(state, slot)
+                state.hooks.saveRegister(register)
+                if (value.secondRegister < VT_CONST && secondReturnRegister(baseType, TypeTarget(4, 0, 0)) != VT_CONST) {
+                    state.hooks.saveRegister(value.secondRegister)
+                }
+            }
+            if (value.register and VT_LVAL != 0) {
+                value.register = (value.register and (VT_VALMASK or 0x8000).inv()) or VT_LLOCAL
+            } else {
+                value.register = VT_LVAL or VT_LOCAL
+                value.type.type = value.type.type and VT_ARRAY.inv()
+            }
+            value.symbol = null
+            value.secondRegister = second
+            value.constant = slot.toLong()
+        }
+    }
+
+    fun getRegister(state: RuntimeState, registerClass: Int): Int {
+        for (register in state.registerClasses.indices) {
+            if (state.registerClasses[register] and registerClass == 0) continue
+            if (state.noCodeWanted != 0 || state.values.none {
+                    (it.register and VT_VALMASK) == register || it.secondRegister == register
+                }) return register
+        }
+        for (value in state.values) {
+            val second = value.secondRegister
+            if (second < VT_CONST && second in state.registerClasses.indices && state.registerClasses[second] and registerClass != 0) {
+                saveRegister(state, second)
+                return second
+            }
+            val first = value.register and VT_VALMASK
+            if (first < VT_CONST && first in state.registerClasses.indices && state.registerClasses[first] and registerClass != 0) {
+                saveRegister(state, first)
+                return first
+            }
+        }
+        return -1
+    }
+
+    fun getRegisterEx(state: RuntimeState, registerClass: Int, secondaryClass: Int): Int {
+        for (register in state.registerClasses.indices) {
+            if (state.registerClasses[register] and secondaryClass == 0) continue
+            val uses = state.values.count { (it.register and VT_VALMASK) == register || it.secondRegister == register }
+            if (uses <= 1) return register
+        }
+        return getRegister(state, registerClass)
+    }
+
+    fun temporaryLocal(state: RuntimeState, size: Int, alignment: Int): Pair<Int, Int> {
+        val used = state.values.mapNotNull { value ->
+            val register = value.register and VT_VALMASK
+            if (register == VT_LOCAL || register == VT_LLOCAL) (value.secondRegister - (VT_CONST + 1)).takeIf { it >= 0 }
+            else null
+        }.toSet()
+        state.temporaryLocals.forEachIndexed { index, temp ->
+            if (index !in used && temp.size >= size && temp.alignment >= alignment) return temp.location to (VT_CONST + 1 + index)
+        }
+        val index = state.temporaryLocals.size
+        state.localIndex = (state.localIndex - size) and -alignment
+        if (index < 32) {
+            state.temporaryLocals += TemporaryLocal(state.localIndex, size, alignment)
+            return state.localIndex to (VT_CONST + 1 + index)
+        }
+        return state.localIndex to VT_CONST
+    }
+
+    private fun temporaryLocalIndex(state: RuntimeState, location: Int): Int =
+        state.temporaryLocals.indexOfFirst { it.location == location }.let { if (it < 0) VT_CONST else VT_CONST + 1 + it }
 
     const val VT_CONST = 0x0040
     const val VT_SYM = 0x0200
