@@ -181,11 +181,16 @@ class LibTcc(
         compilerState.libraryPaths.clear(); compilerState.crtPaths.clear()
         compilerState.inputFiles.clear(); compilerState.targetDependencies.clear()
         compilerState.pragmaLibraries.clear(); compilerState.loadedLibraries.clear()
+        compilerState.files.clear(); compilerState.linkerArguments.clear()
+        compilerState.commandLineDefinitions = ""; compilerState.commandLineIncludes = ""
+        compilerState.currentFilename = null; compilerState.dependencyOutputFile = null
+        compilerState.elfInterpreter = null; compilerState.outputFormatName = null
         if (state === compilerState) state = null
     }
 
     private fun CompilerState.listOfOwnedPaths(): List<String> = listOfNotNull(
-        libraryPath.takeIf(String::isNotEmpty), soname, rpath, outputFile, entryName, initSymbol, finiSymbol, mapFile, dependencyOutput,
+        libraryPath.takeIf(String::isNotEmpty), soname, rpath, outputFile, entryName, initSymbol, finiSymbol, mapFile,
+        dependencyOutput, dependencyOutputFile, elfInterpreter, outputFormatName,
     )
 
     fun setOutputType(compilerState: CompilerState, requestedType: Int, headers: (CompilerState) -> List<String>,
