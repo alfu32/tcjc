@@ -160,6 +160,7 @@ object TccElf {
     data class VersionRegistry(
         val versions: MutableList<SymbolVersion> = mutableListOf(),
         val localVersions: MutableList<Int> = mutableListOf(),
+        val symbolVersions: MutableList<Int> = mutableListOf(),
     )
     data class DynamicTableLayout(
         val dynamic: ElfSection,
@@ -240,6 +241,13 @@ object TccElf {
             registry.versions += SymbolVersion(library, version, previousForLibrary = previousForLibrary)
         }
         registry.localVersions[index] = found
+    }
+
+    /** Associates a dynamic symbol with a version registry index once. */
+    fun setSymbolVersion(registry: VersionRegistry, symbolIndex: Int, versionIndex: Int) {
+        require(symbolIndex >= 0)
+        while (registry.symbolVersions.size <= symbolIndex) registry.symbolVersions += -1
+        if (registry.symbolVersions[symbolIndex] < 0) registry.symbolVersions[symbolIndex] = versionIndex
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
