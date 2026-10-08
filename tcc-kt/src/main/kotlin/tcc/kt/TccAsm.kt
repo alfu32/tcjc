@@ -38,6 +38,25 @@ class TccAsm(
     }
     data class AsmRelocation(val section: String, val offset: Long, val symbol: String, val type: String, val addend: Long)
     data class DirectiveResult(val section: String, val emittedBytes: Int, val relocations: List<AsmRelocation> = emptyList())
+    data class InlineOperand(
+        val id: String = "",
+        val constraint: String = "",
+        val rendered: String? = null,
+        val register: Int = -1,
+        val isMemory: Boolean = false,
+        val label: String? = null,
+    )
+    data class ConstraintReference(val operandIndex: Int, val nextOffset: Int)
+    data class InlineAssemblyHooks(
+        val saveRegisters: (Int) -> Unit = {},
+        val computeConstraints: (List<InlineOperand>, Int, Set<String>) -> Int = { _, _, _ -> -1 },
+        val generateCode: (List<InlineOperand>, Int, Boolean, Set<String>, Int) -> Unit = { _, _, _, _, _ -> },
+        val assembleInstruction: (String, String) -> Unit,
+        val currentSectionName: () -> String = { "" },
+        val useSection: (String) -> Unit = {},
+        val warning: (String) -> Unit = {},
+        val popValues: (Int) -> Unit = {},
+    )
 
     private val labels = mutableMapOf<String, Symbol>()
     private val numericLabels = mutableMapOf<Long, MutableList<Symbol>>()
@@ -98,6 +117,81 @@ class TccAsm(
         require(expression.symbol == null) { "constant expected" }
         require(expression.value.toInt().toLong() == expression.value) { "integer out of range ${expression.value}" }
         return expression.value.toInt()
+    }
+
+    fun findConstraint(operands: List<InlineOperand>, source: String, start: Int = 0): ConstraintReference {
+        var end = start
+        val operandIndex = when {
+            start < source.length && source[start].isDigit() -> {
+                var value = 0
+                while (end < source.length && source[end].isDigit()) {
+                    value = value * 10 + source[end++].digitToInt()
+                }
+                value.takeIf { it < operands.size } ?: -1
+            }
+            start < source.length && source[start] == '[' -> {
+                val close = source.indexOf(']', start + 1)
+                if (close < 0) -1 else {
+                    val name = source.substring(start + 1, close)
+                    end = close + 1
+                    operands.indexOfFirst { it.id == name }
+                }
+            }
+            else -> -1
+        }
+        return ConstraintReference(operandIndex, end)
+    }
+
+    /** Applies GCC percent escaping, modifiers, numeric references, and named references. */
+    fun substituteInlineOperands(
+        template: String,
+        operands: List<InlineOperand>,
+        renderValue: (InlineOperand, Char) -> String = { operand, _ -> operand.rendered ?: error("invalid operand reference after %") },
+        supportedModifiers: Set<Char> = setOf('c', 'n', 'b', 'w', 'h', 'k', 'q', 'l', 'P', 'x', 's', 'd', 'Z', 'z'),
+    ): String {
+        val result = StringBuilder()
+        var index = 0
+        while (index < template.length) {
+            val char = template[index++]
+            if (char != '%') { result.append(char); continue }
+            require(index < template.length) { "invalid operand reference after %" }
+            if (template[index] == '%') { result.append('%'); index++; continue }
+            var modifier = '\u0000'
+            if (template[index] in supportedModifiers) modifier = template[index++]
+            val reference = findConstraint(operands, template, index)
+            require(reference.operandIndex >= 0) { "invalid operand reference after %" }
+            val operand = operands[reference.operandIndex]
+            result.append(if (modifier == 'l') operand.label ?: error("label operand expected") else renderValue(operand, modifier))
+            index = reference.nextOffset
+        }
+        return result.toString()
+    }
+
+    fun assembleInline(
+        template: String,
+        operands: List<InlineOperand>,
+        outputCount: Int,
+        clobbers: Set<String> = emptySet(),
+        hooks: InlineAssemblyHooks,
+    ): String {
+        hooks.saveRegisters(0)
+        val outputRegister = hooks.computeConstraints(operands, outputCount, clobbers)
+        val expanded = if (operands.isEmpty()) template else substituteInlineOperands(template, operands)
+        hooks.generateCode(operands, outputCount, false, clobbers, outputRegister)
+        val originalSection = hooks.currentSectionName()
+        assemble(expanded, hooks.assembleInstruction, global = false, hashComments = false)
+        if (hooks.currentSectionName() != originalSection) {
+            hooks.warning("inline asm tries to change current section")
+            hooks.useSection(originalSection)
+        }
+        hooks.generateCode(operands, outputCount, true, clobbers, outputRegister)
+        hooks.popValues(operands.size)
+        return expanded
+    }
+
+    fun assembleGlobalInline(template: String, hooks: InlineAssemblyHooks): String {
+        assemble(template, hooks.assembleInstruction, global = true, hashComments = false)
+        return template
     }
 
     fun section(name: String): Section = sections.getOrPut(name) { Section(name, sections.size + 1) }
