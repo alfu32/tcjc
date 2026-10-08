@@ -54,6 +54,18 @@ class Riscv64Gen(
     )
     data class AddressOffset(val register: Int, val offset: Int)
     data class Relocation(val symbol: String, val type: String, val offset: Int, val addend: Long = 0)
+    data class CallTarget(val value: Value)
+    data class FieldType(val type: AbiType, val offset: Int)
+    data class AbiType(
+        val baseType: Int,
+        val size: Int,
+        val isFloat: Boolean = false,
+        val isArray: Boolean = false,
+        val arrayCount: Int = 0,
+        val isUnion: Boolean = false,
+        val fields: List<FieldType> = emptyList(),
+    )
+    data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
 
     private var bytes = ByteArray(256)
     val relocations = mutableListOf<Relocation>()
@@ -282,6 +294,66 @@ class Riscv64Gen(
         }
         val function3 = when (size) { 1 -> 0; 2 -> 1; 4 -> 2; else -> 3 }
         emitStore(if (isFloatingRegister(register)) 0x27 else 0x23, function3, base, source, offset)
+    }
+
+    /** Emits an indirect call or jump, preserving the C backend's ra/t0 selection. */
+    fun callOrJump(target: CallTarget, doCall: Boolean) {
+        val linkRegister = if (doCall) 1 else 5
+        val value = target.value
+        if (value.kind == ValueKind.CONSTANT && value.symbol != null && value.value == value.value.toInt().toLong()) {
+            addRelocation(value.symbol, "CALL_PLT", position, value.value)
+            emitInstruction(0x17 or (linkRegister shl 7)) // auipc link, %call(symbol)
+            emitImmediate(0x67, 0, linkRegister, linkRegister, 0)
+        } else if (value.kind == ValueKind.REGISTER) {
+            val source = integerRegister(value.register)
+            emitImmediate(0x67, 0, linkRegister, source, 0)
+        } else {
+            load(TREG_RA, value)
+            emitImmediate(0x67, 0, linkRegister, integerRegister(TREG_RA), 0)
+        }
+    }
+
+    /** Classifies a named aggregate for the two RISC-V argument registers. */
+    fun registerPass(type: AbiType, named: Boolean = true): RegisterPass {
+        val classes = IntArray(3)
+        val offsets = IntArray(3)
+        fun visit(current: AbiType, offset: Int) {
+            when {
+                current.baseType == VT_STRUCT -> {
+                    if (current.isUnion) classes[0] = -1
+                    else current.fields.forEach { visit(it.type, offset + it.offset) }
+                }
+                current.isArray -> {
+                    if (current.arrayCount < 0 || current.arrayCount > 2) classes[0] = -1
+                    else {
+                        val before = classes[0]
+                        visit(current.fields.firstOrNull()?.type ?: current, offset)
+                        if (classes[0] > 2 || (classes[0] == 2 && current.arrayCount > 1)) classes[0] = -1
+                        else if (current.arrayCount == 2 && classes[0] > 0 && classes[1] == RC_FLOAT) {
+                            val field = current.fields.firstOrNull()?.type ?: current
+                            classes[++classes[0]] = RC_FLOAT
+                            offsets[classes[0]] = ((offset + field.size) shl 4) or field.baseType
+                        } else if (current.arrayCount == 2 && classes[0] == before + 1) classes[0] = -1
+                    }
+                }
+                classes[0] == 2 || classes[0] < 0 || current.baseType == VT_LDOUBLE -> classes[0] = -1
+                classes[0] == 0 || classes[1] == RC_FLOAT || current.isFloat -> {
+                    val next = ++classes[0]
+                    classes[next] = if (current.isFloat) RC_FLOAT else RC_INT
+                    offsets[next] = (offset shl 4) or if (current.baseType == VT_PTR) VT_LLONG else current.baseType
+                }
+                else -> classes[0] = -1
+            }
+        }
+        visit(type, 0)
+        if (classes[0] <= 0 || !named) {
+            classes[0] = (type.size + 7) shr 3
+            classes[1] = RC_INT
+            classes[2] = RC_INT
+            offsets[1] = if (type.size <= 1) VT_BYTE else if (type.size <= 2) VT_SHORT else if (type.size <= 4) VT_INT else VT_LLONG
+            offsets[2] = (8 shl 4) or if (type.size <= 9) VT_BYTE else if (type.size <= 10) VT_SHORT else if (type.size <= 12) VT_INT else VT_LLONG
+        }
+        return RegisterPass(classes, offsets)
     }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
