@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 40
+- **DONE:** 41
 - **DOING:** 1
 - **TODO:** 16
-- **Currently doing:** `lib/lib-arm64.c` → `src/main/kotlin/tcc/kt/LibArm64.kt`
+- **Currently doing:** `libtcc.c` → `src/main/kotlin/tcc/kt/LibTcc.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -36,13 +36,13 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `lib/bt-log.c` | DONE |
 | `lib/builtin.c` | DONE |
 | `lib/dsohandle.c` | DONE |
-| `lib/lib-arm64.c` | DOING |
+| `lib/lib-arm64.c` | DONE |
 | `lib/libtcc1.c` | DONE |
 | `lib/runmain.c` | DONE |
 | `lib/stdatomic.c` | DONE |
 | `lib/tcov.c` | DONE |
 | `lib/va_list.c` | DONE |
-| `libtcc.c` | TODO |
+| `libtcc.c` | DOING |
 | `riscv64-asm.c` | TODO |
 | `riscv64-gen.c` | TODO |
 | `riscv64-link.c` | DONE |
