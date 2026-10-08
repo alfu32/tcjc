@@ -3,7 +3,7 @@
 - **Translation candidates:** 54
 - **DONE:** 41
 - **DOING:** 1
-- **TODO:** 16
+- **TODO:** 12
 - **Currently doing:** `libtcc.c` → `src/main/kotlin/tcc/kt/LibTcc.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
