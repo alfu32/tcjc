@@ -492,6 +492,36 @@ class Riscv64Gen(
             pass.fieldOffsets.getOrElse(1) { type.baseType } and 0xf)
     }
 
+    /** Transfers mixed integer/floating structure return fields to or from a local result object. */
+    fun transferMixedStructureReturn(
+        firstOffset: Int,
+        firstType: Int,
+        firstClass: Int,
+        secondOffset: Int,
+        secondType: Int,
+        secondClass: Int,
+        afterCall: Boolean,
+    ) {
+        fun field(offset: Int, type: Int, floating: Boolean) = Value(
+            value = offset.toLong(), kind = ValueKind.LOCAL, isLValue = true,
+            isFloating = floating, isDouble = type == VT_DOUBLE,
+            baseType = type, typeSize = when (type) {
+                VT_BYTE -> 1; VT_SHORT -> 2; VT_INT, VT_FLOAT -> 4; VT_DOUBLE, VT_LLONG, VT_PTR -> 8; else -> 8
+            },
+        )
+        val first = field(firstOffset, firstType, firstClass == RC_FLOAT)
+        val second = field(secondOffset, secondType, secondClass == RC_FLOAT)
+        val firstRegister = if (firstClass == RC_FLOAT) REG_FRET else REG_IRET
+        val secondRegister = if (secondClass == RC_FLOAT) REG_FRET else REG_IRE2
+        if (afterCall) {
+            store(firstRegister, first)
+            store(secondRegister, second)
+        } else {
+            load(firstRegister, first)
+            load(secondRegister, second)
+        }
+    }
+
     fun fillNops(byteCount: Int) {
         require(byteCount and 3 == 0) { "alignment of code section not multiple of 4" }
         repeat(byteCount / 4) { emitInstruction(0x00000013) }
