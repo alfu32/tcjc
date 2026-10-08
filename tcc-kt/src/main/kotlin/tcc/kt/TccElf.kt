@@ -498,6 +498,57 @@ object TccElf {
         }
     }
 
+    fun buildGot(state: ElfState, symbolTable: ElfSection): Int {
+        val got = state.namedSections[".got"] ?: newSection(state, ".got", SHT_PROGBITS, SHF_ALLOC or SHF_WRITE).also {
+            it.entrySize = 4
+            state.namedSections[".got"] = it
+            sectionAdd(it, 3 * state.wordSize, 1)
+        }
+        return setGlobalSymbol(state, symbolTable, "_GLOBAL_OFFSET_TABLE_", got, 0)
+    }
+
+    fun putGotEntry(
+        state: ElfState,
+        symbolTable: ElfSection,
+        dynamicSymbols: ElfSection?,
+        symbolIndex: Int,
+        dynamicRelocationType: Int,
+        jumpSlotType: Int,
+        relativeType: Int,
+        createPltEntry: (Long, SymbolAttributes) -> Long,
+    ): SymbolAttributes {
+        val got = state.namedSections[".got"] ?: error("GOT has not been created")
+        val needsPlt = dynamicRelocationType == jumpSlotType
+        val attributes = requireNotNull(getSymbolAttributes(state, symbolIndex, true))
+        if (if (needsPlt) attributes.pltOffset != 0L else attributes.gotOffset != 0L) return attributes
+        var relocationTarget = got
+        if (needsPlt) relocationTarget = state.namedSections[".plt"] ?: newSection(state, ".plt", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR).also {
+            it.entrySize = 4
+            state.namedSections[".plt"] = it
+        }
+        val gotOffset = got.dataOffset.toLong()
+        sectionAdd(got, state.wordSize, 1)
+        val symbol = symbolTable.symbols[symbolIndex]
+        val name = elfString(requireNotNull(symbolTable.link), symbol.nameOffset)
+        if (dynamicSymbols != null) {
+            if (symbolBind(symbol.info) == STB_LOCAL) {
+                putElfRelocation(state, dynamicSymbols, got, gotOffset, relativeType, symbolIndex)
+            } else {
+                if (attributes.dynamicIndex == 0) attributes.dynamicIndex = setElfSymbol(
+                    state, dynamicSymbols, symbol.value, symbol.size, symbol.info, 0, symbol.sectionIndex, name,
+                )
+                putElfRelocation(state, dynamicSymbols, relocationTarget, gotOffset, dynamicRelocationType, attributes.dynamicIndex)
+            }
+        } else putElfRelocation(state, symbolTable, got, gotOffset, dynamicRelocationType, symbolIndex)
+        if (needsPlt) {
+            attributes.pltOffset = createPltEntry(gotOffset, attributes)
+            val plt = state.namedSections.getValue(".plt")
+            val pltName = name.take(195) + "@plt"
+            attributes.pltSymbol = putElfSymbol(symbolTable, attributes.pltOffset, 0, (STB_GLOBAL shl 4) or STT_FUNC, 0, plt.index, pltName)
+        } else attributes.gotOffset = gotOffset
+        return attributes
+    }
+
     fun relocateSection(
         state: ElfState,
         target: ElfSection,
