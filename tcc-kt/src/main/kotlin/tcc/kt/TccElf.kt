@@ -3127,6 +3127,19 @@ object TccElf {
         }
         dynamicSymbols.symbols.clear(); dynamicSymbols.symbols.addAll(ordered)
         updateRelocationSymbolIndices(state, dynamicSymbols, oldToNew, 0)
+        state.sections.drop(1).filterNotNull().firstOrNull {
+            it.type == 0x6fffffff && it.link === dynamicSymbols
+        }?.let { versionSymbols ->
+            val oldVersions = IntArray(oldSymbols.size) { index ->
+                val offset = index * 2
+                if (offset + 1 < versionSymbols.data.size)
+                    (versionSymbols.data[offset].toInt() and 0xff) or ((versionSymbols.data[offset + 1].toInt() and 0xff) shl 8)
+                else 0
+            }
+            oldToNew.forEachIndexed { oldIndex, newIndex ->
+                if (newIndex in oldVersions.indices) write16(versionSymbols.data, newIndex * 2, oldVersions[oldIndex])
+            }
+        }
         rebuildHash(dynamicSymbols)
         return oldToNew
     }
