@@ -86,6 +86,9 @@ object TccElf {
         val namedSections: MutableMap<String, ElfSection> = mutableMapOf(),
         val symbolTables: MutableMap<String, SymbolTablePair> = mutableMapOf(),
         val symbolAttributes: MutableList<SymbolAttributes> = mutableListOf(),
+        val fileSectionMarks: MutableList<Pair<ElfSection, Int>> = mutableListOf(),
+        var fileSymbolMark: Int = 0,
+        var fileStringMark: Int = 0,
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
@@ -110,6 +113,20 @@ object TccElf {
             state.namedSections[".bounds"] = newSection(state, ".bounds", SHT_PROGBITS, SHF_ALLOC)
             state.namedSections[".lbounds"] = newSection(state, ".lbounds", SHT_PROGBITS, SHF_ALLOC)
         }
+    }
+
+    /** Saves section offsets and suspends the main symbol hash during one input file. */
+    fun beginInputFile(state: ElfState) {
+        state.fileSectionMarks.clear()
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            section.offset = section.dataOffset.toLong()
+            state.fileSectionMarks += section to section.dataOffset
+        }
+        val symbols = state.symbolTable ?: return
+        state.fileSymbolMark = symbols.dataOffset / symbols.entrySize
+        state.fileStringMark = requireNotNull(symbols.link).dataOffset
+        symbols.relocation = symbols.hash
+        symbols.hash = null
     }
 
     fun newSection(state: ElfState, name: String, type: Int, flags: Int): ElfSection {
