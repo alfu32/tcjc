@@ -201,6 +201,7 @@ object TccElf {
     data class InputRelocation(val offset: Long, val symbolIndex: Int, val type: Int, val addend: Long = 0)
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class ObjectMergeResult(val sections: List<SectionMergeInfo>, val symbolIndexes: IntArray)
+    data class LoadedLibrary(val soname: String, val level: Int, val symbolIndexes: IntArray)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -823,6 +824,82 @@ object TccElf {
             }
         }
         return ObjectMergeResult(mappings, symbolIndexes)
+    }
+
+    fun loadSharedLibrarySymbols(
+        state: ElfState,
+        inputBytes: ByteArray,
+        filename: String,
+        level: Int,
+        versions: VersionRegistry,
+        loadedLibraries: MutableSet<String>,
+        reportError: (String) -> Unit = {},
+    ): LoadedLibrary? {
+        val input = parseElfSections(inputBytes)
+        if (input == null || input.fileType != 3 || !input.littleEndian) {
+            reportError("bad architecture")
+            return null
+        }
+        val dynamicIndex = input.sections.indexOfFirst { it.type == SHT_DYNAMIC }
+        if (dynamicIndex < 0) return null
+        val dynamic = input.sections[dynamicIndex]
+        val stringTable = input.sections.getOrNull(dynamic.link)?.data ?: return null
+        val wordSize = input.wordSize
+        val dynamicEntrySize = dynamic.entrySize.toInt().takeIf { it >= wordSize * 2 } ?: wordSize * 2
+        fun readUnsigned(data: ByteArray, offset: Int, width: Int): Long {
+            var result = 0L
+            repeat(width) { byteIndex -> result = result or ((data[offset + byteIndex].toLong() and 0xff) shl (byteIndex * 8)) }
+            return result
+        }
+        fun readString(offset: Int): String {
+            if (offset !in stringTable.indices) return ""
+            var end = offset
+            while (end < stringTable.size && stringTable[end] != 0.toByte()) end++
+            return stringTable.copyOfRange(offset, end).toString(Charsets.UTF_8)
+        }
+        var soname = filename.substringAfterLast('/')
+        var dynamicOffset = 0
+        while (dynamicOffset + dynamicEntrySize <= dynamic.data.size) {
+            val tag = readUnsigned(dynamic.data, dynamicOffset, wordSize)
+            val value = readUnsigned(dynamic.data, dynamicOffset + wordSize, wordSize)
+            if (tag == 14L) soname = readString(value.toInt()) // DT_SONAME
+            if (tag == 0L) break
+            dynamicOffset += dynamicEntrySize
+        }
+        if (!loadedLibraries.add(soname)) return LoadedLibrary(soname, level, IntArray(0))
+        val dynamicSymbolIndex = input.sections.indexOfFirst { it.type == SHT_DYNSYM }
+        if (dynamicSymbolIndex < 0) return LoadedLibrary(soname, level, IntArray(0))
+        val inputSymbols = parseInputSymbols(inputBytes, input, dynamicSymbolIndex) ?: run {
+            reportError("invalid dynamic symbol table")
+            return null
+        }
+        val versionSymbolSection = input.sections.firstOrNull { it.type == 0x6fffffff }
+        val versionIndexes = versionSymbolSection?.data?.takeIf { it.size == inputSymbols.size * 2 }?.let { data ->
+            IntArray(inputSymbols.size) { index -> (data[index * 2].toInt() and 0xff) or ((data[index * 2 + 1].toInt() and 0xff) shl 8) }
+        }
+        if (versionIndexes != null) {
+            val definition = input.sections.firstOrNull { it.type == 0x6ffffffd }?.data
+            val requirement = input.sections.firstOrNull { it.type == 0x6ffffffe }?.data
+            storeVersions(versions, VersionRecords(definition, requirement), stringTable)
+        }
+        val outputSymbols = state.dynamicSymbolTable ?: run {
+            reportError("dynamic symbol table is not initialized")
+            return null
+        }
+        val translation = IntArray(inputSymbols.size)
+        inputSymbols.drop(1).forEachIndexed { sourceIndex, symbol ->
+            val index = sourceIndex + 1
+            if (symbolBind(symbol.info) == STB_LOCAL) return@forEachIndexed
+            val outputIndex = setElfSymbol(state, outputSymbols, symbol.value, symbol.size,
+                symbol.info, symbol.other, symbol.sectionIndex, symbol.name)
+            translation[index] = outputIndex
+            val version = versionIndexes?.get(index) ?: 0
+            if (version and 0x8000 == 0 && version > 0 && version < versions.localVersions.size) {
+                val globalVersion = versions.localVersions[version]
+                if (globalVersion >= 0) setSymbolVersion(versions, outputIndex, globalVersion)
+            }
+        }
+        return LoadedLibrary(soname, level, translation)
     }
 
     private fun parseInputRelocationsFromData(wordSize: Int, rela: Boolean, data: ByteArray, littleEndian: Boolean, requestedEntrySize: Int): List<InputRelocation> {
