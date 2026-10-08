@@ -28,13 +28,18 @@ class Arm64Gen(
         val arrayCount: Int? = null, val elementType: AbiType? = null,
     )
     data class AbiAssignment(val stackBytes: Int, val locations: List<Int>)
+    data class SignatureAssignment(val returnLocation: Int, val arguments: AbiAssignment)
     data class CallPlan(val stackBytes: Int, val argumentLocations: List<Int>, val structureTemporaryOffsets: Map<Int, Int>)
     data class FunctionFramePlan(
         val parameterLocations: List<Int>, val parameterOffsets: List<Int>, val savedIntegerPairs: Int,
         val savedVectorPairs: Int, val saveX8: Boolean, val variadicStackOffset: Int,
         val generalRegisterOffset: Int, val vectorRegisterOffset: Int, val setupSlots: Int = 6,
     )
-    data class VaArgPlan(val size: Int, val alignment: Int, val homogeneousCount: Int, val indirect: Boolean, val registerClass: String)
+    data class VaArgPlan(
+        val size: Int, val alignment: Int, val homogeneousCount: Int, val indirect: Boolean,
+        val registerClass: String, val stackSlotBytes: Int, val registerSlotBytes: Int,
+        val registerOffsetDelta: Int, val peIndirect: Boolean,
+    )
     data class ReturnPlan(val location: Int, val indirect: Boolean, val homogeneousCount: Int, val size: Int)
     data class CallLoweringCallbacks(
         val saveRegisters: (Int) -> Unit = {}, val storeStructureTemporary: (Int, Int) -> Unit = { _, _ -> },
@@ -220,7 +225,7 @@ class Arm64Gen(
 
     fun loadInteger(signed: Boolean, size: Int, destination: Int, base: Int, offset: ULong) {
         val scaledMask = 0xfffuL shl size
-        val signBit = if (signed) 1 shl 23 else 0
+        val signBit = if (signed && size < 2) 1 shl 23 else 0
         if (size >= 2) {
             o(ARM64_LDR_B or (destination and 31) or ((base and 31) shl 5) or (offset.toInt() shl (10 - size)) or signBit or (size shl 30))
         } else if (offset and scaledMask.inv() == 0uL) {
@@ -616,6 +621,10 @@ class Arm64Gen(
         return AbiAssignment(stack - 32, locations)
     }
 
+    fun assignAbiSignature(returnType: AbiType, argumentTypes: List<AbiType>, variadicIndex: Int = 0,
+        macho: Boolean = false, pe: Boolean = false): SignatureAssignment =
+        SignatureAssignment(classifyReturn(returnType).location, assignAbiArguments(argumentTypes, variadicIndex, macho, pe))
+
     fun functionArgumentCount(argumentTypes: List<AbiType>): Int = argumentTypes.size
 
     /** Emits stack subtraction, including the Windows large allocation helper path. */
@@ -737,6 +746,25 @@ class Arm64Gen(
         repeat(plan.setupSlots) { o(ARM64_NOP) }
     }
 
+    fun emitHfaParameterCopies(plan: FunctionFramePlan, parameterTypes: List<AbiType>) {
+        for (i in parameterTypes.indices) {
+            val location = plan.parameterLocations[i]
+            if (location !in 16..31 || parameterTypes[i].type != Type.STRUCT) continue
+            val count = homogeneousFloatAggregate(parameterTypes[i])
+            if (count == 0) continue
+            val encodedSizeResult = IntArray(1)
+            homogeneousFloatAggregate(parameterTypes[i], encodedSizeResult)
+            val elementBytes = encodedSizeResult[0]
+            if (elementBytes >= 16) continue
+            val encoded = when (elementBytes) { 4 -> 2; 8 -> 3; else -> continue }
+            repeat(count) { index ->
+                val sourceVector = (location - 16) / 2 + index
+                o(0x3d0003e0.toInt() or ((-(encoded and 4)) shl 27) or ((encoded and 3) shl 29) or
+                    sourceVector or (((plan.parameterOffsets[i] / elementBytes) + index) shl 10))
+            }
+        }
+    }
+
     fun emitFunctionEpilogue() {
         o(0x910003bf.toInt())
         o(0xa8ce7bfd.toInt())
@@ -804,8 +832,12 @@ class Arm64Gen(
 
     fun planVaArg(type: AbiType): VaArgPlan {
         val hfa = if (isAbiFloat(type.type)) 1 else homogeneousFloatAggregate(type)
-        return VaArgPlan(type.size, type.alignment, hfa, type.size > 16,
-            if (hfa != 0) "vector" else "general")
+        val indirect = type.size > 16
+        val slotSize = if (indirect) 8 else (type.size + 7) and -8
+        return VaArgPlan(type.size, type.alignment, hfa, indirect,
+            if (hfa != 0) "vector" else "general", slotSize,
+            if (hfa != 0) hfa * 16 else slotSize, if (hfa != 0) hfa * 16 else slotSize,
+            indirect)
     }
 
     /** Runs the target independent parts of va_arg lowering through the caller's value-stack hooks. */
@@ -1016,7 +1048,7 @@ class Arm64Gen(
         when (plan.location) {
             -1 -> Unit
             0 -> if (type.type == Type.STRUCT && type.size > 0) loadStructure(valueRegister, type.size)
-                else if (isAbiFloat(type.type)) o(0x1e604000 or (floatReg(0)) or (floatReg(valueRegister) shl 5))
+                else if (isAbiFloat(type.type)) o((if (type.type == Type.DOUBLE) 0x1e604000 else 0x1e204000) or floatReg(0) or (floatReg(valueRegister) shl 5))
                 else if (intReg(valueRegister) != 0) o(0xaa0003e0.toInt() or (intReg(valueRegister) shl 16))
             1 -> { loadInteger(false, 3, 8, 29, 144uL); copyStructure(addressRegister, 8, type.size) }
             16 -> if (type.type == Type.STRUCT) {
@@ -1025,7 +1057,7 @@ class Arm64Gen(
                 for (index in 0 until plan.homogeneousCount) {
                     loadVector(encodedSize, 0x20 + index, addressRegister, (index * elementBytes).toULong())
                 }
-            } else if (isAbiFloat(type.type)) o(0x1e604000 or floatReg(0) or (floatReg(valueRegister) shl 5))
+            } else if (isAbiFloat(type.type)) o((if (type.type == Type.DOUBLE) 0x1e604000 else 0x1e204000) or floatReg(0) or (floatReg(valueRegister) shl 5))
         }
     }
 }
