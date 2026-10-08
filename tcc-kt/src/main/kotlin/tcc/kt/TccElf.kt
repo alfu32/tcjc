@@ -504,6 +504,21 @@ object TccElf {
         section.stringOffsets.clear()
     }
 
+    fun deleteElfState(state: ElfState) {
+        state.sections.drop(1).filterNotNull().forEach(::freeSection)
+        state.privateSections.forEach(::freeSection)
+        state.sections.clear(); state.sections += null
+        state.privateSections.clear()
+        state.namedSections.clear()
+        state.symbolTables.clear()
+        state.symbolAttributes.clear()
+        state.fileSectionMarks.clear()
+        state.dynamicSymbolTable = null
+        state.symbolTable = null
+        state.fileSymbolMark = 0
+        state.fileStringMark = 0
+    }
+
     private fun symbolBind(info: Int): Int = info ushr 4
     private fun elfString(section: ElfSection, offset: Int): String {
         if (offset !in 0 until section.size) return ""
