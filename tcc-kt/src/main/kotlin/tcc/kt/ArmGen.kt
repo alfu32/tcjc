@@ -34,10 +34,11 @@ object ArmGen {
     const val TREG_SP = 13
     const val TREG_LR = 14
 
-    val targetMachineDefinitions = listOf(
-        "__arm__", "__arm", "arm", "__arm_elf__", "__arm_elf", "arm_elf",
-        "__ARM_ARCH_4__", "__ARMEL__", "__APCS_32__",
-    )
+    fun targetMachineDefinitions(eabi: Boolean): List<String> = buildList {
+        addAll(listOf("__arm__", "__arm", "arm", "__arm_elf__", "__arm_elf", "arm_elf",
+            "__ARM_ARCH_4__", "__ARMEL__", "__APCS_32__"))
+        if (eabi) add("__ARM_EABI__")
+    }
 
     fun registerClasses(vfp: Boolean): IntArray = buildList {
         addAll(listOf(RC_INT or RC_R0, RC_INT or RC_R1, RC_INT or RC_R2, RC_INT or RC_R3,
@@ -201,16 +202,41 @@ object ArmGen {
         return displacement * 4 + position + 8
     }
 
-    fun mapCondition(condition: Int): Int = when (condition) {
-        1 -> 0x30000000; 2 -> 0x20000000; 3 -> 0x00000000; 4 -> 0x10000000
-        5 -> 0x90000000.toInt(); 6 -> 0x80000000.toInt(); 7 -> 0x40000000; 8 -> 0x50000000
-        9 -> 0xb0000000.toInt(); 10 -> 0xa0000000.toInt(); 11 -> 0xd0000000.toInt(); 12 -> 0xc0000000.toInt()
+    enum class Condition { ULT, UGE, EQ, NE, ULE, UGT, NEGATIVE, NON_NEGATIVE, LT, GE, LE, GT }
+
+    fun mapCondition(condition: Condition): Int = when (condition) {
+        Condition.ULT -> 0x30000000; Condition.UGE -> 0x20000000; Condition.EQ -> 0x00000000; Condition.NE -> 0x10000000
+        Condition.ULE -> 0x90000000.toInt(); Condition.UGT -> 0x80000000.toInt(); Condition.NEGATIVE -> 0x40000000; Condition.NON_NEGATIVE -> 0x50000000
+        Condition.LT -> 0xb0000000.toInt(); Condition.GE -> 0xa0000000.toInt(); Condition.LE -> 0xd0000000.toInt(); Condition.GT -> 0xc0000000.toInt()
         else -> throw IllegalArgumentException("unexpected condition code")
     }
 
-    fun negateCondition(condition: Int): Int = when (condition) {
-        1 -> 2; 2 -> 1; 3 -> 4; 4 -> 3; 5 -> 6; 6 -> 5
-        7 -> 8; 8 -> 7; 9 -> 10; 10 -> 9; 11 -> 12; 12 -> 11
-        else -> throw IllegalArgumentException("unexpected condition code")
+    fun negateCondition(condition: Condition): Condition = when (condition) {
+        Condition.ULT -> Condition.UGE; Condition.UGE -> Condition.ULT
+        Condition.EQ -> Condition.NE; Condition.NE -> Condition.EQ
+        Condition.ULE -> Condition.UGT; Condition.UGT -> Condition.ULE
+        Condition.NEGATIVE -> Condition.NON_NEGATIVE; Condition.NON_NEGATIVE -> Condition.NEGATIVE
+        Condition.LT -> Condition.GE; Condition.GE -> Condition.LT
+        Condition.LE -> Condition.GT; Condition.GT -> Condition.LE
+    }
+
+    /** Patches a linked list of unresolved B instructions to the final address. */
+    fun patchBranchChain(code: ByteArray, head: Int, address: Int) {
+        var patch = head
+        while (patch != 0) {
+            val instruction = readLe32(code, patch)
+            val next = decodeBranch(patch, instruction)
+            if (address == patch + 4) writeLe32(code, patch, 0xe1a00000.toInt())
+            else writeLe32(code, patch, (instruction and -0x1000000) or encodeBranch(patch, address, true))
+            patch = next
+        }
+    }
+
+    private fun readLe32(bytes: ByteArray, at: Int): Int =
+        (bytes[at].toInt() and 255) or ((bytes[at + 1].toInt() and 255) shl 8) or
+            ((bytes[at + 2].toInt() and 255) shl 16) or (bytes[at + 3].toInt() shl 24)
+
+    private fun writeLe32(bytes: ByteArray, at: Int, value: Int) {
+        repeat(4) { bytes[at + it] = (value ushr (it * 8)).toByte() }
     }
 }
