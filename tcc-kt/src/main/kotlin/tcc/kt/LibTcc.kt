@@ -41,6 +41,7 @@ class LibTcc(
         var msBitfields: Boolean = false, var noSse: Boolean = false,
         var warnAll: Boolean = false, var warnWriteStrings: Boolean = false,
         var warnUnsupported: Boolean = false, var warnNoneMode: Boolean = false,
+        val warningOverrides: MutableMap<String, Int> = mutableMapOf(),
         var optimize: Int = 0, var debugLevel: Int = 0, var preprocessOnly: Boolean = false,
         var generateDependencies: Boolean = false, var justDependencies: Boolean = false,
         var includeSystemDependencies: Boolean = false, var generatePhonyDependencies: Boolean = false,
@@ -484,7 +485,11 @@ class LibTcc(
                     val requested = optionArgument.toIntOrNull()
                     if (requested == 32 || requested == 64) {
                         if (requested != pointerBits) return ParsedArguments(requested, argv.drop(index), argv.toList())
-                    } else if (optionArgument != "ms-bitfields" && optionArgument != "sse") return fail("unsupported option '$raw'")
+                    } else when (optionArgument.removePrefix("no-")) {
+                        "ms-bitfields" -> compilerState.msBitfields = !optionArgument.startsWith("no-")
+                        "sse" -> compilerState.noSse = optionArgument.startsWith("no-")
+                        else -> return fail("unsupported option '$raw'")
+                    }
                 }
                 "optimize" -> compilerState.optimize = optionArgument.firstOrNull()?.digitToIntOrNull() ?: if (optionArgument == "s") 2 else 1
                 "std" -> { compilerState.languageStandard = optionArgument; if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112 }
@@ -554,7 +559,12 @@ class LibTcc(
             name == "unsupported" -> s.warnUnsupported = enabled
             name == "implicit-function-declaration" -> s.warnImplicitFunction = enabled
             name == "discarded-qualifiers" -> s.warnDiscardedQualifiers = enabled
-            name.startsWith("error=") -> { s.warningOption = if (enabled) WARN_ON or WARN_ERR else WARN_NOE }
+            name.startsWith("error=") -> {
+                val warningName = name.removePrefix("error=")
+                val optionFlags = if (enabled) WARN_ON or WARN_ERR else WARN_NOE
+                s.warningOverrides[warningName] = optionFlags
+                s.warningOption = optionFlags
+            }
             else -> return false
         }
         return true
