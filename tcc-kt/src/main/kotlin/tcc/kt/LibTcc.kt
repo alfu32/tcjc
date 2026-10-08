@@ -129,12 +129,12 @@ class LibTcc(
         const val BINARY_TBD = 5
         const val FILE_NOT_FOUND = -2
         const val FILE_NOT_RECOGNIZED = -3
-        const val OPTION_HELP = -1
-        const val OPTION_HELP2 = -2
-        const val OPTION_PRINT_DIRS = -3
-        const val OPTION_AR = -4
-        const val OPTION_IMPDEF = -5
-        const val OPTION_V = -6
+        const val OPTION_HELP = 1
+        const val OPTION_HELP2 = 2
+        const val OPTION_V = 3
+        const val OPTION_PRINT_DIRS = 4
+        const val OPTION_AR = 5
+        const val OPTION_IMPDEF = 6
         const val OPTION_ARGS_ERROR = -1
         const val WARN_ERR = 2
         const val WARN_NOE = 4
@@ -150,6 +150,7 @@ class LibTcc(
             TccOption("install_name", "installName", true), TccOption("two_levelnamespace", "twoLevelNamespace"),
             TccOption("undefined", "undefined", true),
             TccOption("rstdin", "rstdin", true), TccOption("bt", "backtrace", true, true), TccOption("b", "bounds"),
+            TccOption("impdef", "impdef"),
             TccOption("c", "object"), TccOption("dumpmachine", "dumpmachine"), TccOption("dumpversion", "dumpversion"),
             TccOption("d", "d", true, true), TccOption("static", "static"),
             TccOption("std", "std", true, true), TccOption("shared", "shared"), TccOption("soname", "soname", true),
@@ -538,6 +539,7 @@ class LibTcc(
             if (selected == null) return fail("invalid option -- '$raw'")
             if (selected.index in setOf("compatibilityVersion", "currentVersion", "dynamiclib", "flatNamespace", "installName", "twoLevelNamespace", "undefined") && targetPlatform != "macho") return fail("invalid option -- '$raw'")
             if (selected.index == "armFloatAbi" && targetPlatform != "arm") return fail("invalid option -- '$raw'")
+            if (selected.index == "impdef" && targetPlatform != "pe") return fail("invalid option -- '$raw'")
             when (selected.index) {
                 "help" -> return ParsedArguments(OPTION_HELP, argv.drop(index - 1), argv.toList())
                 "help2" -> return ParsedArguments(OPTION_HELP2, argv.drop(index - 1), argv.toList())
@@ -615,6 +617,7 @@ class LibTcc(
                 "language" -> compilerState.fileType = when (optionArgument.firstOrNull()) { 'c' -> TYPE_C; 'a' -> TYPE_ASM_PREPROCESSED; 'b' -> TYPE_BINARY; 'n' -> 0; else -> compilerState.fileType }
                 "ignored", "ignoredArg" -> Unit
                 "ar" -> return ParsedArguments(OPTION_AR, argv.drop(index - 1), argv.toList())
+                "impdef" -> return ParsedArguments(OPTION_IMPDEF, argv.drop(index - 1), argv.toList())
                 "rdynamic" -> compilerState.exportDynamic = true
             }
             empty = false
@@ -625,9 +628,11 @@ class LibTcc(
     }
 
     fun setOptions(compilerState: CompilerState, optionText: String, setLinker: (String) -> Int = { 0 },
-        pointerBits: Int = 64, nativeRun: Boolean = true, targetPlatform: String = "unix"): Int =
-        parseArguments(compilerState, listOf("") + splitArguments(optionText), setLinker = setLinker,
-            pointerBits = pointerBits, nativeRun = nativeRun, targetPlatform = targetPlatform).action
+        pointerBits: Int = 64, nativeRun: Boolean = true, targetPlatform: String = "unix"): Int {
+        val parsed = parseArguments(compilerState, listOf("") + splitArguments(optionText), setLinker = setLinker,
+            pointerBits = pointerBits, nativeRun = nativeRun, targetPlatform = targetPlatform)
+        return if (compilerState.runCommand != null) -1 else parsed.action
+    }
 
     private fun setFeatureFlag(s: CompilerState, flag: String): Boolean {
         val enabled = !flag.startsWith("no-")
