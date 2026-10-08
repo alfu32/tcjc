@@ -21,6 +21,9 @@ class I386Gen(
     private var localCursor = 0
     private var functionReturnPop = 0
     private val TREG_MEM = 0x20
+    data class BoundsInstrumentation(val tableOffset: Int, val prologOffset: Int, val reservedSize: Int)
+    var boundsNeedsTerminator: Boolean = false
+        private set
     val relocations: MutableList<Relocation> = mutableListOf()
     val bytes: ByteArray get() = code.toByteArray()
     val position: Int get() = code.size
@@ -211,6 +214,62 @@ class I386Gen(
             o(0x6a); g(0); o(0x50 + (register and 7)); o(0x242cdf); o(0x08c483)
         } else {
             o(0x50 + (register and 7)); o(0x2404db); o(0x04c483)
+        }
+    }
+
+    /** Reserves the function-entry room for local bounds registration. */
+    fun boundsProlog(tableOffset: Int): BoundsInstrumentation {
+        val start = position
+        val reserve = if (picEnabled) 27 else 10
+        repeat(reserve) { g(0) }
+        return BoundsInstrumentation(tableOffset, start, reserve)
+    }
+
+    /** Patches entry registration and emits the local-region cleanup sequence. */
+    fun boundsEpilog(bounds: BoundsInstrumentation, currentTableOffset: Int, addEpilog: Boolean = false) {
+        val changed = bounds.tableOffset != currentTableOffset
+        if (!changed && !addEpilog) return
+        boundsNeedsTerminator = true
+        val table = Symbol(".lbounds", isStatic = true)
+        if (changed) {
+            val patch = I386Gen(noCodeWanted = { false }, picEnabled = picEnabled, staticCall = staticCall)
+            if (picEnabled) {
+                patch.getPcThunk(0, false)
+                patch.o(0x808d)
+                val ptrReloc = patch.position
+                patch.genLe32(2)
+                patch.relocations += Relocation(ptrReloc, RelocType.R386_PC32, table, 2)
+                patch.getPcThunk(3, true)
+                patch.callOrJump(false, Symbol("__bound_local_new"))
+            } else {
+                patch.o(0xb8)
+                val ptrReloc = patch.position
+                patch.genLe32(0)
+                patch.relocations += Relocation(ptrReloc, RelocType.R386_32, table, 0)
+                patch.callOrJump(false, Symbol("__bound_local_new"))
+            }
+            require(patch.position <= bounds.reservedSize) { "bounds prolog exceeds its reserved space" }
+            patch.bytes.forEachIndexed { index, byte -> code[bounds.prologOffset + index] = byte }
+            patch.relocations.forEach { relocations += it.copy(offset = it.offset + bounds.prologOffset) }
+        }
+        if (addEpilog) {
+            o(0x5250)
+            if (picEnabled) {
+                getPcThunk(0, false)
+                o(0x808d)
+                val ptrReloc = position
+                genLe32(2)
+                relocations += Relocation(ptrReloc, RelocType.R386_PC32, table, 2)
+                getPcThunk(3, true)
+                callOrJump(false, Symbol("__bound_local_delete"))
+            } else {
+                o(0xb8)
+                val ptrReloc = position
+                genLe32(0)
+                relocations += Relocation(ptrReloc, RelocType.R386_32, table, 0)
+                callOrJump(false, Symbol("__bound_local_delete"))
+            }
+            o(0x585a)
         }
     }
 
