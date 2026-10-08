@@ -35,6 +35,7 @@ object TccGen {
     const val VT_STATIC = 0x00004000
     const val VT_EXTERN = 0x00002000
     const val VT_INLINE = 0x00010000
+    const val VT_ARRAY = 0x0040
     const val VT_TLS = 0x00020000
     const val VT_ASM_FUNC = VT_VOID or (5 shl VT_STRUCT_SHIFT)
     const val FUNC_OLD = 2
@@ -108,6 +109,12 @@ object TccGen {
         var assemblyLabel: Int = 0,
         var mode: Int = 0,
     )
+    data class TypePatchHooks(
+        val compatible: (CType, CType) -> Boolean,
+        val error: (String) -> Unit = {},
+        val warning: (String) -> Unit = {},
+        val tokenName: (Int) -> String = { it.toString() },
+    )
     data class RuntimeState(
         val values: MutableList<Value> = mutableListOf(),
         var codeIndex: Int = 0,
@@ -168,6 +175,7 @@ object TccGen {
         var jumpNext: Int = 0,
         var jumpIndex: Int = 0,
         var assemblyLabel: Int = 0,
+        var value: Int = 0,
         var function: FunctionAttributes = FunctionAttributes(),
     )
     class IdentifierSlot(var identifier: Sym? = null, var structure: Sym? = null, var label: Sym? = null)
@@ -478,6 +486,72 @@ object TccGen {
         if (incoming.aliasTarget != 0) target.aliasTarget = incoming.aliasTarget
         if (incoming.assemblyLabel != 0) target.assemblyLabel = incoming.assemblyLabel
         if (incoming.mode != 0) target.mode = incoming.mode
+    }
+
+    fun patchSymbolType(symbol: Sym, incoming: CType, hooks: TypePatchHooks) {
+        if (incoming.type and VT_EXTERN == 0 || symbol.type.type and VT_STRUCT_MASK == VT_ENUM_VAL) {
+            if (symbol.type.type and VT_EXTERN == 0) hooks.error("redefinition of '${hooks.tokenName(symbol.token)}'")
+            symbol.type.type = symbol.type.type and VT_EXTERN.inv()
+        }
+        if (isAsmSymbol(symbol)) {
+            symbol.type.type = incoming.type and (symbol.type.type or VT_STATIC.inv())
+            symbol.type.reference = incoming.reference
+            if (incoming.type and VT_BTYPE != VT_FUNC && incoming.type and VT_ARRAY == 0) symbol.register = symbol.register or VT_LVAL
+        }
+        if (!hooks.compatible(symbol.type, incoming)) {
+            hooks.error("incompatible types for redefinition of '${hooks.tokenName(symbol.token)}'")
+            return
+        }
+        if (symbol.type.type and VT_BTYPE == VT_FUNC) {
+            val currentFunction = symbol.type.reference ?: return
+            val incomingFunction = incoming.reference ?: return
+            val staticPrototype = symbol.type.type and VT_STATIC
+            val oldFunctionKind = currentFunction.function.functionType
+            val newFunctionKind = incomingFunction.function.functionType
+            if (incoming.type and VT_STATIC != 0 && staticPrototype == 0 &&
+                (incoming.type or symbol.type.type) and VT_INLINE == 0) {
+                hooks.warning("static storage ignored for redefinition of '${hooks.tokenName(symbol.token)}'")
+            }
+            var patchedStatic = staticPrototype
+            if ((incoming.type or symbol.type.type) and VT_INLINE != 0 &&
+                ((incoming.type xor symbol.type.type) and VT_INLINE == 0 || (incoming.type or symbol.type.type) and VT_STATIC != 0)) {
+                patchedStatic = patchedStatic or VT_INLINE
+            }
+            if (incoming.type and VT_EXTERN == 0) {
+                val oldAttributes = currentFunction.function.copy()
+                symbol.type.type = (incoming.type and (VT_STATIC or VT_INLINE).inv()) or patchedStatic
+                if (oldFunctionKind != FUNC_OLD) incomingFunction.function.functionType = oldFunctionKind
+                symbol.type.reference = incomingFunction
+                mergeFunctionAttributes(incomingFunction.function, oldAttributes)
+            } else {
+                symbol.type.type = (symbol.type.type and VT_INLINE.inv()) or patchedStatic
+                if (oldFunctionKind == FUNC_OLD && newFunctionKind != FUNC_OLD) symbol.type.reference = incomingFunction
+            }
+        } else {
+            if (symbol.type.type and VT_ARRAY != 0 && (symbol.type.reference?.value ?: -1) >= 0) {
+                symbol.type.reference?.value = incoming.reference?.value ?: return
+            }
+            if ((incoming.type xor symbol.type.type) and VT_STATIC != 0) {
+                hooks.warning("storage mismatch for redefinition of '${hooks.tokenName(symbol.token)}'")
+            }
+        }
+    }
+
+    fun patchSymbolStorage(
+        symbol: Sym,
+        attributes: AttributeDefinition,
+        type: CType?,
+        elfState: TccElf.ElfState,
+        peTarget: Boolean = false,
+        hooks: TypePatchHooks,
+    ) {
+        if (type != null) patchSymbolType(symbol, type, hooks)
+        if (peTarget && symbol.attributes.dllImport != attributes.symbol.dllImport) {
+            hooks.error("incompatible dll linkage for redefinition of '${hooks.tokenName(symbol.token)}'")
+        }
+        mergeSymbolAttributes(symbol.attributes, attributes.symbol)
+        if (attributes.assemblyLabel != 0) symbol.assemblyLabel = attributes.assemblyLabel
+        updateStorage(symbol, elfState, peTarget)
     }
 
     fun pushLongLong(state: RuntimeState, value: Long) =
