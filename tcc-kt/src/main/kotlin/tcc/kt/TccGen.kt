@@ -61,6 +61,9 @@ object TccGen {
         var dllImport: Boolean = false,
         var addressTaken: Boolean = false,
         var noDebug: Boolean = false,
+        var section: String? = null,
+        var aliasTarget: Int = 0,
+        var mode: Int = 0,
     )
     data class FunctionAttributes(
         var callingConvention: Int = 0,
@@ -96,6 +99,14 @@ object TccGen {
     data class SymbolEmissionHooks(
         val tokenName: (Int) -> String = { it.toString() },
         val debugExternalSymbol: (Sym, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    )
+    data class AttributeDefinition(
+        val symbol: SymbolAttributes = SymbolAttributes(),
+        val function: FunctionAttributes = FunctionAttributes(),
+        var section: String? = null,
+        var aliasTarget: Int = 0,
+        var assemblyLabel: Int = 0,
+        var mode: Int = 0,
     )
     data class RuntimeState(
         val values: MutableList<Value> = mutableListOf(),
@@ -359,6 +370,115 @@ object TccGen {
 
     fun pushInteger(state: RuntimeState, value: Int) =
         setValue(state, CType(VT_INT), VT_CONST, value.toLong())
+
+    fun pushSymbol(state: RuntimeState, type: CType, symbol: Sym) {
+        setValueConstant(state, type, VT_CONST or VT_SYM, 0, symbol)
+    }
+
+    fun getSymbolReference(
+        compiler: CompilerState,
+        token: Int,
+        type: CType,
+        target: TccElf.ElfSection?,
+        value: Long,
+        size: Long,
+        elfState: TccElf.ElfState,
+        generator: GeneratorState,
+        hooks: SymbolEmissionHooks = SymbolEmissionHooks(),
+    ): Sym {
+        val staticType = type.copy(type = type.type or VT_STATIC)
+        val symbol = symbolPush(compiler, token, staticType, VT_CONST or VT_SYM, 0)
+        putExternalSymbol(symbol, target, value, size, generator, elfState, hooks = hooks)
+        return symbol
+    }
+
+    fun pushSectionReference(
+        state: RuntimeState,
+        compiler: CompilerState,
+        type: CType,
+        token: Int,
+        target: TccElf.ElfSection?,
+        value: Long,
+        size: Long,
+        elfState: TccElf.ElfState,
+        generator: GeneratorState,
+        hooks: SymbolEmissionHooks = SymbolEmissionHooks(),
+    ) = pushSymbol(state, type, getSymbolReference(compiler, token, type, target, value, size, elfState, generator, hooks))
+
+    fun externalGlobalSymbol(
+        state: CompilerState,
+        token: Int,
+        type: CType,
+        elfState: TccElf.ElfState? = null,
+        peTarget: Boolean = false,
+    ): Sym {
+        val symbol = symbolFind(state, token)
+        if (symbol == null) {
+            val forward = globalIdentifierPush(state, token, type.type or VT_EXTERN, 0)
+            forward.type.reference = type.reference
+            return forward
+        }
+        if (isAsmSymbol(symbol)) {
+            symbol.type.type = type.type or (symbol.type.type and VT_EXTERN)
+            symbol.type.reference = type.reference
+            if (elfState != null) updateStorage(symbol, elfState, peTarget)
+        }
+        return symbol
+    }
+
+    fun externalHelperSymbol(
+        state: CompilerState,
+        token: Int,
+        elfState: TccElf.ElfState? = null,
+        peTarget: Boolean = false,
+    ): Sym = externalGlobalSymbol(state, token, CType(VT_ASM_FUNC), elfState, peTarget)
+
+    fun pushHelperFunction(
+        state: RuntimeState,
+        compiler: CompilerState,
+        token: Int,
+        oldFunctionType: CType,
+        elfState: TccElf.ElfState? = null,
+        peTarget: Boolean = false,
+    ) = pushSymbol(state, oldFunctionType, externalHelperSymbol(compiler, token, elfState, peTarget))
+
+    private fun isAsmSymbol(symbol: Sym): Boolean =
+        symbol.type.type and (VT_BTYPE or VT_STRUCT_MASK) == VT_ASM_FUNC
+
+    fun mergeSymbolAttributes(target: SymbolAttributes, incoming: SymbolAttributes) {
+        if (incoming.aligned != 0 && target.aligned == 0) target.aligned = incoming.aligned
+        target.packed = target.packed || incoming.packed
+        target.weak = target.weak || incoming.weak
+        target.noDebug = target.noDebug || incoming.noDebug
+        if (incoming.visibility != 0 && (target.visibility == 0 || target.visibility > incoming.visibility)) {
+            target.visibility = incoming.visibility
+        }
+        target.dllExport = target.dllExport || incoming.dllExport
+        target.noDecorate = target.noDecorate || incoming.noDecorate
+        target.dllImport = target.dllImport || incoming.dllImport
+        if (incoming.section != null) target.section = incoming.section
+        if (incoming.aliasTarget != 0) target.aliasTarget = incoming.aliasTarget
+        if (incoming.mode != 0) target.mode = incoming.mode
+    }
+
+    fun mergeFunctionAttributes(target: FunctionAttributes, incoming: FunctionAttributes) {
+        if (incoming.callingConvention != 0 && target.callingConvention == 0) target.callingConvention = incoming.callingConvention
+        if (incoming.functionType != 0 && target.functionType == 0) target.functionType = incoming.functionType
+        if (incoming.argumentCount != 0 && target.argumentCount == 0) target.argumentCount = incoming.argumentCount
+        target.noReturn = target.noReturn || incoming.noReturn
+        target.constructor = target.constructor || incoming.constructor
+        target.destructor = target.destructor || incoming.destructor
+        target.alwaysInline = target.alwaysInline || incoming.alwaysInline
+    }
+
+    fun mergeAttributes(target: AttributeDefinition, incoming: AttributeDefinition) {
+        mergeSymbolAttributes(target.symbol, incoming.symbol)
+        mergeFunctionAttributes(target.function, incoming.function)
+        if (incoming.section != null) target.section = incoming.section
+        if (incoming.aliasTarget != 0) target.aliasTarget = incoming.aliasTarget
+        if (incoming.assemblyLabel != 0) target.assemblyLabel = incoming.assemblyLabel
+        if (incoming.mode != 0) target.mode = incoming.mode
+    }
 
     fun pushLongLong(state: RuntimeState, value: Long) =
         setValue(state, CType(VT_LLONG), VT_CONST, value)
