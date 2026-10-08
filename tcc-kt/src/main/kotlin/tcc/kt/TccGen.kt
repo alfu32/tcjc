@@ -29,8 +29,19 @@ object TccGen {
     const val VT_QFLOAT = 14
     const val VT_UNSIGNED = 0x0010
     const val VT_FUNC = 6
+    const val VT_BTYPE = 0x000f
+    const val VT_VOID = 0
+    const val VT_STATIC = 0x00004000
+    const val VT_EXTERN = 0x00002000
+    const val VT_INLINE = 0x00010000
+    const val VT_TLS = 0x00020000
+    const val VT_ASM_FUNC = VT_VOID or (5 shl VT_STRUCT_SHIFT)
     const val FUNC_OLD = 2
     const val FUNC_CDECL = 0
+    const val FUNC_STDCALL = 3
+    const val ST_PE_EXPORT = 0x10
+    const val ST_PE_IMPORT = 0x20
+    const val ST_PE_STDCALL = 0x40
     const val PARSE_FLAG_PREPROCESS = 0x0001
     const val PARSE_FLAG_TOKEN_NUMBER = 0x0002
     const val PARSE_FLAG_TOKEN_STRING = 0x0040
@@ -81,6 +92,10 @@ object TccGen {
         val outputOpcode: (Int) -> Unit = {},
         val tokenName: (Int) -> String = { it.toString() },
     )
+    data class SymbolEmissionHooks(
+        val tokenName: (Int) -> String = { it.toString() },
+        val debugExternalSymbol: (Sym, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    )
     data class RuntimeState(
         val values: MutableList<Value> = mutableListOf(),
         var codeIndex: Int = 0,
@@ -108,6 +123,7 @@ object TccGen {
         var currentScope: Int = 0,
         var switchDepth: Int = 0,
         var temporaryLocalCount: Int = 0,
+        var currentTextSection: TccElf.ElfSection? = null,
     )
     data class LifecycleHooks(
         val debugStart: () -> Unit = {},
@@ -139,6 +155,7 @@ object TccGen {
         var scope: Int = 0,
         var jumpNext: Int = 0,
         var jumpIndex: Int = 0,
+        var assemblyLabel: Int = 0,
         var function: FunctionAttributes = FunctionAttributes(),
     )
     class IdentifierSlot(var identifier: Sym? = null, var structure: Sym? = null, var label: Sym? = null)
@@ -481,6 +498,133 @@ object TccGen {
         state.temporaryLocalCount = 0
         compiler.globalLabelStack = null
         compiler.localLabelStack = null
+    }
+
+    fun elfSymbol(symbol: Sym, elfState: TccElf.ElfState): TccElf.ElfSymbol? {
+        if (symbol.number == 0) return null
+        return elfState.symbolTable?.symbols?.getOrNull(symbol.number)
+    }
+
+    fun updateStorage(symbol: Sym, elfState: TccElf.ElfState, peTarget: Boolean = false) {
+        val elfSymbol = elfSymbol(symbol, elfState) ?: return
+        if (symbol.attributes.visibility != 0) {
+            elfSymbol.other = (elfSymbol.other and 3.inv()) or symbol.attributes.visibility
+        }
+        val binding = when {
+            symbol.type.type and (VT_STATIC or VT_INLINE) != 0 -> TccElf.STB_LOCAL
+            symbol.attributes.weak -> TccElf.STB_WEAK
+            else -> TccElf.STB_GLOBAL
+        }
+        if (binding != elfSymbol.info ushr 4) elfSymbol.info = (binding shl 4) or (elfSymbol.info and 0x0f)
+        if (peTarget) {
+            if (symbol.attributes.dllImport) elfSymbol.other = elfSymbol.other or ST_PE_IMPORT
+            if (symbol.attributes.dllExport) elfSymbol.other = elfSymbol.other or ST_PE_EXPORT
+        }
+    }
+
+    fun putExternalSymbol(
+        symbol: Sym,
+        sectionIndex: Int,
+        value: Long,
+        size: Long,
+        canAddUnderscore: Boolean,
+        elfState: TccElf.ElfState,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        pointerSize: Int = elfState.wordSize,
+        hooks: SymbolEmissionHooks = SymbolEmissionHooks(),
+    ): Int {
+        val table = elfState.symbolTable ?: return 0
+        if (symbol.number == 0) {
+            var addUnderscore = canAddUnderscore
+            val typeBits = symbol.type.type
+            val type = when {
+                typeBits and VT_BTYPE == VT_FUNC -> TccElf.STT_FUNC
+                typeBits and VT_BTYPE == VT_VOID -> if (typeBits and (VT_BTYPE or VT_STRUCT_MASK) == VT_ASM_FUNC) TccElf.STT_FUNC else TccElf.STT_NOTYPE
+                typeBits and VT_TLS != 0 -> TccElf.STT_TLS
+                else -> TccElf.STT_OBJECT
+            }
+            val binding = if (typeBits and (VT_STATIC or VT_INLINE) != 0) TccElf.STB_LOCAL else TccElf.STB_GLOBAL
+            var other = 0
+            var name = hooks.tokenName(symbol.token)
+            if (peTarget && type == TccElf.STT_FUNC && symbol.type.reference != null) {
+                val functionType = requireNotNull(symbol.type.reference)
+                if (functionType.attributes.noDecorate) addUnderscore = false
+                if (functionType.function.callingConvention == FUNC_STDCALL && addUnderscore) {
+                    name = "_${name}@${functionType.function.argumentCount * pointerSize}"
+                    other = other or ST_PE_STDCALL
+                    addUnderscore = false
+                }
+            }
+            if (symbol.assemblyLabel != 0) {
+                name = hooks.tokenName(symbol.assemblyLabel)
+                addUnderscore = false
+            }
+            if (leadingUnderscore && addUnderscore) name = "_${name.take(254)}"
+            symbol.number = TccElf.setElfSymbol(
+                elfState, table, value, size, (binding shl 4) or type, other, sectionIndex, name,
+            )
+            hooks.debugExternalSymbol(symbol, sectionIndex, binding, type)
+        } else {
+            elfSymbol(symbol, elfState)?.let {
+                it.value = value
+                it.size = size
+                it.sectionIndex = sectionIndex
+            }
+        }
+        updateStorage(symbol, elfState, peTarget)
+        return symbol.number
+    }
+
+    fun putExternalSymbol(
+        symbol: Sym,
+        target: TccElf.ElfSection?,
+        value: Long,
+        size: Long,
+        generator: GeneratorState,
+        elfState: TccElf.ElfState,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        hooks: SymbolEmissionHooks = SymbolEmissionHooks(),
+    ): Int {
+        if (generator.noCodeWanted != 0 &&
+            (generator.noCodeWanted > 0 || target === generator.currentTextSection)) return 0
+        return putExternalSymbol(
+            symbol, target?.index ?: TccElf.SHN_UNDEF, value, size, true, elfState,
+            leadingUnderscore, peTarget, elfState.wordSize, hooks,
+        )
+    }
+
+    fun generateRelocation(
+        symbol: Sym?,
+        target: TccElf.ElfSection,
+        offset: Long,
+        type: Int,
+        addend: Long,
+        generator: GeneratorState,
+        elfState: TccElf.ElfState,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        hooks: SymbolEmissionHooks = SymbolEmissionHooks(),
+    ): TccElf.ElfRelocation? {
+        if (generator.noCodeWanted != 0 && target === generator.currentTextSection) return null
+        var symbolIndex = 0
+        if (symbol != null) {
+            if (symbol.number == 0) {
+                putExternalSymbol(symbol, null, 0, 0, generator, elfState, leadingUnderscore, peTarget, hooks)
+                if (symbol.scope != 0 && symbol.type.type and (VT_STATIC or VT_EXTERN) == (VT_STATIC or VT_EXTERN)) {
+                    var global: Sym = symbol
+                    while (true) {
+                        val previous = global.previousToken ?: break
+                        global = previous
+                    }
+                    global.number = symbol.number
+                }
+            }
+            symbolIndex = symbol.number
+        }
+        val table = elfState.symbolTable ?: return null
+        return TccElf.putElfRelocation(elfState, table, target, offset, type, symbolIndex, addend)
     }
 
     const val CODE_OFF_BIT = 0x20000000
