@@ -660,6 +660,25 @@ class Riscv64Asm(
         val zero = Operand(OP_REG)
         val immediateZero = Operand(OP_IM12S)
         when (name) {
+            "li" -> {
+                if (source.type != OP_IM32 && source.type != OP_IM12S) { error("Expected immediate source operand"); return false }
+                val low = source.expression.value.toInt()
+                var high = (source.expression.value shr 32).toInt()
+                if (low < 0) high++
+                var immediate = ((high + 0x800) and -0x1000) shr 12
+                if (!emitU(0x37, rd, Operand(OP_IM12S, expression = Expression(immediate.toLong())))) return false
+                immediate = (high shl 20) shr 20
+                if (!emitI(0x13, rd, rd, Operand(OP_IM12S, expression = Expression(immediate.toLong())))) return false
+                if (!emitI(0x1013, rd, rd, Operand(OP_IM12S, expression = Expression(12)))) return false
+                immediate = (low + (1 shl 19)) shr 20
+                if (!emitI(0x13, rd, rd, Operand(OP_IM12S, expression = Expression(immediate.toLong())))) return false
+                if (!emitI(0x1013, rd, rd, Operand(OP_IM12S, expression = Expression(12)))) return false
+                val lowTwenty = (low shl 12) shr 12
+                if (!emitI(0x13, rd, rd, Operand(OP_IM12S, expression = Expression((lowTwenty shr 8).toLong())))) return false
+                if (!emitI(0x1013, rd, rd, Operand(OP_IM12S, expression = Expression(8)))) return false
+                val lowEight = lowTwenty and 0xff
+                return emitI(0x13, rd, rd, Operand(OP_IM12S, expression = Expression(((lowEight shl 20) shr 20).toLong())))
+            }
             "mv" -> return emitI(0x13, rd, source, immediateZero)
             "not" -> return emitI(0x4013, rd, source, Operand(OP_IM12S, expression = Expression(-1)))
             "neg" -> return emitR(0x40000033, rd, zero, source)
