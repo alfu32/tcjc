@@ -239,6 +239,7 @@ object TccElf {
         val prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
         val afterLayout: (ElfState, LayoutResult) -> Unit = { _, _ -> },
         val afterReorder: (ElfState) -> Unit = {},
+        val sectionsAlreadySized: Boolean = false,
     )
     data class DynamicOutputSections(
         val symbols: ElfSection,
@@ -264,6 +265,8 @@ object TccElf {
         val positionIndependentExecutable: Boolean = false,
         val interpreterPath: String? = null,
         val copyRelocationType: Int = 0,
+        val dynamicRelocationEntrySize: Int = 0,
+        val debugEnabled: Boolean = false,
         val includeDebug: Boolean = true,
         val metadata: DynamicMetadataOptions = DynamicMetadataOptions(),
     )
@@ -1400,7 +1403,24 @@ object TccElf {
             val metadata = request.metadata.copy(
                 neededLibraries = request.metadata.neededLibraries + versionOutput?.neededLibraries.orEmpty().map { it to 0 },
             )
-            fillDynamicMetadata(dynamicSections.dynamic, dynamicSections.strings, metadata, state.wordSize)
+            val prefix = fillDynamicMetadata(dynamicSections.dynamic, dynamicSections.strings, metadata, state.wordSize)
+            dynamicSections.strings.outputSize = dynamicSections.strings.dataOffset.toLong()
+            fillDynamic(DynamicTableLayout(
+                dynamic = dynamicSections.dynamic,
+                dynamicStrings = dynamicSections.strings,
+                dynamicSymbols = dynamicSections.symbols,
+                gnuHash = requireNotNull(gnuHash),
+                got = state.namedSections[".got"],
+                pltRelocations = state.namedSections[".plt"]?.relocation,
+                versionSymbols = versionOutput?.symbols,
+                versionNeeds = versionOutput?.needs,
+                versionNeedCount = versionOutput?.needCount ?: 0,
+                debugEnabled = request.debugEnabled,
+                startOffset = prefix,
+                relocationEntrySize = linkRelocationEntrySize(state, request.dynamicRelocationEntrySize),
+                sections = state.namedSections,
+            ))
+            prefix
         }
         return ElfLinkPreparation(dynamicSections, gnuHash, versionOutput, gotSymbol, textRelocations, prefixSize)
     }
@@ -1977,7 +1997,9 @@ object TccElf {
 
     /** Runs the common ELF output sizing, ordering, layout, and serialization passes. */
     fun buildElfOutput(state: ElfState, request: ElfOutputRequest): ByteArray {
-        setSectionSizes(state, request.dynamicOutput, request.includeDebug, request.prepareDynamicRelocations)
+        if (!request.sectionsAlreadySized) {
+            setSectionSizes(state, request.dynamicOutput, request.includeDebug, request.prepareDynamicRelocations)
+        }
         allocateSectionNames(state, request.objectOutput)
         val layoutRequest = request.layout.copy(dynamicOutput = request.dynamicOutput)
         val sorted = sortSections(state, layoutRequest.elfOutput, request.bsdTarget, request.interpreter)
@@ -1988,6 +2010,65 @@ object TccElf {
         reorderSections(state, sorted.order.toIntArray())
         request.afterReorder(state)
         return serializeElf(state, request.fileType, request.machine, request.entry, layout, request.flags)
+    }
+
+    fun buildLinkedElfOutput(
+        state: ElfState,
+        linkRequest: ElfLinkRequest,
+        outputRequest: ElfOutputRequest,
+        versions: VersionRegistry? = null,
+        addRuntime: () -> Unit = {},
+        buildGot: () -> Int = { 0 },
+        buildGotEntries: (Int) -> Unit = {},
+        prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
+        reportWarning: (String) -> Unit = {},
+        reportError: (String) -> Unit = {},
+        relocatePlt: () -> Unit = {},
+        relocateDynamicSymbols: (Int) -> Unit = {},
+        relocateMainSymbols: (Int) -> Unit = {},
+        relocateAllSections: () -> Unit = {},
+        hasErrors: () -> Boolean = { false },
+        fillStaticGot: () -> Unit = {},
+        fillLocalGot: () -> Unit = {},
+        reportDynamicAddressToGot: (Long) -> Unit = {},
+        relocateDynamicLibraryPlt: Boolean = false,
+    ): ByteArray? {
+        val preparation = prepareElfLink(
+            state, linkRequest.copy(includeDebug = outputRequest.includeDebug), versions, addRuntime, buildGot, buildGotEntries,
+            prepareDynamicRelocations, reportWarning, reportError,
+        ) ?: return null
+        var failed = false
+        val linkedRequest = outputRequest.copy(
+            dynamicOutput = !linkRequest.staticLink,
+            interpreter = preparation.dynamicSections?.interpreter,
+            dynamic = preparation.dynamicSections?.dynamic,
+            prepareDynamicRelocations = prepareDynamicRelocations,
+            sectionsAlreadySized = true,
+            afterLayout = { currentState, layoutResult ->
+                outputRequest.afterLayout(currentState, layoutResult)
+                if (finalizeElfLinkAfterLayout(
+                    state = currentState,
+                    preparation = preparation,
+                    dynamicOutput = !linkRequest.staticLink,
+                    executableOutput = linkRequest.outputExecutable,
+                    staticLink = linkRequest.staticLink,
+                    relocationEntrySize = linkRelocationEntrySize(state, linkRequest.dynamicRelocationEntrySize),
+                    debugEnabled = linkRequest.debugEnabled,
+                    relocateDynamicLibraryPlt = relocateDynamicLibraryPlt,
+                    relocatePlt = relocatePlt,
+                    relocateDynamicSymbols = relocateDynamicSymbols,
+                    relocateMainSymbols = relocateMainSymbols,
+                    relocateAllSections = relocateAllSections,
+                    hasErrors = hasErrors,
+                    fillStaticGot = fillStaticGot,
+                    fillLocalGot = fillLocalGot,
+                    reportDynamicAddressToGot = reportDynamicAddressToGot,
+                ) == null) failed = true
+            },
+            afterReorder = { currentState -> outputRequest.afterReorder(currentState) },
+        )
+        val bytes = buildElfOutput(state, linkedRequest)
+        return if (failed) null else bytes
     }
 
     /** Lays out and serializes an ELF relocatable object with 16-byte section alignment. */
@@ -3181,6 +3262,8 @@ object TccElf {
     }
 
     private fun symbolBind(info: Int): Int = info ushr 4
+    private fun linkRelocationEntrySize(state: ElfState, requested: Int): Int =
+        requested.takeIf { it > 0 } ?: if (state.wordSize == 8) 24 else 8
     private fun validInputRange(offset: Long, size: Long, totalSize: Long): Boolean =
         offset >= 0 && size >= 0 && offset <= totalSize && size <= totalSize - offset
 
