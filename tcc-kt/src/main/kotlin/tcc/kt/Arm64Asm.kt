@@ -631,6 +631,7 @@ class Arm64Asm(
                     "and" -> 0x0a000000; "ands" -> 0x6a000000; "orr" -> 0x2a000000; "eor" -> 0x4a000000; else -> 0x1b000000
                 }
                 val is64 = destination.registerType == RegisterType.X
+                if (is64 != (first.registerType == RegisterType.X)) { error("mismatched register widths"); return relocations }
                 if (second.type == OperandType.IMMEDIATE) {
                     if (second.value.symbol != null) { error("immediate operand not valid for this instruction"); return relocations }
                     when (name) {
