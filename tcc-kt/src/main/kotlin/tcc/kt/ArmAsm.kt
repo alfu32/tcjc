@@ -73,6 +73,18 @@ class ArmAsm(
         return Operand(kind, value = result)
     }
 
+    fun parseRegisterVariable(name: String): Int? = coreRegister(name).takeIf { it >= 0 }
+
+    fun parseVfpRegister(name: String, doublePrecision: Boolean): Int? {
+        val match = if (doublePrecision) Regex("d([0-9]|1[0-5])").matchEntire(name)
+            else Regex("s([0-9]|[12][0-9]|3[01])").matchEntire(name)
+        return match?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    fun parseVfpStatusRegister(name: String): Int? = when (name) {
+        "fpsid" -> 0; "fpscr" -> 1; "fpexc" -> 8; else -> null
+    }
+
     private fun coreRegister(name: String): Int = when (name.lowercase()) {
         "sp" -> 13
         "lr" -> 14
@@ -506,6 +518,51 @@ class ArmAsm(
             else -> { expect("immediate or VFP register"); return }
         }
         emitUnconditionalOpcode((highNibble shl 28) or opcode)
+    }
+
+    /** Encodes VFP VLDR/VSTR immediate-offset transfers. */
+    fun emitVfpSingleTransfer(
+        group: String, token: Int, firstConditionToken: Int,
+        destination: Operand, base: Operand, offset: Operand,
+    ) {
+        val coprocessor: Int
+        val crd: Int
+        val longTransfer: Boolean
+        when (destination.kind) {
+            Kind.VREG32 -> {
+                coprocessor = 10
+                longTransfer = destination.register and 1 != 0
+                crd = destination.register ushr 1
+            }
+            Kind.VREG64 -> { coprocessor = 11; crd = destination.register; longTransfer = false }
+            else -> { expect("floating point register"); return }
+        }
+        val load = when (group) { "vldr" -> true; "vstr" -> false; else -> { expect("floating point data transfer instruction"); return } }
+        if (offset.kind !in setOf(Kind.IMM8, Kind.IMM8N)) { expect("immediate offset"); return }
+        emitCoprocessorDataTransfer(conditionCode(token, firstConditionToken), coprocessor, crd,
+            base, offset, preincrement = true, longTransfer = longTransfer, load = load)
+    }
+
+    /** Routes an ARM mnemonic group to the corresponding encoder family. */
+    fun encoderFamily(group: String): String? = when {
+        group in setOf("push", "pop", "stmda", "ldmda", "stm", "ldm", "stmia", "ldmia", "stmdb", "ldmdb", "stmib", "ldmib") -> "block-transfer"
+        group in setOf("nop", "wfe", "wfi") -> "nullary"
+        group in setOf("swi", "svc") -> "unary"
+        group in setOf("b", "bl", "bx", "blx") -> "branch"
+        group in setOf("clz", "sxtb", "sxth", "uxtb", "uxth", "movt", "movw") -> "binary"
+        group in setOf("ldr", "ldrb", "str", "strb", "ldrex", "ldrexb", "ldrexh", "strex", "strexb", "strexh") -> "single-transfer"
+        group in setOf("ldrh", "ldrsb", "ldrsh", "strh") -> "misc-transfer"
+        group in setOf("and", "eor", "sub", "rsb", "add", "adc", "sbc", "rsc", "tst", "teq", "cmp", "cmn", "orr", "mov", "bic", "mvn") -> "data-processing"
+        group in setOf("lsl", "lsr", "asr", "ror", "rrx") -> "shift"
+        group in setOf("mul", "mla", "mls", "sdiv", "udiv", "smull", "umull", "smlal", "umlal") -> "multiply"
+        group in setOf("cdp", "cdp2", "mcr", "mrc") -> "coprocessor"
+        group in setOf("ldc", "ldcl", "ldc2", "ldc2l", "stc", "stcl", "stc2", "stc2l") -> "coprocessor-transfer"
+        group in setOf("vldr", "vstr") -> "vfp-transfer"
+        group in setOf("vpush", "vpop", "vstm", "vstmia", "vstmdb", "vldm", "vldmia", "vldmdb") -> "vfp-block-transfer"
+        group in setOf("vmrs", "vmsr") -> "vfp-status"
+        group.startsWith("vcvt") -> "vfp-convert"
+        group in setOf("vmla", "vmls", "vnmls", "vnmla", "vmul", "vnmul", "vadd", "vsub", "vdiv", "vneg", "vabs", "vsqrt", "vcmp", "vcmpe", "vmov") -> "vfp-data-processing"
+        else -> null
     }
 
     /** Parses the VFP immediate decimal format with seven fractional digits. */
