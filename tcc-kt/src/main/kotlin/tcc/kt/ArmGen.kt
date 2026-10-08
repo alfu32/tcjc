@@ -2,6 +2,27 @@ package tcc.kt
 
 /** ARM code-generation constants and pure instruction helpers transcribed from arm-gen.c. */
 object ArmGen {
+    data class TargetConfiguration(val eabi: Boolean = false, val vfp: Boolean = false, val cpuVersion: Int? = null,
+        val hardFloat: Boolean = false, val longDoubleSize: Int = 8, val longDoubleAlignment: Int = 4)
+
+    fun initializeTarget(configuration: TargetConfiguration): TargetConfiguration {
+        require(!configuration.eabi || configuration.vfp) {
+            "Currently TinyCC only supports float computation with VFP instructions"
+        }
+        return configuration.copy(cpuVersion = configuration.cpuVersion ?: 5,
+            longDoubleSize = if (configuration.vfp) 8 else configuration.longDoubleSize,
+            longDoubleAlignment = if (configuration.eabi) 8 else 4)
+    }
+
+    fun availableRegisterCount(vfp: Boolean): Int = if (vfp) 13 else 9
+
+    fun vfpCoprocessorTypeBit(type: ValueType): Int = if (type == ValueType.FLOAT) 0 else 0x100
+
+    fun eabiRuntimeAliases(): Map<String, String> = mapOf(
+        "__divdi3" to "__aeabi_ldivmod", "__moddi3" to "__aeabi_ldivmod",
+        "__udivdi3" to "__aeabi_uldivmod", "__umoddi3" to "__aeabi_uldivmod",
+    )
+
     const val RC_INT = 0x0001
     const val RC_FLOAT = 0x0002
     const val RC_R0 = 0x0004
