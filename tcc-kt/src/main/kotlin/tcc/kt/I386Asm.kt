@@ -63,6 +63,7 @@ class I386Asm(
         var shift: Int = 0,
         var expression: Expression = Expression(),
     )
+    data class SegmentedOperand(val prefix: Int, val operand: Operand)
 
     data class Instruction(
         val token: Int, val opcode: Int, val instructionType: Int,
@@ -606,6 +607,17 @@ class I386Asm(
         val shift = pieces.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { registerShift(it.toInt()) } ?: 0
         val addressSize = if (x64Target && baseOperand?.let { it.type and OP_REG32 != 0 } == true) X64_EA32 else 0
         return Operand(OP_EA or addressSize or if (indirect) OP_INDIR else 0, base, index, shift, expression)
+    }
+
+    /** Parses an optional AT&T segment override before a memory operand. */
+    fun parseSegmentedOperand(source: String, evaluate: (String) -> Expression = { Expression(it.toInt()) }): SegmentedOperand {
+        val match = Regex("^%([a-z]{2}):\\s*(.*)$", RegexOption.IGNORE_CASE).matchEntire(source.trim())
+            ?: return SegmentedOperand(0, parseOperand(source, evaluate))
+        val segment = listOf("es", "cs", "ss", "ds", "fs", "gs").indexOf(match.groupValues[1].lowercase())
+        require(segment >= 0) { "invalid segment override %${match.groupValues[1]}" }
+        val operand = parseOperand(match.groupValues[2], evaluate)
+        require(operand.type and OP_EA != 0) { "segment prefix must be followed by a memory reference" }
+        return SegmentedOperand(segmentPrefixes[segment], operand)
     }
 
     /** Accepts an optional-percent spelling of an i386 integer register variable. */
