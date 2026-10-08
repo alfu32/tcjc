@@ -70,7 +70,13 @@ class Riscv64Gen(
     data class CallArgument(val type: AbiType, val alignment: Int = 8, val named: Boolean = true)
     data class CallArgumentValue(val argument: CallArgument, val value: Value)
     data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
-    data class ParameterLocation(val stackOffset: Int, val byReference: Boolean, val registerClasses: IntArray, val fieldOffsets: IntArray)
+    data class ParameterLocation(
+        val stackOffset: Int,
+        val byReference: Boolean,
+        val registerClasses: IntArray,
+        val fieldOffsets: IntArray,
+        val registerSlots: IntArray = intArrayOf(),
+    )
     data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
     data class CompareState(val comparison: Comparison, val leftRegister: Int, val rightRegister: Int)
     data class StackValue(var register: Int, var constant: Long? = null, var comparison: CompareState? = null)
@@ -503,20 +509,48 @@ class Riscv64Gen(
                 (count == 2 && pass.classes[1] == RC_FLOAT && pass.classes[2] == RC_FLOAT && floatingRegisters >= 7) ||
                 (count == 2 && pass.classes[1] != pass.classes[2] && (floatingRegisters >= 8 || integerRegisters >= 8))
             val offset: Int
+            val slots: IntArray
             if (stack) {
                 alignment = maxOf(alignment, 8)
                 stackOffset = (stackOffset + alignment - 1) and -alignment
                 offset = stackOffset
                 stackOffset += size
+                slots = intArrayOf()
             } else {
                 localOffset -= count * 8
                 offset = localOffset
+                slots = IntArray(count)
                 repeat(count) { index ->
                     val registerClass = pass.classes[index + 1]
-                    if (registerClass == RC_FLOAT) floatingRegisters++ else integerRegisters++
+                    if (registerClass == RC_FLOAT) slots[index] = 8 + floatingRegisters++
+                    else slots[index] = integerRegisters++
                 }
             }
-            ParameterLocation(offset, byReference, pass.classes, pass.fieldOffsets)
+            ParameterLocation(offset, byReference, pass.classes, pass.fieldOffsets, slots)
+        }
+    }
+
+    /** Stores incoming register parameters into their local homes, leaving stack parameters in place. */
+    fun emitParameterHome(location: ParameterLocation, type: AbiType) {
+        if (location.registerSlots.isEmpty()) return
+        if (type.baseType != VT_STRUCT && type.size <= 8) {
+            val slot = location.registerSlots[0]
+            val floating = slot >= 8
+            val home = Value(value = location.stackOffset.toLong(), kind = ValueKind.LOCAL, isLValue = true,
+                isFloating = floating, baseType = type.baseType, typeSize = type.size)
+            store(slot, home)
+            return
+        }
+        for (fieldIndex in location.registerSlots.indices) {
+            val encodedField = location.fieldOffsets.getOrElse(fieldIndex + 1) { 0 }
+            val fieldType = encodedField and 0xf
+            val fieldOffset = encodedField shr 4
+            val slot = location.registerSlots[fieldIndex]
+            val floating = slot >= 8
+            val width = when (fieldType) { VT_BYTE -> 1; VT_SHORT -> 2; VT_INT, VT_FLOAT -> 4; else -> 8 }
+            val home = Value(value = (location.stackOffset + fieldOffset).toLong(), kind = ValueKind.LOCAL, isLValue = true,
+                isFloating = floating, baseType = fieldType, typeSize = width)
+            store(slot, home)
         }
     }
 
