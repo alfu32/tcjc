@@ -27,6 +27,8 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OPC_REG = 0x04
         const val OPC_MODRM = 0x08
         const val OPC_GROUP_SHIFT = 13
+        const val OPC_FWAIT = 0x10
+        const val OPC_0F = 0x100
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
         val conditionCodes = intArrayOf(
@@ -372,6 +374,24 @@ class I386Asm(private val emit: (Int) -> Unit) {
                 }
             }
         }
+    }
+
+    /** Emits i386 instruction prefixes and extracts the final opcode word. */
+    fun emitPrefixes(instruction: Instruction, operandSize16: Boolean = false, segmentPrefix: Int = 0, addressSize16: Boolean = false): Int {
+        if (instruction.instructionType and OPC_FWAIT != 0) emit(0x9b)
+        if (segmentPrefix != 0) emit(segmentPrefix)
+        if (addressSize16) emit(0x67)
+        if (operandSize16) emit(0x66)
+        var opcode = instruction.opcode
+        val prefix = (opcode ushr 8) and 0xff
+        when (prefix) {
+            0, 0xd4, 0xd5, in 0xd8..0xdf -> Unit
+            0x66, 0x67, 0xf2, 0xf3 -> { emit(prefix); opcode = opcode and 0xff }
+            else -> throw IllegalArgumentException("bad i386 opcode prefix 0x${prefix.toString(16)}")
+        }
+        if (instruction.instructionType and OPC_0F != 0)
+            opcode = ((opcode and 0xffff00) shl 8) or 0x0f00 or (opcode and 0xff)
+        return opcode
     }
 
     private fun emitExpression32(expression: Expression) {
