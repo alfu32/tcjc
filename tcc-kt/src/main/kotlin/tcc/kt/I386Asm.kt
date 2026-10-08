@@ -83,6 +83,44 @@ class I386Asm(private val emit: (Int) -> Unit) {
         registers[register] = true
     }
 
+    /** Emits the register preservation and operand load/store phases around inline asm. */
+    fun generateInlineAsm(
+        operands: List<InlineOperand>, outputCount: Int, isOutput: Boolean,
+        clobbers: BooleanArray, outputScratch: Int,
+        save: (Int) -> Unit, restore: (Int) -> Unit,
+        load: (InlineOperand, Int) -> Unit, store: (InlineOperand, Int) -> Unit,
+        loadHigh: (InlineOperand, Int) -> Unit = { _, _ -> },
+        storeHigh: (InlineOperand, Int) -> Unit = { _, _ -> },
+        materializeOutputAddress: (InlineOperand, Int) -> Unit = { _, _ -> },
+    ) {
+        val used = clobbers.copyOf()
+        operands.forEach { if (it.register >= 0 && it.register < used.size) used[it.register] = true }
+        val preserved = listOf(3, 6, 7).filter { it < used.size && used[it] }
+        if (!isOutput) {
+            preserved.forEach(save)
+            operands.forEachIndexed { index, operand ->
+                if (operand.register >= 0 && (index >= outputCount || operand.readWrite)) {
+                    load(operand, operand.register)
+                    if (operand.isLongLong) loadHigh(operand, operand.register + 1)
+                }
+            }
+        } else {
+            operands.take(outputCount).forEach { operand ->
+                if (operand.register >= 0) {
+                    if (operand.isMemory) Unit
+                    else {
+                        materializeOutputAddress(operand, outputScratch)
+                        store(operand, operand.register)
+                    }
+                    if (operand.isLongLong) storeHigh(operand, operand.register + 1)
+                }
+            }
+            preserved.asReversed().forEach(restore)
+        }
+    }
+
+    data class InlineOperand(val register: Int, val readWrite: Boolean = false, val isMemory: Boolean = false, val isLongLong: Boolean = false)
+
     fun immediate(value: Int): Operand {
         var type = OP_IM32
         if (value == (value.toByte().toInt())) type = type or OP_IM8
