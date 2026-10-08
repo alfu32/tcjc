@@ -2967,7 +2967,7 @@ object TccElf {
         state.sections.drop(1).filterNotNull().forEach { target ->
             if (target.flags and SHF_ALLOC == 0 || target.type !in setOf(SHT_PROGBITS, SHT_NOBITS, SHT_STRTAB)) return@forEach
             val stem = target.name.removePrefix(".")
-            if (stem.any { !(it == '_' || it.isLetterOrDigit()) }) return@forEach
+            if (stem.any { !(it == '_' || it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9') }) return@forEach
             setGlobalSymbol(state, symbols, "__start_$stem", target, 0)
             setGlobalSymbol(state, symbols, "__stop_$stem", target, -1)
         }
