@@ -30,7 +30,9 @@ object TccCoff {
         val lineNumbers: List<LineNumber> = emptyList(),
     )
     data class Relocation(val address: Long, val symbolIndex: Int, val displacement: Int, val type: Int)
-    data class LineNumber(val address: Long, val line: Int, val symbolIndex: Int? = null)
+    data class LineNumber(val address: Long, val line: Int, val symbolIndex: Int? = null, val symbolName: String? = null)
+    data class StabSymbol(val type: Int, val stringOffset: Int, val value: Long, val description: Int)
+    data class DebugLineData(val lines: List<LineNumber>, val functions: List<FunctionDebug>)
     data class ElfSymbol(val name: String, val value: Long, val info: Int, val other: Int = 0, val sectionIndex: Int = 0)
     data class FunctionDebug(
         val name: String,
@@ -125,6 +127,64 @@ object TccCoff {
         return index
     }
 
+    /** Converts supported STABS function, source, include, and line records to COFF lines. */
+    fun convertStabsToCoffLines(records: List<StabSymbol>, stringTable: ByteArray, lineTableFileOffset: Int = 0): DebugLineData {
+        val lines = mutableListOf<LineNumber>()
+        val functions = mutableListOf<FunctionDebug>()
+        val includes = mutableListOf<String>()
+        var currentFile = ""
+        var functionName = ""
+        var functionStart = 0L
+        var lastPc = 0L
+        var lastLine = 1
+        var functionLineStart = 0
+
+        fun stabString(offset: Int): String {
+            if (offset !in stringTable.indices) return ""
+            var end = offset
+            while (end < stringTable.size && stringTable[end].toInt() != 0) end++
+            return stringTable.copyOfRange(offset, end).toString(Charsets.UTF_8)
+        }
+
+        for (record in records) when (record.type) {
+            0x24 -> { // N_FUN
+                if (record.stringOffset == 0) {
+                    lines += LineNumber(lastPc, lastLine + 1)
+                    val endAddress = functionStart + record.value
+                    functions += FunctionDebug(functionName, includes.lastOrNull() ?: currentFile, functionStart, endAddress,
+                        lines.size - functionLineStart - 1, lastLine + 1, lineTableFileOffset + functionLineStart * LINE_NUMBER_SIZE)
+                    functionName = ""
+                } else {
+                    functionName = stabString(record.stringOffset).substringBefore(':')
+                    functionStart = record.value
+                    lastPc = functionStart
+                    lastLine = -1
+                    functionLineStart = lines.size
+                    lines += LineNumber(0, 0, symbolName = functionName)
+                }
+            }
+            0x44 -> { // N_SLINE
+                val pc = functionStart + record.value
+                lines += LineNumber(lastPc, if (lastLine == -1) record.description else lastLine + 1)
+                lastPc = pc
+                lastLine = record.description
+            }
+            0x82 -> includes += stabString(record.stringOffset) // N_BINCL
+            0xa2 -> if (includes.size > 1) includes.removeAt(includes.lastIndex) // N_EINCL
+            0x64 -> { // N_SO
+                if (record.stringOffset == 0) includes.clear()
+                else {
+                    val file = stabString(record.stringOffset)
+                    if (file.isNotEmpty() && !file.endsWith('/')) {
+                        includes += file
+                        currentFile = file
+                    }
+                }
+            }
+        }
+        return DebugLineData(lines, functions)
+    }
+
     fun createOutputHeaders(state: State): Pair<FileHeader, OptionalHeader> {
         val text = findSection(state.sections, ".text")
         val data = findSection(state.sections, ".data")
@@ -188,8 +248,9 @@ object TccCoff {
             }
             offset = header.lineOffset
             section.lineNumbers.forEach { line ->
-                put32(output, offset, line.symbolIndex ?: line.address.toInt())
-                put16(output, offset + 4, if (line.symbolIndex != null) 0 else line.line)
+                val symbolIndex = line.symbolName?.let { findCoffSymbolIndex(outputSymbols, it) } ?: line.symbolIndex
+                put32(output, offset, symbolIndex ?: line.address.toInt())
+                put16(output, offset + 4, if (symbolIndex != null) 0 else line.line)
                 offset += LINE_NUMBER_SIZE
             }
         }
