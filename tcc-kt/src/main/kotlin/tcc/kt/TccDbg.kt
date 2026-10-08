@@ -27,9 +27,17 @@ object TccDbg {
         val dwarfEnabled: Boolean,
         val stabs: MutableList<StabEntry> = mutableListOf(),
         val stabStrings: MutableList<Byte> = mutableListOf(0),
+        val stabStringOffsets: MutableMap<String, Int> = mutableMapOf("" to 0),
         val relocations: MutableMap<String, MutableList<Relocation>> = mutableMapOf(),
         val debugStrings: StringPool = StringPool(),
         val lineStrings: StringPool = StringPool(),
+    )
+    data class DwarfFile(val name: String, val directoryIndex: Int)
+    data class DwarfLineState(
+        val directories: MutableList<String> = mutableListOf(),
+        val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
+        val operations: MutableList<Byte> = mutableListOf(),
+        var currentFile: Int = 1,
     )
 
     class StringPool {
@@ -44,7 +52,7 @@ object TccDbg {
             val bucket = byHash.getOrPut(hash) { mutableListOf() }
             bucket.firstOrNull { it.first == value }?.let { return it.second }
             val existing = bucket.firstOrNull { it.first.endsWith(value) }
-            val offset = if (existing != null) existing.second + existing.first.length - value.length else data.size
+            val offset = if (existing != null) existing.second + existing.first.toByteArray(Charsets.UTF_8).size - value.toByteArray(Charsets.UTF_8).size else data.size
             if (existing == null) {
                 value.toByteArray(Charsets.UTF_8).forEach { data += it }
                 data += 0
@@ -125,10 +133,12 @@ object TccDbg {
     }
 
     private fun putStabString(state: DebugSections, text: String): Int {
+        state.stabStringOffsets[text]?.let { return it }
         val bytes = text.toByteArray(Charsets.UTF_8)
         val offset = state.stabStrings.size
         bytes.forEach { state.stabStrings += it }
         state.stabStrings += 0
+        state.stabStringOffsets[text] = offset
         return offset
     }
 
@@ -162,5 +172,105 @@ object TccDbg {
         var hash = 5381
         value.toByteArray(Charsets.UTF_8).forEach { byte -> hash += (byte.toInt() and 0xff) + hash * 31 }
         return hash
+    }
+
+    fun registerDwarfFile(state: DwarfLineState, filename: String, dwarfVersion: Int): Int {
+        val indexOffset = if (dwarfVersion < 5) 1 else 0
+        if (filename == "<command line>") { state.currentFile = 1; return 1 }
+        val slash = filename.lastIndexOf('/')
+        val directory = if (slash < 0) "" else filename.substring(0, slash)
+        val basename = if (slash < 0) filename else filename.substring(slash + 1)
+        val directoryIndex = if (directory.isEmpty()) 0 else {
+            val existing = state.directories.indexOf(directory)
+            if (existing >= 0) existing + indexOffset else state.directories.apply { add(directory) }.lastIndex + indexOffset
+        }
+        val existingFile = state.files.drop(1).indexOfFirst { it.directoryIndex == directoryIndex && it.name == basename } + 1
+        if (existingFile > 0 && state.files[existingFile].directoryIndex == directoryIndex && state.files[existingFile].name == basename) {
+            state.currentFile = existingFile + indexOffset
+            return state.currentFile
+        }
+        state.files += DwarfFile(basename, directoryIndex)
+        state.currentFile = state.files.lastIndex + indexOffset
+        return state.currentFile
+    }
+
+    fun createDwarfLineState(mainFile: String, compilationDirectory: String, dwarfVersion: Int): DwarfLineState {
+        val slash = mainFile.lastIndexOf('/')
+        val baseName = if (slash < 0) mainFile else mainFile.substring(slash + 1)
+        val directories = mutableListOf(compilationDirectory)
+        val firstDirectory = if (slash < 0) 0 else {
+            directories += mainFile.substring(0, slash)
+            1
+        }
+        return DwarfLineState(
+            directories = directories,
+            files = mutableListOf(DwarfFile(baseName, 0), DwarfFile(baseName, firstDirectory)),
+            currentFile = 1,
+        )
+    }
+
+    fun lineOperation(state: DwarfLineState, opcode: Int) { state.operations += opcode.toByte() }
+    fun lineOperationUleb(state: DwarfLineState, value: Long) { state.operations.addAll(uleb128(value).toList()) }
+    fun lineOperationSleb(state: DwarfLineState, value: Long) { state.operations.addAll(sleb128(value).toList()) }
+
+    fun writeData1(section: DwarfSection, value: Int) = section.append(value)
+    fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
+    fun writeData4(section: DwarfSection, value: Int) { writeData2(section, value); writeData2(section, value ushr 16) }
+    fun writeData8(section: DwarfSection, value: Long) { writeData4(section, value.toInt()); writeData4(section, (value ushr 32).toInt()) }
+    fun writeUleb(section: DwarfSection, value: Long) = section.append(uleb128(value))
+    fun writeSleb(section: DwarfSection, value: Long) = section.append(sleb128(value))
+
+    fun writeStringReference(
+        state: DebugSections,
+        output: DwarfSection,
+        string: String,
+        symbolIndex: Int,
+        lineString: Boolean = false,
+        pointerSize: Int = 8,
+    ): Int {
+        val offset = if (lineString) state.lineStrings.intern(string) else state.debugStrings.intern(string)
+        state.relocations.getOrPut(output.name) { mutableListOf() } +=
+            Relocation(output.size, "R_DATA_32DW", symbolIndex, if (pointerSize == 4) offset.toLong() else 0L)
+        writeData4(output, if (pointerSize == 4) offset else 0)
+        return offset
+    }
+
+    enum class EhTarget { I386, X86_64, ARM, ARM64, RISCV64 }
+    data class EhFrameState(val section: DwarfSection, val startOffset: Int, val target: EhTarget)
+
+    /** Emits the target CIE and patches its length after alignment. */
+    fun startEhFrame(unwindTables: Boolean, target: EhTarget): EhFrameState? {
+        if (!unwindTables) return null
+        val section = DwarfSection(".eh_frame", flags = 2)
+        val start = section.size
+        writeData4(section, 0); writeData4(section, 0)
+        writeData1(section, if (target == EhTarget.RISCV64) 3 else 1)
+        section.append(byteArrayOf('z'.code.toByte(), 'R'.code.toByte(), 0))
+        when (target) {
+            EhTarget.I386 -> { writeUleb(section, 1); writeSleb(section, -4); writeUleb(section, 8) }
+            EhTarget.X86_64 -> { writeUleb(section, 1); writeSleb(section, -8); writeUleb(section, 16) }
+            EhTarget.ARM -> { writeUleb(section, 2); writeSleb(section, -4); writeUleb(section, 14) }
+            EhTarget.ARM64 -> { writeUleb(section, 4); writeSleb(section, -8); writeUleb(section, 30) }
+            EhTarget.RISCV64 -> { writeUleb(section, 1); writeSleb(section, -4); writeUleb(section, 1) }
+        }
+        writeUleb(section, 1); writeData1(section, 0x1b)
+        writeData1(section, 0x0c)
+        val (stackRegister, offset) = when (target) {
+            EhTarget.I386 -> 4L to 4L; EhTarget.X86_64 -> 7L to 8L; EhTarget.ARM -> 13L to 0L
+            EhTarget.ARM64 -> 31L to 0L; EhTarget.RISCV64 -> 2L to 0L
+        }
+        writeUleb(section, stackRegister); writeUleb(section, offset)
+        when (target) {
+            EhTarget.I386 -> { writeData1(section, 0x88); writeUleb(section, 1) }
+            EhTarget.X86_64 -> { writeData1(section, 0x90); writeUleb(section, 1) }
+            else -> Unit
+        }
+        while ((section.size - start) and 3 != 0) writeData1(section, 0)
+        patch32(section, start, section.size - start - 4)
+        return EhFrameState(section, start, target)
+    }
+
+    private fun patch32(section: DwarfSection, offset: Int, value: Int) {
+        repeat(4) { byte -> section.bytes[offset + byte] = (value ushr (byte * 8)).toByte() }
     }
 }
