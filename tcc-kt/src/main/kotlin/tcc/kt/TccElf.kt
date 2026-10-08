@@ -724,6 +724,30 @@ object TccElf {
         return section
     }
 
+    /** Appends one BSD ELF note unless a note with the same type is already present. */
+    fun fillBsdNote(section: ElfSection, type: Int, value: String, data: Long, wordSize: Int) {
+        val headerSize = if (wordSize == 8) 12 else 12
+        val alignment = section.alignment.coerceAtLeast(1)
+        var offset = 0
+        while (offset + headerSize < section.dataOffset) {
+            if (readInt32(section.data, offset + 8) == type) return
+            val nameSize = readInt32(section.data, offset)
+            val descSize = readInt32(section.data, offset + 4)
+            val recordSize = headerSize + nameSize + descSize
+            val alignedSize = (recordSize + alignment - 1) and -alignment
+            if (alignedSize <= 0 || offset + alignedSize > section.dataOffset) break
+            offset += alignedSize
+        }
+        appendInt32(section.data, 8)
+        appendInt32(section.data, 4)
+        appendInt32(section.data, type)
+        val noteName = value.toByteArray(Charsets.UTF_8)
+        repeat(8) { index -> section.data += noteName.getOrElse(index) { 0 } }
+        appendInt32(section.data, data.toInt())
+        section.dataOffset = section.data.size
+        section.outputSize = section.dataOffset.toLong()
+    }
+
     /** Serializes an ELF relocatable, executable, or shared object into a byte array. */
     fun serializeElf(
         state: ElfState,
