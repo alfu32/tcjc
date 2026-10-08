@@ -27,6 +27,16 @@ object TccGen {
     const val VT_LDOUBLE = 10
     const val VT_BOOL = 11
     const val VT_QFLOAT = 14
+    const val VT_UNSIGNED = 0x0010
+    const val VT_FUNC = 6
+    const val FUNC_OLD = 2
+    const val FUNC_CDECL = 0
+    const val PARSE_FLAG_PREPROCESS = 0x0001
+    const val PARSE_FLAG_TOKEN_NUMBER = 0x0002
+    const val PARSE_FLAG_TOKEN_STRING = 0x0040
+    const val DATA_ONLY_WANTED = Int.MIN_VALUE
+    const val FIRST_ANONYMOUS_SYMBOL = SYM_FIRST_ANOM
+    const val PRECEDENCE_PARSER = true
 
     data class CType(var type: Int = 0, var reference: Sym? = null)
     data class SymbolAttributes(
@@ -77,6 +87,44 @@ object TccGen {
         var noCodeWanted: Int = 0,
         var debugModes: Int = 0,
         val hooks: RuntimeHooks = RuntimeHooks(),
+    )
+    data class GeneratorState(
+        var returnSymbol: Int = 0,
+        var anonymousSymbol: Int = 0,
+        var instructionIndex: Int = 0,
+        var localIndex: Int = 0,
+        var debugModes: Int = 0,
+        var noCodeWanted: Int = 0,
+        var globalExpression: Int = 0,
+        var functionReturnType: CType = CType(),
+        var functionVariadic: Boolean = false,
+        var functionReturnStorage: Int = 0,
+        var intType: CType = CType(),
+        var characterType: CType = CType(),
+        var characterPointerType: CType = CType(),
+        var oldFunctionType: CType = CType(),
+        var functionStart: Int = -1,
+        var functionName: String = "",
+        var currentScope: Int = 0,
+        var switchDepth: Int = 0,
+        var temporaryLocalCount: Int = 0,
+    )
+    data class LifecycleHooks(
+        val debugStart: () -> Unit = {},
+        val coverageStart: () -> Unit = {},
+        val architectureInit: () -> Unit = {},
+        val nextToken: () -> Unit = {},
+        val parseDeclarations: (Int) -> Unit = {},
+        val generateInlineFunctions: () -> Unit = {},
+        val checkValueStack: () -> Unit = {},
+        val unwindEnd: () -> Unit = {},
+        val debugEnd: () -> Unit = {},
+        val coverageEnd: () -> Unit = {},
+        val freeInlineFunctions: () -> Unit = {},
+        val freeDefines: () -> Unit = {},
+        val freeStringBuffer: () -> Unit = {},
+        val clearStackData: () -> Unit = {},
+        val endSwitch: () -> Unit = {},
     )
     class Sym(
         var token: Int = 0,
@@ -359,6 +407,80 @@ object TccGen {
         value.compareOperator = operator
         value.falseJump = 0
         value.trueJump = 0
+    }
+
+    fun initializeGenerator(
+        state: GeneratorState,
+        charIsUnsigned: Boolean,
+        makePointer: (CType) -> Unit,
+        pushFunctionTypeSymbol: (Int, CType, Int, Int) -> Sym,
+        initializePrecedence: () -> Unit = {},
+        initializeString: () -> Unit = {},
+    ) {
+        val intType = CType(VT_INT)
+        val charType = CType(VT_BYTE or if (charIsUnsigned) VT_UNSIGNED else 0)
+        val charPointer = charType.copy()
+        makePointer(charPointer)
+        val oldFunctionType = CType(VT_FUNC)
+        oldFunctionType.reference = pushFunctionTypeSymbol(SYM_FIELD, intType, 0, 0).also {
+            it.function.callingConvention = FUNC_CDECL
+            it.function.functionType = FUNC_OLD
+        }
+        if (PRECEDENCE_PARSER) initializePrecedence()
+        initializeString()
+        state.intType = intType
+        state.characterType = charType
+        state.characterPointerType = charPointer
+        state.oldFunctionType = oldFunctionType
+    }
+
+    fun compileTranslationUnit(
+        state: GeneratorState,
+        runtime: RuntimeState,
+        debugEnabled: Boolean,
+        testCoverageEnabled: Boolean,
+        architectureInitializationNeeded: Boolean,
+        hooks: LifecycleHooks = LifecycleHooks(),
+    ): Int {
+        state.functionName = ""
+        state.functionStart = -1
+        state.anonymousSymbol = FIRST_ANONYMOUS_SYMBOL
+        state.noCodeWanted = DATA_ONLY_WANTED
+        state.debugModes = (if (debugEnabled) 1 else 0) or (if (testCoverageEnabled) 2 else 0)
+        state.globalExpression = 0
+        runtime.noCodeWanted = DATA_ONLY_WANTED
+        runtime.debugModes = state.debugModes
+        hooks.debugStart()
+        hooks.coverageStart()
+        if (architectureInitializationNeeded) hooks.architectureInit()
+        hooks.nextToken()
+        hooks.parseDeclarations(PARSE_FLAG_PREPROCESS or PARSE_FLAG_TOKEN_NUMBER or PARSE_FLAG_TOKEN_STRING)
+        hooks.generateInlineFunctions()
+        hooks.checkValueStack()
+        hooks.unwindEnd()
+        hooks.debugEnd()
+        hooks.coverageEnd()
+        return 0
+    }
+
+    fun finishGenerator(
+        state: GeneratorState,
+        compiler: CompilerState,
+        hooks: LifecycleHooks = LifecycleHooks(),
+    ) {
+        hooks.debugEnd()
+        hooks.freeInlineFunctions()
+        compiler.globalStack = null
+        compiler.localStack = null
+        compiler.defineStack = null
+        hooks.freeDefines()
+        hooks.freeStringBuffer()
+        hooks.clearStackData()
+        while (state.switchDepth > 0) { hooks.endSwitch(); state.switchDepth-- }
+        state.currentScope = 0
+        state.temporaryLocalCount = 0
+        compiler.globalLabelStack = null
+        compiler.localLabelStack = null
     }
 
     const val CODE_OFF_BIT = 0x20000000
