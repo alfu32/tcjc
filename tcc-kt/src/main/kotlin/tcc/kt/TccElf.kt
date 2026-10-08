@@ -310,6 +310,30 @@ object TccElf {
         }
     }
 
+    fun loadArchive(
+        bytes: ByteArray,
+        alacarte: Boolean,
+        isUndefined: (String) -> Boolean = { false },
+        loadMember: (ArchiveMember, ByteArray) -> Boolean,
+    ): Boolean {
+        val members = archiveMembers(bytes)
+        if (alacarte) {
+            val indexMember = members.firstOrNull { it.name == "/" || it.name == "/SYM64/" } ?: return true
+            val offsetWidth = if (indexMember.name == "/SYM64/") 8 else 4
+            val indexData = bytes.copyOfRange(indexMember.dataOffset, indexMember.dataOffset + indexMember.size)
+            return loadAlacarteArchive(indexData, offsetWidth, members, isUndefined) { member ->
+                val data = bytes.copyOfRange(member.dataOffset, member.dataOffset + member.size)
+                loadMember(member, data)
+            } != null
+        }
+        for (member in members) {
+            if (member.name == "/" || member.name == "/SYM64/" || member.name == "//") continue
+            val data = bytes.copyOfRange(member.dataOffset, member.dataOffset + member.size)
+            if (objectType(data) == BINARY_TYPE_REL && !loadMember(member, data)) return false
+        }
+        return true
+    }
+
     /** Associates a local version index with a shared library/version registry entry. */
     fun setVersionToVersion(registry: VersionRegistry, index: Int, library: String, version: String) {
         require(index >= 0)
