@@ -156,6 +156,11 @@ object TccElf {
     data class DynamicEntry(val tag: Long, val value: Long)
     data class ArchiveHeader(val name: String, val sizeText: String)
     data class ArchiveMember(val name: String, val headerOffset: Int, val dataOffset: Int, val size: Int)
+    data class SymbolVersion(val library: String, val version: String, var outputIndex: Int = 0, val previousForLibrary: Int = -1)
+    data class VersionRegistry(
+        val versions: MutableList<SymbolVersion> = mutableListOf(),
+        val localVersions: MutableList<Int> = mutableListOf(),
+    )
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -215,6 +220,26 @@ object TccElf {
             offset = (dataOffset + size + 1) and -2
         }
         return members
+    }
+
+    /** Associates a local version index with a shared library/version registry entry. */
+    fun setVersionToVersion(registry: VersionRegistry, index: Int, library: String, version: String) {
+        require(index >= 0)
+        while (registry.localVersions.size <= index) registry.localVersions += -1
+        if (registry.localVersions[index] != -1) return
+        var previousForLibrary = -1
+        var found = -1
+        registry.versions.forEachIndexed { versionIndex, item ->
+            if (item.library == library) {
+                previousForLibrary = versionIndex
+                if (item.version == version) found = versionIndex
+            }
+        }
+        if (found == -1) {
+            found = registry.versions.size
+            registry.versions += SymbolVersion(library, version, previousForLibrary = previousForLibrary)
+        }
+        registry.localVersions[index] = found
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
