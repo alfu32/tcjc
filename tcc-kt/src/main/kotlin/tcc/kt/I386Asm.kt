@@ -36,6 +36,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OPC_0F = 0x100
         const val X64_REG = 1 shl 20
         const val X64_LOW8 = 1 shl 21
+        const val X64_RIP = 1 shl 22
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
         val conditionCodes = intArrayOf(
@@ -423,7 +424,26 @@ class I386Asm(private val emit: (Int) -> Unit) {
             val byteRegs = listOf("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")
             val wordRegs = listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
             val dwordRegs = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+            val qwordRegs = listOf("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi")
             val segments = listOf("es", "cs", "ss", "ds", "fs", "gs")
+            if (name == "rip") return Operand(X64_REG or X64_RIP or if (indirect) OP_INDIR else 0, -2)
+            if (name in qwordRegs) return Operand(X64_REG or if (indirect) OP_INDIR else 0, qwordRegs.indexOf(name))
+            if (name in listOf("spl", "bpl", "sil", "dil"))
+                return Operand(OP_REG8 or X64_LOW8 or if (indirect) OP_INDIR else 0, 4 + listOf("spl", "bpl", "sil", "dil").indexOf(name))
+            val numeric = Regex("^(c)?r([1-9][0-5]?)([bwd]?)$").matchEntire(name)
+            if (numeric != null) {
+                val number = numeric.groupValues[2].toInt()
+                if (number > 15) throw IllegalArgumentException("unknown register %$name")
+                val size = numeric.groupValues[3]
+                val type = when {
+                    numeric.groupValues[1] == "c" -> OP_CR
+                    size == "b" -> OP_REG8
+                    size == "w" -> OP_REG16
+                    size == "d" -> OP_REG32
+                    else -> X64_REG
+                }
+                return Operand(type or if (indirect) OP_INDIR else 0, number)
+            }
             val st = Regex("st(?:\\(([0-7])\\))?").matchEntire(name)
             val (type, register) = when {
                 name in byteRegs -> OP_REG8 to byteRegs.indexOf(name)
@@ -479,7 +499,10 @@ class I386Asm(private val emit: (Int) -> Unit) {
     /** Emits an i386 ModRM operand and returns the current output offset. */
     fun modRm(regField: Int, operand: Operand, position: () -> Int): Int {
         val reg = regField and 7
-        if (operand.type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE) != 0) {
+        if (operand.register == -2) {
+            emit(0x05 or (reg shl 3))
+            emitExpression32(operand.expression.copy(pcRelative = true))
+        } else if (operand.type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE) != 0) {
             emit(0xc0 or (reg shl 3) or (operand.register and 7))
         } else if (operand.register == -1 && operand.index == -1) {
             emit(0x05 or (reg shl 3))
@@ -557,7 +580,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
                 ?: if (operands.isEmpty()) -2 else throw IllegalArgumentException("instruction has no ModRM operand")
         }
         if (instruction.instructionType and OPC_REG != 0) {
-            val registerOperand = operands.firstOrNull { it.type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_ST) != 0 }
+            val registerOperand = operands.firstOrNull { it.type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_ST) != 0 }
                 ?: throw IllegalArgumentException("register opcode has no register operand")
             op += registerOperand.register
         }
@@ -570,7 +593,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
             emit(0xc0 or (group shl 3) or syntheticRegister)
         } else if (modRmIndex >= 0) {
             val otherRegister = operands.indices.firstOrNull { index ->
-                index != modRmIndex && operands[index].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0
+                index != modRmIndex && operands[index].type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0
             }
             val group = groupOverride ?: ((instruction.instructionType ushr OPC_GROUP_SHIFT) and 7)
             val field = otherRegister?.let { operands[it].register } ?: group
