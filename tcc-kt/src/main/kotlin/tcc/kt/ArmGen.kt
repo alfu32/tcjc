@@ -206,6 +206,7 @@ object ArmGen {
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
     data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
     data class FloatingOperationPlan(val words: List<Int>, val comparison: Condition? = null, val consumedOperands: Int = 1)
+    data class FpaOperationPlan(val word: Int, val comparison: Condition? = null)
     enum class FloatAbi { SOFT, HARD }
     data class FunctionCallPlan(val effectiveFloatAbi: FloatAbi, val argumentRegisters: RegisterAssignment,
         val stackBytesBeforeAlignment: Int, val alignmentPadding: Int, val stackBytesAfterAlignment: Int,
@@ -396,6 +397,83 @@ object ArmGen {
         val word = if (operation == "-" && leftIsZero) opcode or (dest shl 12) or lhs
             else opcode or (dest shl 12) or (lhs shl 16) or rhs
         return FloatingOperationPlan(listOf(word), consumedOperands = if (operation in setOf("abs", "sqrt") || operation == "-" && leftIsZero) 1 else 2)
+    }
+
+    /** Encodes FPA arithmetic and comparison operations, including immediate constants. */
+    fun fpaFloatingOperation(operation: String, type: ValueType, destination: Int, left: Int, right: Int,
+        leftImmediate: Int = 0, rightImmediate: Int = 0, longDoubleSize: Int = 8,
+        condition: Condition? = null): FpaOperationPlan {
+        var first = floatingRegister(left, false)
+        var second = floatingRegister(right, false)
+        val target by lazy { floatingRegister(destination, false) }
+        var lhsConstant = leftImmediate
+        var rhsConstant = rightImmediate
+        var opcode = 0xee000100.toInt()
+        if (type == ValueType.DOUBLE) opcode = opcode or 0x80
+        else if (type == ValueType.LONG_DOUBLE && longDoubleSize != 8) opcode = opcode or 0x80000
+        var compareResult: Condition? = null
+        var operand: Int
+        when (operation) {
+            "+" -> {
+                if (rhsConstant == 0) {
+                    val swap = first; first = second; second = swap
+                    rhsConstant = lhsConstant
+                }
+                if (rhsConstant > 0xf) opcode = opcode or 0x200000
+                operand = if (rhsConstant != 0) rhsConstant and 15 else second
+            }
+            "-" -> when {
+                rhsConstant != 0 -> {
+                    if (rhsConstant <= 0xf) opcode = opcode or 0x200000
+                    operand = rhsConstant and 15
+                    val swap = first; first = second; second = swap
+                }
+                lhsConstant in 1..15 -> {
+                    opcode = opcode or 0x300000
+                    operand = lhsConstant
+                    first = second
+                }
+                else -> { opcode = opcode or 0x200000; operand = second }
+            }
+            "*" -> {
+                if (rhsConstant == 0 || rhsConstant > 0xf) {
+                    val swap = first; first = second; second = swap
+                    rhsConstant = lhsConstant
+                }
+                if (rhsConstant in 1..15) operand = rhsConstant
+                else operand = second
+                opcode = opcode or 0x100000
+            }
+            "/" -> when {
+                rhsConstant in 1..15 -> { opcode = opcode or 0x400000; operand = rhsConstant; val swap = first; first = second; second = swap }
+                lhsConstant in 1..15 -> { opcode = opcode or 0x500000; operand = lhsConstant; first = second }
+                else -> { opcode = opcode or 0x400000; operand = second }
+            }
+            "compare" -> {
+                var cmp = condition ?: throw IllegalArgumentException("floating compare requires a condition")
+                opcode = opcode or 0xd0f110
+                if (cmp in setOf(Condition.ULT, Condition.UGE, Condition.ULE, Condition.UGT))
+                    throw IllegalArgumentException("unsigned comparison on floats?")
+                if (cmp == Condition.LT) cmp = Condition.NEGATIVE
+                if (cmp == Condition.LE) cmp = Condition.ULE
+                if (cmp == Condition.EQ || cmp == Condition.NE) opcode = opcode and 0xffbfffff.toInt()
+                if (lhsConstant != 0 && rhsConstant == 0) {
+                    rhsConstant = lhsConstant
+                    val swap = first; first = second; second = swap
+                    cmp = when (cmp) {
+                        Condition.NEGATIVE -> Condition.GT; Condition.GE -> Condition.ULE
+                        Condition.ULE -> Condition.GE; Condition.GT -> Condition.NEGATIVE
+                        else -> cmp
+                    }
+                }
+                if (rhsConstant > 0xf) opcode = opcode or 0x200000
+                operand = if (rhsConstant != 0) rhsConstant and 15 else second
+                compareResult = cmp
+            }
+            else -> throw IllegalArgumentException("unknown floating operation $operation")
+        }
+        val destinationField = if (operation == "compare") 15 else target
+        return FpaOperationPlan(opcode or (first shl 16) or (destinationField shl 12) or operand, compareResult)
     }
 
     /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
