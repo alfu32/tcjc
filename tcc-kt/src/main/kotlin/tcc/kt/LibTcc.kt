@@ -54,6 +54,8 @@ class LibTcc(
         var armFloatAbi: String? = null, var runtimeStdin: String? = null, var backtraceCallers: Int = 0,
         var doBacktrace: Boolean = false, var boundsChecking: Boolean = false,
         var dwarfVersion: Int = 4,
+        var peCharacteristics: Int = 0, var peDllCharacteristics: Int = 0,
+        var peFileAlignment: ULong = 0uL, var peStackSize: ULong = 0uL, var peSubsystem: Int = 0,
     )
     data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
     data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
@@ -455,7 +457,8 @@ class LibTcc(
 
     /** Consumes and applies the linker options handled by libtcc.c. */
     fun setLinkerOptions(compilerState: CompilerState, encodedOptions: String, addFile: (String, Int) -> Int = { _, _ -> 0 },
-        warnUnsupported: (String) -> Unit = {}, peTarget: Boolean = false): Int {
+        warnUnsupported: (String) -> Unit = {}, peTarget: Boolean = false,
+        setPeSubsystem: (String) -> Int = { -1 }, machoTarget: Boolean = false): Int {
         compilerState.linkerArguments += splitArguments(encodedOptions, ',')
         while (compilerState.linkerArgumentIndex < compilerState.linkerArguments.size) {
             val option = compilerState.linkerArguments[compilerState.linkerArgumentIndex]
@@ -487,6 +490,21 @@ class LibTcc(
                 match("soname=|install_name=").also { matched = it }.result != 0 -> compilerState.soname = matched.optionArgument
                 match("?whole-archive").also { matched = it }.result != 0 -> compilerState.fileType = if (matched.result > 0) compilerState.fileType or TYPE_WHOLE_ARCHIVE else compilerState.fileType and TYPE_WHOLE_ARCHIVE.inv()
                 match("znodelete").also { matched = it }.result != 0 -> compilerState.noDelete = true
+                peTarget && match("large-address-aware").also { matched = it }.result != 0 -> compilerState.peCharacteristics = compilerState.peCharacteristics or 0x20
+                peTarget && match("?dynamicbase").also { matched = it }.result != 0 -> compilerState.peDllCharacteristics =
+                    if (matched.result > 0) compilerState.peDllCharacteristics or 0x40 else compilerState.peDllCharacteristics and 0x60.inv()
+                peTarget && match("?high-entropy-va").also { matched = it }.result != 0 -> compilerState.peDllCharacteristics =
+                    if (matched.result > 0) compilerState.peDllCharacteristics or 0x60 else compilerState.peDllCharacteristics and 0x20.inv()
+                peTarget && match("?nxcompat").also { matched = it }.result != 0 -> compilerState.peDllCharacteristics =
+                    if (matched.result > 0) compilerState.peDllCharacteristics or 0x100 else compilerState.peDllCharacteristics and 0x100.inv()
+                peTarget && match("?tsaware").also { matched = it }.result != 0 -> compilerState.peDllCharacteristics =
+                    if (matched.result > 0) compilerState.peDllCharacteristics or 0x8000 else compilerState.peDllCharacteristics and 0x8000.inv()
+                peTarget && match("file-alignment=").also { matched = it }.result != 0 -> compilerState.peFileAlignment = matched.optionArgument.orEmpty().toULongOrNull(16) ?: 0uL
+                peTarget && match("stack=").also { matched = it }.result != 0 -> compilerState.peStackSize = matched.optionArgument.orEmpty().toULongOrNull() ?: 0uL
+                peTarget && match("subsystem=").also { matched = it }.result != 0 -> if (setPeSubsystem(matched.optionArgument.orEmpty()) < 0) return reportError(compilerState, ERROR_NO_ABORT, "unsupported linker option '$option'").let { -1 }
+                machoTarget && match("all_load").also { matched = it }.result != 0 -> compilerState.fileType = compilerState.fileType or TYPE_WHOLE_ARCHIVE
+                machoTarget && match("force_load=").also { matched = it }.result != 0 -> addFile(matched.optionArgument.orEmpty(), TYPE_LIBRARY or TYPE_WHOLE_ARCHIVE)
+                machoTarget && match("single_module").also { matched = it }.result != 0 -> warnUnsupported(option)
                 match("as-needed|O|z=").also { matched = it }.result != 0 -> warnUnsupported(option)
                 match("L:").also { matched = it }.result != 0 -> addLibraryPath(compilerState, matched.optionArgument.orEmpty())
                 match("l:").also { matched = it }.result != 0 -> addFile(matched.optionArgument.orEmpty(), TYPE_BINARY or (compilerState.fileType and TYPE_WHOLE_ARCHIVE))
