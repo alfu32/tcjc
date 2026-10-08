@@ -641,6 +641,59 @@ object TccDbg {
         return emit(type)
     }
 
+    /** Serializes a collected lexical scope in the same order used by tcc_debug_finish. */
+    fun finishDebugScope(
+        state: DebugSections,
+        scope: DebugScope,
+        pointerSize: Int,
+        functionAddress: Long,
+        refs: DwarfSymbolRefs,
+        parent: Boolean = false,
+    ) {
+        if (state.dwarfEnabled) {
+            val info = state.sections.getValue(".debug_info")
+            scope.symbols.asReversed().forEach { symbol ->
+                val external = symbol.stabType == 0x20 // N_GSYM
+                val static = symbol.stabType == 0x26 // N_STSYM
+                val parameter = symbol.stabType == 0xa0 // N_PSYM
+                writeData1(info, if (parameter) 6 else if (external) 3 else if (static) 4 else 5)
+                writeStringReference(state, info, symbol.name, refs.strings, pointerSize = pointerSize)
+                if (external || static) { writeUleb(info, symbol.file.toLong()); writeUleb(info, symbol.line.toLong()) }
+                state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
+                writeData4(info, symbol.typeOffset)
+                if (external) writeData1(info, 1)
+                if (external || static) {
+                    writeData1(info, pointerSize + 1); writeData1(info, 0x03) // DW_OP_addr
+                    if (static) state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", symbol.symbolIndex)
+                    if (pointerSize == 4) writeData4(info, symbol.value.toInt()) else writeData8(info, symbol.value)
+                } else {
+                    val encoded = sleb128(symbol.value)
+                    writeData1(info, encoded.size + 1); writeData1(info, 0x91) // DW_OP_fbreg
+                    writeSleb(info, symbol.value)
+                }
+            }
+            writeData1(info, if (scope.children.isEmpty()) 23 else 22)
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", refs.text)
+            val start = functionAddress + scope.start
+            val length = (scope.end - scope.start).toLong()
+            if (pointerSize == 4) { writeData4(info, start.toInt()); writeData4(info, length.toInt()) }
+            else { writeData8(info, start); writeData8(info, length) }
+            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs) }
+            if (scope.children.isNotEmpty()) writeData1(info, 0)
+        } else {
+            scope.symbols.forEach { symbol ->
+                putStabs(state, symbol.name, symbol.stabType, 0, 0, symbol.value)
+            }
+            putStabs(state, null, 0xc0, 0, 0, scope.start.toLong()) // N_LBRAC
+            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs) }
+            putStabs(state, null, 0xe0, 0, 0, scope.end.toLong()) // N_RBRAC
+        }
+    }
+
+    fun addDebugVariable(scope: DebugScope, name: String, stabType: Int, value: Long, typeOffset: Int, file: Int, line: Int) {
+        scope.symbols += DebugSymbol(name, stabType, value, typeOffset = typeOffset, file = file, line = line)
+    }
+
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
     fun writeData4(section: DwarfSection, value: Int) { writeData2(section, value); writeData2(section, value ushr 16) }
