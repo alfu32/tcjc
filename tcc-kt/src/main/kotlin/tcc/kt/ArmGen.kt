@@ -230,7 +230,8 @@ object ArmGen {
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int,
         val hiddenStructReturn: Boolean, val stackAdjustmentPatchWord: Int)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
-    data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
+    data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null,
+        val integerResultHighRegister: Int? = null, val magicLiteralOffset: Int? = null)
     data class FloatingOperationPlan(val words: List<Int>, val comparison: Condition? = null, val consumedOperands: Int = 1)
     data class FpaOperationPlan(val word: Int, val comparison: Condition? = null)
     enum class FloatAbi { SOFT, HARD }
@@ -310,7 +311,8 @@ object ArmGen {
     }
 
     fun integerToFloat(source: ValueType, target: ValueType, unsigned: Boolean, sourceCoreRegister: Int,
-        destinationFloatRegister: Int, vfp: Boolean): ConversionPlan {
+        destinationFloatRegister: Int, vfp: Boolean, instructionOffset: Int = 0, lastMagicLiteralOffset: Int = 0,
+        unsignedTempFloatRegister: Int = destinationFloatRegister): ConversionPlan {
         if (source in setOf(ValueType.BYTE, ValueType.SHORT, ValueType.INT)) {
             val sourceRegister = integerRegister(sourceCoreRegister)
             val destination = floatingRegister(destinationFloatRegister, vfp)
@@ -323,7 +325,22 @@ object ArmGen {
                 ))
             }
             val targetDouble = if (target == ValueType.FLOAT) 0 else 0x80
-            return ConversionPlan(listOf(0xee000110.toInt() or targetDouble or (destination shl 16) or (sourceRegister shl 12)))
+            val words = mutableListOf(0xee000110.toInt() or targetDouble or (destination shl 16) or (sourceRegister shl 12))
+            var nextMagic = lastMagicLiteralOffset
+            if (source == ValueType.INT && unsigned) {
+                val temp = floatingRegister(unsignedTempFloatRegister, false)
+                words += 0xe3500000.toInt() or (sourceRegister shl 12)
+                var offset = if (lastMagicLiteralOffset != 0) (instructionOffset + 16 - lastMagicLiteralOffset) / 4 else 0
+                if (offset > 255) offset = 0
+                words += 0xbd1f0100.toInt() or (temp shl 12) or offset
+                if (offset == 0) {
+                    words += 0xea000000.toInt()
+                    nextMagic = instructionOffset + 16
+                    words += 0x4f800000
+                }
+                words += 0xbe000100.toInt() or targetDouble or (destination shl 16) or (destination shl 12) or temp
+            }
+            return ConversionPlan(words, magicLiteralOffset = nextMagic)
         }
         if (source == ValueType.LONG_LONG) {
             val helper = when (target) {
