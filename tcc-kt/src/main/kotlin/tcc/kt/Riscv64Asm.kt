@@ -376,19 +376,19 @@ class Riscv64Asm(
     }
 
     fun emitCsrUnary(name: String, operands: List<Operand>): Boolean {
-        if (operands.size != 1 && operands.size != 2) { expect("one or two CSR operands"); return false }
-        val rdOrCsr = operands[0]
-        val source = operands.getOrNull(1)
+        if (operands.size != 2) { expect("two CSR operands"); return false }
+        val first = operands[0]
+        val second = operands[1]
         val opcode = when (name) {
-            "csrr" -> 0x73 or (2 shl 12) or (rdOrCsr.register shl 7) or (rdOrCsr.expression.value.toInt() shl 20)
-            "csrw" -> 0x73 or (1 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
-            "csrs" -> 0x73 or (2 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
-            "csrc" -> 0x73 or (3 shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or encodeRs1(source?.register ?: 0)
-            "fsrm" -> 0x73 or (1 shl 12) or (2 shl 20) or encodeRd(rdOrCsr.register) or encodeRs1(source?.register ?: 0)
-            "fscsr" -> 0x73 or (1 shl 12) or (3 shl 20) or encodeRd(rdOrCsr.register) or encodeRs1(source?.register ?: 0)
+            "csrr" -> 0x73 or (2 shl 12) or encodeRd(first.register) or (second.expression.value.toInt() shl 20)
+            "csrw" -> 0x73 or (1 shl 12) or (first.expression.value.toInt() shl 20) or encodeRs1(second.register)
+            "csrs" -> 0x73 or (2 shl 12) or (first.expression.value.toInt() shl 20) or encodeRs1(second.register)
+            "csrc" -> 0x73 or (3 shl 12) or (first.expression.value.toInt() shl 20) or encodeRs1(second.register)
+            "fsrm" -> 0x73 or (1 shl 12) or (2 shl 20) or encodeRd(first.register) or encodeRs1(second.register)
+            "fscsr" -> 0x73 or (1 shl 12) or (3 shl 20) or encodeRd(first.register) or encodeRs1(second.register)
             "csrwi", "csrsi", "csrci" -> {
                 val funct = when (name) { "csrwi" -> 5; "csrsi" -> 6; else -> 7 }
-                0x73 or (funct shl 12) or (rdOrCsr.expression.value.toInt() shl 20) or ((source?.expression?.value?.toInt() ?: 0) shl 15)
+                0x73 or (funct shl 12) or (first.expression.value.toInt() shl 20) or ((second.expression.value.toInt() and 31) shl 15)
             }
             else -> { expect("CSR pseudo instruction"); return false }
         }
@@ -652,6 +652,38 @@ class Riscv64Asm(
         "c.slli" -> emitCompressedCi(name, 2, rd, source)
         "c.addi4spn" -> emitCompressedCiw(0, rd, source)
         else -> { expect("binary instruction"); false }
+    }
+
+    fun emitPseudoBinary(name: String, operands: List<Operand>, relocateAddress: (String) -> Unit = {}): Boolean {
+        if (operands.size != 2) { expect("two pseudo instruction operands"); return false }
+        val (rd, source) = operands
+        val zero = Operand(OP_REG)
+        val immediateZero = Operand(OP_IM12S)
+        when (name) {
+            "mv" -> return emitI(0x13, rd, source, immediateZero)
+            "not" -> return emitI(0x4013, rd, source, Operand(OP_IM12S, expression = Expression(-1)))
+            "neg" -> return emitR(0x40000033, rd, zero, source)
+            "negw" -> return emitR(0x4000003b, rd, zero, source)
+            "sext.w" -> return emitI(0x1b, rd, source, immediateZero)
+            "seqz" -> return emitI(0x3013, rd, source, Operand(OP_IM12S, expression = Expression(1)))
+            "snez" -> return emitR(0x3033, rd, zero, source)
+            "sltz" -> return emitR(0x2033, rd, source, zero)
+            "sgtz" -> return emitR(0x2033, rd, zero, source)
+            "fabs.s", "fabs.d", "fneg.s", "fneg.d", "fmv.s", "fmv.d" -> {
+                val format = if (name.endsWith(".d")) 1 else 0
+                val funct3 = when { name.startsWith("fneg") -> 1; name.startsWith("fabs") -> 2; else -> 0 }
+                return emitFloating(0x53 or (4 shl 27) or (format shl 25) or (funct3 shl 12), rd, source, source)
+            }
+            "csrr", "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci", "fsrm", "fscsr" -> return emitCsrUnary(name, operands)
+            "la", "lla" -> {
+                val symbol = source.expression.symbol
+                if (symbol == null) { error("Expected address symbol"); return false }
+                relocateAddress(symbol)
+                if (!emitU(0x17, rd, immediateZero)) return false
+                return emitI(if (name == "la") 0x2003 else 0x13, rd, rd, immediateZero)
+            }
+            else -> { expect("binary pseudo instruction"); return false }
+        }
     }
 
     fun emitMemoryInstruction(name: String, operands: List<Operand>, isStaticSymbol: (String) -> Boolean = { false },
