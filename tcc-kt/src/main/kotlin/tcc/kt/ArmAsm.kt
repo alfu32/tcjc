@@ -566,4 +566,60 @@ class ArmAsm(
         emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1,
             operands[0], operands[1], operands[2], opcode2, false)
     }
+
+    /** Encodes core VFP arithmetic, unary operations, and register comparisons. */
+    fun emitVfpDataProcessing(
+        group: String, token: Int, firstConditionToken: Int,
+        coprocessor: Int, operands: List<Operand>,
+    ) {
+        if (operands.size !in 2..3) { expect("two or three VFP operands"); return }
+        if (coprocessor !in 10..11) { expect("VFP coprocessor"); return }
+        val vectorKind = if (coprocessor == 10) Kind.VREG32 else Kind.VREG64
+        val values = if (operands.size == 2) listOf(operands[0].copy(), operands[0].copy(), operands[1].copy()) else operands.map { it.copy() }
+        if (values.any { it.kind != vectorKind }) { expect(if (coprocessor == 10) "s<number>" else "d<number>"); return }
+        var opcode1: Int
+        var opcode2: Int
+        when (group) {
+            "vmla" -> { opcode1 = 0; opcode2 = 0 }
+            "vmls" -> { opcode1 = 0; opcode2 = 2 }
+            "vnmls" -> { opcode1 = 1; opcode2 = 0 }
+            "vnmla" -> { opcode1 = 1; opcode2 = 2 }
+            "vmul" -> { opcode1 = 2; opcode2 = 0 }
+            "vnmul" -> { opcode1 = 2; opcode2 = 2 }
+            "vadd" -> { opcode1 = 3; opcode2 = 0 }
+            "vsub" -> { opcode1 = 3; opcode2 = 2 }
+            "vdiv" -> { opcode1 = 8; opcode2 = 0 }
+            "vneg" -> { opcode1 = 11; opcode2 = 2 }
+            "vabs", "vsqrt" -> { opcode1 = 11; opcode2 = 6 }
+            "vcmp", "vcmpe" -> { opcode1 = 11; opcode2 = if (group == "vcmp") 2 else 6 }
+            "vmov" -> { opcode1 = 11; opcode2 = 2 }
+            else -> { expect("known floating point instruction"); return }
+        }
+        val immediate = when (group) {
+            "vneg", "vsqrt" -> 1
+            "vabs", "vmov" -> 0
+            "vcmp" -> 4
+            "vcmpe" -> 4
+            else -> null
+        }
+        if (immediate != null && group != "vmov") {
+            if (values[2].kind != vectorKind) { expect("floating point register"); return }
+            values[1].kind = Kind.IMM8
+            values[1].value = Expression(immediate)
+        }
+        var vd = values[0].register
+        var vn = if (immediate != null) values[1].value.value else values[1].register
+        var vm = values[2].register
+        if (coprocessor == 10) {
+            if (values[0].register and 1 != 0) opcode1 = opcode1 or 4
+            vd = values[0].register ushr 1
+            if (immediate == null) {
+                if (values[1].register and 1 != 0) opcode2 = opcode2 or 4
+                vn = values[1].register ushr 1
+            }
+            if (values[2].register and 1 != 0) opcode2 = opcode2 or 1
+            vm = values[2].register ushr 1
+        }
+        emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1, vd, vn, vm, opcode2, false)
+    }
 }
