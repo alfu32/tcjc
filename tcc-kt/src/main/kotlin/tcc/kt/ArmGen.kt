@@ -393,6 +393,28 @@ object ArmGen {
         else -> IntegerOperationPlan(dataProcessingOpcode = 0x15)
     }
 
+    fun floatsInCoreRegisters(helperSymbol: String?, vfp: Boolean): Boolean {
+        val symbols = mutableSetOf("__floatundisf", "__floatundidf", "__fixunssfdi", "__fixunsdfdi",
+            "__floatdisf", "__floatdidf", "__fixsfdi", "__fixdfdi")
+        if (!vfp) symbols += "__fixunsxfdi"
+        return helperSymbol in symbols
+    }
+
+    /** Returns the FPA immediate-constant encoding, or zero when a literal is required. */
+    fun fpaFloatConstant(value: Double, finite: Boolean = value.isFinite()): Int {
+        if (!finite) return 0
+        var encoding = if (value < 0.0) 0x18 else 0x08
+        val magnitude = kotlin.math.abs(value)
+        if (magnitude == 0.0) return encoding
+        val immediate = when (magnitude) {
+            1.0 -> 1; 2.0 -> 2; 3.0 -> 3; 4.0 -> 4; 5.0 -> 5
+            0.5 -> 6; 10.0 -> 7
+            else -> return 0
+        }
+        encoding = encoding or immediate
+        return encoding
+    }
+
     /** Applies ARM EABI structure and homogeneous-float aggregate return rules. */
     fun structureReturn(size: Int, hardFloat: Boolean, variadic: Boolean, isFloat: Boolean, homogeneousFloatAggregate: Boolean, eabi: Boolean): StructReturn {
         if (!eabi) return StructReturn(0)
