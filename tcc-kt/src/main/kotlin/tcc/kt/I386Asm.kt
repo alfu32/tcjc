@@ -153,7 +153,7 @@ class I386Asm(
                     ?: operands.indices.firstOrNull { operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE or OP_INDIR) != 0 }
                     ?: -1 else -1
             val registerIndex = if (modrmIndex >= 0) operands.indices.firstOrNull { it != modrmIndex && operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0 } ?: -1 else -1
-            val direct64 = mnemonic.endsWith('q') || instruction.instructionType and OPC_48 != 0
+            val direct64 = (mnemonic.endsWith('q') && mnemonic !in setOf("pushq", "popq")) || instruction.instructionType and OPC_48 != 0
             val implicit64 = operands.any { it.type and X64_REG != 0 } && instruction.operandTypes.none { it == 3 } &&
                 mnemonic !in setOf("push", "pop", "pushq", "popq", "call", "jmp")
             val rexOperands = operands.map { RexOperand(it.type, it.register, it.index) }

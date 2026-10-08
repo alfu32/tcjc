@@ -3,6 +3,7 @@ package tcc.kt
 /** i386 opcode templates transcribed from i386-asm.h. */
 object I386AsmInstructionTable {
     val entries: List<I386Asm.Instruction> = listOf(
+        I386Asm.Instruction(0, 0x0, 0x3b, listOf(21, 149), mnemonic = "addb"),
         I386Asm.Instruction(0, 0xf31e, 0xe108, listOf(), mnemonic = "endbr32"),
         I386Asm.Instruction(0, 0xa6, 0x3, listOf(), mnemonic = "cmpsb"),
         I386Asm.Instruction(0, 0xa6, 0x3, listOf(), mnemonic = "scmpb"),
