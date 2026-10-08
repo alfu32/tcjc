@@ -29,6 +29,12 @@ class Arm64Gen(
     )
     data class AbiAssignment(val stackBytes: Int, val locations: List<Int>)
     data class CallPlan(val stackBytes: Int, val argumentLocations: List<Int>, val structureTemporaryOffsets: Map<Int, Int>)
+    data class FunctionFramePlan(
+        val parameterLocations: List<Int>, val parameterOffsets: List<Int>, val savedIntegerPairs: Int,
+        val savedVectorPairs: Int, val saveX8: Boolean, val variadicStackOffset: Int,
+        val generalRegisterOffset: Int, val vectorRegisterOffset: Int, val setupSlots: Int = 6,
+    )
+    data class VaArgPlan(val size: Int, val alignment: Int, val homogeneousCount: Int, val indirect: Boolean, val registerClass: String)
 
     companion object {
         const val NB_REGS = 28
@@ -613,5 +619,94 @@ class Arm64Gen(
         val high = byteCount shr 12
         if (low != 0uL) o(0x910003ff.toInt() or (low.toInt() shl 10))
         if (high != 0uL) o(0x914003ff.toInt() or (high.toInt() shl 10))
+    }
+
+    fun peParameterOffset(location: Int): Int = when {
+        location < 16 -> 160 + location / 2 * 8
+        location < 32 -> 16 + (location - 16) / 2 * 16
+        else -> 224 + ((location - 32) shr 1 shl 1)
+    }
+
+    /** Computes the fixed 224-byte AArch64 entry frame and variadic save-area boundaries. */
+    fun planFunctionFrame(parameterTypes: List<AbiType>, variadic: Boolean = false,
+        macho: Boolean = false, pe: Boolean = false): FunctionFramePlan {
+        val locations = assignAbiArguments(parameterTypes, if (variadic) parameterTypes.size else 0, macho, pe).locations
+        var saveX8 = variadic && !macho
+        var lastInteger = if (variadic && !macho) 4 else 0
+        var lastVector = if (variadic && !macho) 4 else 0
+        for (i in locations.indices) {
+            val location = locations[i]
+            if (location == 1) saveX8 = true
+            if (location in 0..15) {
+                val size = parameterTypes[i].size
+                lastInteger = maxOf(lastInteger, location / 4 + 1 + (size - 1) / 8)
+            } else if (location in 16..31) {
+                val hfa = homogeneousFloatAggregate(parameterTypes[i])
+                lastVector = maxOf(lastVector, location / 4 - 3 + if (hfa != 0) hfa - 1 else 0)
+            }
+        }
+        lastInteger = lastInteger.coerceAtMost(4)
+        lastVector = lastVector.coerceAtMost(4)
+        val offsets = locations.map { location ->
+            if (pe) peParameterOffset(location)
+            else when { location < 16 -> 160 + location / 2 * 8; location < 32 -> 16 + (location - 16) / 2 * 16; else -> 224 + ((location - 32) shr 1 shl 1) }
+        }
+        val stack = if (pe && variadic && locations.isNotEmpty()) peParameterOffset(locations.last()) else assignAbiArguments(parameterTypes, if (variadic) parameterTypes.size else 0, macho, pe).stackBytes
+        return FunctionFramePlan(locations, offsets, lastInteger, lastVector, saveX8, stack,
+            if (variadic && !macho) -64 else 0, if (variadic && !macho) -128 else 0)
+    }
+
+    /** Emits the fixed frame save sequence described by planFunctionFrame. */
+    fun emitFunctionPrologue(plan: FunctionFramePlan) {
+        o(0xa9b27bfd.toInt())
+        o(0x910003fd.toInt())
+        for (i in 0 until plan.savedVectorPairs) o(0xad0087e0.toInt() + i * 0x10000 + (i shl 11) + (i shl 1))
+        if (plan.saveX8) o(0xa90923e8.toInt())
+        for (i in 0 until plan.savedIntegerPairs) o(0xa90a07e0.toInt() + i * 0x10000 + (i shl 11) + (i shl 1))
+        repeat(plan.setupSlots) { o(ARM64_NOP) }
+    }
+
+    fun emitFunctionEpilogue() {
+        o(0x910003bf.toInt())
+        o(0xa8ce7bfd.toInt())
+        o(0xd65f03c0.toInt())
+    }
+
+    /** Emits the AAPCS64 va_list initial fields; pointerRegister points at the va_list object. */
+    fun emitVaStart(pointerRegister: Int, state: FunctionFramePlan, peTarget: Boolean = false, macho: Boolean = false) {
+        val r = intReg(pointerRegister)
+        if (peTarget) {
+            if (state.variadicStackOffset != 0) {
+                moveImmediate(30, state.variadicStackOffset.toULong())
+                o(0x8b1e03be.toInt())
+            } else o(0x910283be.toInt())
+            o(0xf900001e.toInt() or (r shl 5))
+            return
+        }
+        if (state.variadicStackOffset != 0) {
+            moveImmediate(30, (state.variadicStackOffset + 224).toULong())
+            o(0x8b1e03be.toInt())
+        } else o(0x910383be.toInt())
+        o(0xf900001e.toInt() or (r shl 5))
+        if (!macho) {
+            if (state.generalRegisterOffset != 0) {
+                if (state.variadicStackOffset != 0) o(0x910383be.toInt())
+                o(0xf900041e.toInt() or (r shl 5))
+            }
+            if (state.vectorRegisterOffset != 0) {
+                o(0x910243be.toInt())
+                o(0xf900081e.toInt() or (r shl 5))
+            }
+            moveImmediate(30, state.generalRegisterOffset.toLong().toULong())
+            o(0xb900181e.toInt() or (r shl 5))
+            moveImmediate(30, state.vectorRegisterOffset.toLong().toULong())
+            o(0xb9001c1e.toInt() or (r shl 5))
+        }
+    }
+
+    fun planVaArg(type: AbiType): VaArgPlan {
+        val hfa = if (isAbiFloat(type.type)) 1 else homogeneousFloatAggregate(type)
+        return VaArgPlan(type.size, type.alignment, hfa, type.size > 16,
+            if (hfa != 0) "vector" else "general")
     }
 }
