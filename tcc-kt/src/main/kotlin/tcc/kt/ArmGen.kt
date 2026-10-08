@@ -1,0 +1,127 @@
+package tcc.kt
+
+/** ARM code-generation constants and pure instruction helpers transcribed from arm-gen.c. */
+object ArmGen {
+    const val RC_INT = 0x0001
+    const val RC_FLOAT = 0x0002
+    const val RC_R0 = 0x0004
+    const val RC_R1 = 0x0008
+    const val RC_R2 = 0x0010
+    const val RC_R3 = 0x0020
+    const val RC_R12 = 0x0040
+    const val RC_F0 = 0x0080
+    const val RC_F1 = 0x0100
+    const val RC_F2 = 0x0200
+    const val RC_F3 = 0x0400
+    const val RC_F4 = 0x0800
+    const val RC_F5 = 0x1000
+    const val RC_F6 = 0x2000
+    const val RC_F7 = 0x4000
+
+    const val TREG_R0 = 0
+    const val TREG_R1 = 1
+    const val TREG_R2 = 2
+    const val TREG_R3 = 3
+    const val TREG_R12 = 4
+    const val TREG_F0 = 5
+    const val TREG_F1 = 6
+    const val TREG_F2 = 7
+    const val TREG_F3 = 8
+    const val TREG_F4 = 9
+    const val TREG_F5 = 10
+    const val TREG_F6 = 11
+    const val TREG_F7 = 12
+    const val TREG_SP = 13
+    const val TREG_LR = 14
+
+    val targetMachineDefinitions = listOf(
+        "__arm__", "__arm", "arm", "__arm_elf__", "__arm_elf", "arm_elf",
+        "__ARM_ARCH_4__", "__ARMEL__", "__APCS_32__",
+    )
+
+    fun registerClasses(vfp: Boolean): IntArray = buildList {
+        addAll(listOf(RC_INT or RC_R0, RC_INT or RC_R1, RC_INT or RC_R2, RC_INT or RC_R3,
+            RC_INT or RC_R12, RC_FLOAT or RC_F0, RC_FLOAT or RC_F1, RC_FLOAT or RC_F2, RC_FLOAT or RC_F3))
+        if (vfp) addAll(listOf(RC_FLOAT or RC_F4, RC_FLOAT or RC_F5, RC_FLOAT or RC_F6, RC_FLOAT or RC_F7))
+    }.toIntArray()
+
+    fun twoToMask(a: Int, b: Int, classes: IntArray): Int {
+        require(a in 0..14 && b in 0..14) { "compiler error! registers $a,$b is not valid" }
+        return (classes[a] or classes[b]) and (RC_INT or RC_FLOAT).inv()
+    }
+
+    fun registerMask(register: Int, classes: IntArray): Int {
+        require(register in 0..14) { "compiler error! register $register is not valid" }
+        return classes[register] and (RC_INT or RC_FLOAT).inv()
+    }
+
+    /** Encodes an ARM rotated-byte immediate, or returns zero when no encoding exists. */
+    fun stuffConstant(opcode: Int, constant: Int): Int {
+        var op = opcode
+        var value = constant
+        var tryNegative = 0
+        var negativeOpcode = 0
+        var negativeValue = 0
+        when (op and 0x01f00000) {
+            0x00800000, 0x00400000 -> {
+                tryNegative = 1
+                negativeOpcode = op xor 0x00c00000
+                negativeValue = -value
+            }
+            0x01a00000, 0x01e00000 -> {
+                tryNegative = 1
+                negativeOpcode = op xor 0x00400000
+                negativeValue = value.inv()
+            }
+            0x00200000 -> if (value == -1) return (op and 0xf010f000.toInt()) or ((op ushr 16) and 15) or 0x01e00000
+            0x00000000 -> if (value == -1) return (op and 0xf010f000.toInt()) or ((op ushr 16) and 15) or 0x01a00000
+            0x01c00000 -> {
+                tryNegative = 1
+                negativeOpcode = op xor 0x01c00000
+                negativeValue = value.inv()
+            }
+            0x01800000 -> if (value == -1) return (op and 0xfff0ffff.toInt()) or 0x01e00000
+        }
+        do {
+            if (value in 0..255) return op or value
+            for (rotation in 2 until 32 step 2) {
+                val mask = (0xff ushr rotation) or (0xff shl (32 - rotation))
+                if (value and mask.inv() == 0)
+                    return op or (rotation shl 7) or (value shl rotation) or (value ushr (32 - rotation))
+            }
+            op = negativeOpcode
+            value = negativeValue
+        } while (tryNegative-- > 0)
+        return 0
+    }
+
+    /** Encodes a PC-relative ARM branch displacement. */
+    fun encodeBranch(position: Int, address: Int, fail: Boolean, error: (String) -> Unit = { throw IllegalArgumentException(it) }): Int {
+        val displacement = address - position - 8
+        val words = displacement / 4
+        if (words >= 0x1000000 || words < -0x1000000) {
+            if (fail) error("FIXME: function bigger than 32MB")
+            return 0
+        }
+        return 0x0a000000 or (words and 0xffffff)
+    }
+
+    fun decodeBranch(position: Int, instruction: Int): Int {
+        var displacement = instruction and 0x00ffffff
+        if (displacement and 0x00800000 != 0) displacement -= 0x01000000
+        return displacement * 4 + position + 8
+    }
+
+    fun mapCondition(condition: Int): Int = when (condition) {
+        1 -> 0x30000000; 2 -> 0x20000000; 3 -> 0x00000000; 4 -> 0x10000000
+        5 -> 0x90000000.toInt(); 6 -> 0x80000000.toInt(); 7 -> 0x40000000; 8 -> 0x50000000
+        9 -> 0xb0000000.toInt(); 10 -> 0xa0000000.toInt(); 11 -> 0xd0000000.toInt(); 12 -> 0xc0000000.toInt()
+        else -> throw IllegalArgumentException("unexpected condition code")
+    }
+
+    fun negateCondition(condition: Int): Int = when (condition) {
+        1 -> 2; 2 -> 1; 3 -> 4; 4 -> 3; 5 -> 6; 6 -> 5
+        7 -> 8; 8 -> 7; 9 -> 10; 10 -> 9; 11 -> 12; 12 -> 11
+        else -> throw IllegalArgumentException("unexpected condition code")
+    }
+}
