@@ -400,6 +400,40 @@ object TccElf {
         return symbol.value
     }
 
+    fun relocateSymbols(
+        state: ElfState,
+        table: ElfSection,
+        resolveUndefined: Int,
+        dynamicLookup: (String) -> Long? = { null },
+        loadedLibraryLookup: (String) -> Long? = { null },
+        noStandardLibraries: Boolean = false,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        unresolved: (String) -> Unit = {},
+    ) {
+        val strings = state.symbolTable?.link ?: table.link ?: return
+        table.symbols.drop(1).forEach { symbol ->
+            val sectionIndex = symbol.sectionIndex
+            if (sectionIndex == SHN_UNDEF) {
+                if (resolveUndefined == 2) return@forEach
+                val name = elfString(strings, symbol.nameOffset)
+                if (resolveUndefined != 0 && !peTarget) {
+                    val undecorated = if (leadingUnderscore) name.drop(1) else name
+                    val address = if (noStandardLibraries) null else dynamicLookup(undecorated)
+                        ?: loadedLibraryLookup(undecorated)
+                    if (address != null) { symbol.value = address; return@forEach }
+                } else if (resolveUndefined == 0 && state.dynamicSymbolTable?.let { findElfSymbol(it, name) != 0 } == true) {
+                    return@forEach
+                }
+                if (name == "_fp_hw") return@forEach
+                if (symbolBind(symbol.info) == STB_WEAK) symbol.value = 0
+                else unresolved("unresolved reference to '$name'")
+            } else if (sectionIndex < 0xff00 && sectionIndex in state.sections.indices) {
+                symbol.value += state.sections[sectionIndex]?.address ?: 0L
+            }
+        }
+    }
+
     fun listElfSymbols(state: ElfState, callback: (String, Long) -> Unit) {
         val table = state.symbolTable ?: return
         val strings = table.link ?: return
