@@ -66,6 +66,12 @@ class Riscv64Gen(
         val fields: List<FieldType> = emptyList(),
     )
     data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
+    data class FunctionFrame(
+        val prologPosition: Int,
+        var localOffset: Int = -16,
+        var variadicRegisterCount: Int = 0,
+        var variadicListOffset: Int = 0,
+    )
 
     private var bytes = ByteArray(256)
     val relocations = mutableListOf<Relocation>()
@@ -396,6 +402,53 @@ class Riscv64Gen(
         write32(tail, second)
         return first
     }
+
+    /** Reserves the five instruction words patched by the C backend's epilog. */
+    fun beginFunctionFrame(): FunctionFrame {
+        val frame = FunctionFrame(position)
+        repeat(5) { emitInstruction(0) }
+        return frame
+    }
+
+    /** Saves the variadic integer argument registers in the frame, as gfunc_prolog does. */
+    fun saveVariadicRegisters(frame: FunctionFrame, firstRegister: Int) {
+        var register = firstRegister
+        while (register < 8) {
+            frame.variadicRegisterCount++
+            emitStore(0x23, 3, 8, integerRegister(register), -8 + frame.variadicRegisterCount * 8)
+            register++
+        }
+    }
+
+    /** Patches the reserved entry sequence and emits the shared function return sequence. */
+    fun endFunctionFrame(frame: FunctionFrame) {
+        val frameSize = (-frame.localOffset + 15) and -16
+        val afterProlog = position
+        val epilogPosition = position
+        emitImmediate(0x13, 0, 2, 8, frame.variadicRegisterCount * 8) // sp = s0 + vararg save area
+        emitImmediate(0x03, 3, 1, 8, -8) // restore ra
+        emitImmediate(0x03, 3, 8, 8, -16) // restore s0
+        emitImmediate(0x67, 0, 0, 1, 0) // ret
+        if (frameSize >= (1 shl 11)) {
+            emitImmediate(0x13, 0, 8, 2, 16 - frame.variadicRegisterCount * 8)
+            emitInstruction(0x37 or (5 shl 7) or lowOverflow(frameSize - 16))
+            emitImmediate(0x13, 0, 5, 5, sign11(frameSize - 16))
+            emitRegister(0x33, 0, 2, 2, 5, 0x20)
+            jumpAddress(frame.prologPosition + 20)
+        }
+        val savedPosition = position
+        codePosition.offset = frame.prologPosition
+        val smallSize = if (frameSize >= (1 shl 11)) 16 else frameSize
+        emitImmediate(0x13, 0, 2, 2, -smallSize)
+        emitStore(0x23, 3, 2, 1, smallSize - 8 - frame.variadicRegisterCount * 8)
+        emitStore(0x23, 3, 2, 8, smallSize - 16 - frame.variadicRegisterCount * 8)
+        if (frameSize < (1 shl 11)) emitImmediate(0x13, 0, 8, 2, smallSize - frame.variadicRegisterCount * 8)
+        else jumpAddress(epilogPosition + 16)
+        while (position < frame.prologPosition + 20) emitImmediate(0x13, 0, 0, 0, 0)
+        codePosition.offset = maxOf(savedPosition, afterProlog)
+    }
+
+    fun vaListOffset(frame: FunctionFrame): Int = frame.variadicListOffset
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
