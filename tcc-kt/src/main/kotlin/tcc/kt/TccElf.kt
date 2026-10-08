@@ -202,6 +202,22 @@ object TccElf {
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class ObjectMergeResult(val sections: List<SectionMergeInfo>, val symbolIndexes: IntArray)
     data class LoadedLibrary(val soname: String, val level: Int, val symbolIndexes: IntArray)
+    data class ElfOutputRequest(
+        val fileType: Int,
+        val machine: Int,
+        val entry: Long = 0,
+        val flags: Int = 0,
+        val dynamicOutput: Boolean = false,
+        val includeDebug: Boolean = true,
+        val objectOutput: Boolean = false,
+        val layout: LayoutRequest = LayoutRequest(),
+        val interpreter: ElfSection? = null,
+        val dynamic: ElfSection? = null,
+        val note: ElfSection? = null,
+        val ehFrameHeader: ElfSection? = null,
+        val bsdTarget: Boolean = false,
+        val prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
+    )
     data class LinkerScriptToken(val type: Int, val text: String)
 
     class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
@@ -1542,6 +1558,19 @@ object TccElf {
             }
         }
         return output.toByteArray()
+    }
+
+    /** Runs the common ELF output sizing, ordering, layout, and serialization passes. */
+    fun buildElfOutput(state: ElfState, request: ElfOutputRequest): ByteArray {
+        allocateSectionNames(state, request.objectOutput)
+        setSectionSizes(state, request.dynamicOutput, request.includeDebug, request.prepareDynamicRelocations)
+        val layoutRequest = request.layout.copy(dynamicOutput = request.dynamicOutput)
+        val sorted = sortSections(state, layoutRequest.elfOutput, request.bsdTarget, request.interpreter)
+        val layout = layoutSections(
+            state, sorted, layoutRequest, request.interpreter, request.dynamic, request.note, request.ehFrameHeader,
+        )
+        reorderSections(state, sorted.order.toIntArray())
+        return serializeElf(state, request.fileType, request.machine, request.entry, layout, request.flags)
     }
 
     /** Creates the ARM ABI attribute payload emitted by tccelf.c for DLL support. */
