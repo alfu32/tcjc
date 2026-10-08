@@ -54,6 +54,11 @@ object TccDbg {
         val symbols: MutableList<DebugSymbol> = mutableListOf(),
         val children: MutableList<DebugScope> = mutableListOf(),
     )
+    data class DebugScopeStack(
+        val scopes: MutableList<DebugScope> = mutableListOf(),
+        var localTypeCount: Int = 0,
+        var forwardTypeCount: Int = 0,
+    )
     data class DebugFunctionState(
         val name: String,
         val external: Boolean,
@@ -620,6 +625,18 @@ object TccDbg {
     fun closeDebugScope(scopes: MutableList<DebugScope>, end: Int): DebugScope? {
         if (scopes.isEmpty()) return null
         return scopes.removeAt(scopes.lastIndex).also { it.end = end }
+    }
+
+    /** Adapts N_LBRAC/N_RBRAC events to the nested scope and type checkpoint state. */
+    fun debugStabn(stack: DebugScopeStack, type: Int, value: Int, resolveForwards: (fromIndex: Int, endIndex: Int) -> Unit = { _, _ -> }): DebugScope? {
+        if (type == 0xc0) { // N_LBRAC
+            return openDebugScope(stack.scopes, value, stack.localTypeCount, stack.forwardTypeCount)
+        }
+        val active = stack.scopes.lastOrNull() ?: return null
+        resolveForwards(active.lastForwardTypeIndex, stack.forwardTypeCount)
+        stack.localTypeCount = active.lastTypeIndex
+        stack.forwardTypeCount = active.lastForwardTypeIndex
+        return closeDebugScope(stack.scopes, value)
     }
 
     fun findDebugType(entries: List<DebugTypeEntry>, identity: Long): Int =
