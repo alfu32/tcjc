@@ -1,0 +1,5 @@
+tmux
+watch -n 1 'git status --short'
+watch -n 1 'git status'
+watch -n 1 'tail -n +6 IMPL.PLAN.md | head -n20'
+
