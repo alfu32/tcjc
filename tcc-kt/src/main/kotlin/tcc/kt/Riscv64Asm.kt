@@ -26,6 +26,10 @@ class Riscv64Asm(
         var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
     )
     data class ConstraintResult(val outputRegister: Int, val allocationMasks: IntArray, val sortedOperands: List<Int>)
+    data class InlineCodeHooks(
+        val load: (Int, InlineOperand) -> Unit = { _, _ -> }, val store: (Int, InlineOperand) -> Unit = { _, _ -> },
+        val loadAddress: (Int, InlineOperand) -> Unit = { _, _ -> },
+    )
 
     companion object {
         const val REGISTER_COUNT = 64
@@ -273,6 +277,50 @@ class Riscv64Asm(
             }
         }
         return ConstraintResult(outputRegister, masks, sorted)
+    }
+
+    fun tccIntegerRegister(allocatedRegister: Int): Int = registerValue(allocatedRegister) - 10
+    fun tccFloatingRegister(allocatedRegister: Int): Int = registerValue(allocatedRegister) - 10 + 8
+
+    fun generateInlineAsm(operands: List<InlineOperand>, outputCount: Int, isOutput: Boolean,
+        clobbered: BooleanArray, outputRegister: Int, hooks: InlineCodeHooks = InlineCodeHooks()) {
+        val savedRegisters = intArrayOf(8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 40, 41, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59)
+        val used = BooleanArray(REGISTER_COUNT)
+        for (register in 0 until minOf(clobbered.size, REGISTER_COUNT)) used[register] = clobbered[register]
+        operands.forEach { if (it.register in 0 until REGISTER_COUNT) used[it.register] = true }
+        if (!isOutput) {
+            for (register in savedRegisters) if (used[register]) {
+                emitOpcode(0x13 or encodeRd(2) or encodeRs1(2) or (-8 shl 20)) // addi sp, sp, -8
+                val save = if (isFloatRegister(register)) 0x3027 else 0x3023
+                emitOpcode(save or encodeRs2(register) or encodeRs1(2))
+            }
+            operands.forEachIndexed { index, operand ->
+                if (operand.register < 0) return@forEachIndexed
+                if (operand.valueKind == InlineValueKind.LOCAL_LVALUE && operand.isMemory) {
+                    hooks.loadAddress(tccIntegerRegister(operand.register), operand)
+                } else if (index >= outputCount || operand.isReadWrite) {
+                    val register = if (isFloatRegister(operand.register)) tccFloatingRegister(operand.register) else tccIntegerRegister(operand.register)
+                    hooks.load(register, operand)
+                }
+            }
+        } else {
+            for ((index, operand) in operands.take(outputCount).withIndex()) {
+                if (operand.register < 0) continue
+                if (operand.valueKind == InlineValueKind.LOCAL_LVALUE && !operand.isMemory) {
+                    hooks.loadAddress(tccIntegerRegister(outputRegister), operand)
+                    val register = if (isFloatRegister(operand.register)) tccFloatingRegister(operand.register) else tccIntegerRegister(operand.register)
+                    hooks.store(register, operand)
+                } else {
+                    val register = if (isFloatRegister(operand.register)) tccFloatingRegister(operand.register) else tccIntegerRegister(operand.register)
+                    hooks.store(register, operand)
+                }
+            }
+            for (register in savedRegisters.reversed()) if (used[register]) {
+                val restore = if (isFloatRegister(register)) 0x3007 else 0x3003
+                emitOpcode(restore or encodeRd(register) or encodeRs1(2))
+                emitOpcode(0x13 or encodeRd(2) or encodeRs1(2) or (8 shl 20)) // addi sp, sp, 8
+            }
+        }
     }
 
     fun substituteAssemblyOperand(value: AsmValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false): String {
