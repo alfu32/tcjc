@@ -683,6 +683,47 @@ object TccElf {
         return output.toByteArray()
     }
 
+    /** Creates the ARM ABI attribute payload emitted by tccelf.c for DLL support. */
+    fun createArmAttributeSection(state: ElfState, cpuVersion: Int, hardFloat: Boolean): ElfSection {
+        val bytes = byteArrayOf(
+            0x41, 0x2c, 0, 0, 0, 'a'.code.toByte(), 'e'.code.toByte(), 'a'.code.toByte(),
+            'b'.code.toByte(), 'i'.code.toByte(), 0, 1, 0x22, 0, 0, 0, 5, 0x36, 0,
+            6, if (cpuVersion >= 7) 0x0a else 0x06, 8, 1, 9, 1, 0x0a, 2, 0x12, 4,
+            0x14, 1, 0x15, 1, 0x17, 3, 0x18, 1, 0x19, 1, 0x1a, 2, 0x1c, 1, 0x22, 1,
+        )
+        val section = newSection(state, ".ARM.attributes", 0x70000003, 0)
+        section.alignment = 1
+        section.data.addAll(bytes.toList())
+        section.dataOffset = bytes.size
+        section.outputSize = bytes.size.toLong()
+        if (!hardFloat) {
+            section.data[26] = 0
+            section.data[41] = 0x1e
+            section.data[42] = 0x06
+        }
+        return section
+    }
+
+    /** Creates the default RISC-V ABI attribute payload used by the C implementation. */
+    fun createRiscvAttributeSection(state: ElfState): ElfSection {
+        val arch = "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0\u0000"
+        val archBytes = arch.toByteArray(Charsets.US_ASCII)
+        val payload = mutableListOf<Byte>()
+        payload += 0x41
+        appendInt32(payload, 20 + archBytes.size)
+        payload.addAll("riscv\u0000".toByteArray(Charsets.US_ASCII).toList())
+        appendInt32(payload, 5 + archBytes.size)
+        payload += 5
+        appendInt32(payload, archBytes.size)
+        payload.addAll(archBytes.toList())
+        val section = newSection(state, ".riscv.attributes", 0x70000003, 0)
+        section.alignment = 1
+        section.data.addAll(payload)
+        section.dataOffset = payload.size
+        section.outputSize = payload.size.toLong()
+        return section
+    }
+
     /** Serializes an ELF relocatable, executable, or shared object into a byte array. */
     fun serializeElf(
         state: ElfState,
