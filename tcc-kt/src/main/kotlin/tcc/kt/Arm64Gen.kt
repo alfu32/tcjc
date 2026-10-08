@@ -743,6 +743,33 @@ class Arm64Gen(
         o(0xd65f03c0.toInt())
     }
 
+    /** Patches the six reserved entry instructions with the completed stack frame adjustment. */
+    fun patchFunctionStackSetup(setupOffset: Int, frameBytes: ULong) {
+        val words = mutableListOf<Int>()
+        if (frameBytes != 0uL) {
+            if (frameBytes shr 24 == 0uL) {
+                val low = frameBytes and 0xfffuL
+                val high = (frameBytes shr 12) and 0xfffuL
+                if (low != 0uL) words += 0xd10003ff.toInt() or (low.toInt() shl 10)
+                if (high != 0uL) words += 0xd14003ff.toInt() or (high.toInt() shl 10)
+            } else {
+                val immediate = movi(16, frameBytes)
+                if (immediate != 0) words += immediate
+                else {
+                    val halves = (0..3).map { ((frameBytes shr (it * 16)) and 0xffffuL).toInt() }
+                    val first = halves.indexOfFirst { it != 0 }
+                    if (first >= 0) {
+                        words += ARM64_MOVZ64 or 16 or (halves[first] shl 5) or (first shl 21)
+                        for (i in first + 1..3) if (halves[i] != 0) words += ARM64_MOVK or 0x80000000.toInt() or 16 or (halves[i] shl 5) or (i shl 21)
+                    }
+                }
+                words += 0xcb3063ff.toInt()
+            }
+        }
+        require(words.size <= 6) { "stack setup exceeds reserved function prologue slots" }
+        for (i in 0 until 6) patchWord(setupOffset + i * 4, words.getOrElse(i) { ARM64_NOP })
+    }
+
     /** Emits the AAPCS64 va_list initial fields; pointerRegister points at the va_list object. */
     fun emitVaStart(pointerRegister: Int, state: FunctionFramePlan, peTarget: Boolean = false, macho: Boolean = false) {
         val r = intReg(pointerRegister)
