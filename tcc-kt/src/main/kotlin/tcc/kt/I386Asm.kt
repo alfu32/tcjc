@@ -366,6 +366,28 @@ class I386Asm(private val emit: (Int) -> Unit) {
         return expression.value - 4
     }
 
+    /** Chooses the short branch form for a resolvable in-section target, else the near form. */
+    fun branch(opcode: Int, expression: Expression, position: Int, sameSectionAddress: (String) -> Int?): Boolean {
+        val target = expression.symbol?.let(sameSectionAddress)
+        val shortDelta = if (target != null) expression.value + target - position - 2 else Int.MAX_VALUE
+        if (shortDelta in -128..127) {
+            emit(opcode)
+            emit(shortDelta)
+            return true
+        }
+        when (opcode) {
+            0xeb -> emit(0xe9)
+            in 0x70..0x7f -> { emit(0x0f); emit(opcode + 0x10) }
+            else -> throw IllegalArgumentException("invalid short branch opcode 0x${opcode.toString(16)}")
+        }
+        if (target != null) emit32(expression.value + target - position - 5)
+        else {
+            emitRelocation(expression.symbol, expression.value, true)
+            emit32(expression.value - 4)
+        }
+        return false
+    }
+
     /** Emits the assembler's condition-code suffix for a conditional branch. */
     fun conditionCode(tokenOffset: Int): Int {
         require(tokenOffset in conditionCodes.indices) { "unknown condition-code token offset $tokenOffset" }
