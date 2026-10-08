@@ -80,6 +80,7 @@ object TccCoff {
         var debugEnabled: Boolean = false,
         var mainEntryPoint: Int = 0,
     )
+    data class Output(val bytes: ByteArray, val fileHeader: FileHeader, val optionalHeader: OptionalHeader, val sections: List<SectionHeader>)
 
     fun outputTheSection(section: Section): Boolean = section.name == ".text" || section.name == ".data"
 
@@ -139,4 +140,177 @@ object TccCoff {
         )
         return header to optional
     }
+
+    /** Lays out and serializes the file, optional header, section headers, data, relocations, and line records. */
+    fun serialize(state: State): Output {
+        val (file, optional) = createOutputHeaders(state)
+        val included = state.sections.filter(::outputTheSection)
+        val headers = included.map { section ->
+            SectionHeader(section.name, section.address, section.address, section.size, flags = getCoffFlags(section.name),
+                relocationCount = section.relocations.size, lineCount = section.lineNumbers.size)
+        }
+        file.sections = included.size
+        file.symbolCount = if (state.debugEnabled) state.symbols.sumOf { coffEntryCount(it) } else 0
+        var cursor = FILE_HEADER_SIZE + OPTIONAL_HEADER_SIZE + headers.size * SECTION_HEADER_SIZE
+        included.forEachIndexed { index, section ->
+            headers[index].dataOffset = cursor
+            cursor += section.size
+        }
+        included.forEachIndexed { index, section ->
+            if (section.relocations.isNotEmpty()) {
+                headers[index].relocationOffset = cursor
+                cursor += section.relocations.size * 10
+            }
+        }
+        included.forEachIndexed { index, section ->
+            if (section.lineNumbers.isNotEmpty()) {
+                headers[index].lineOffset = cursor
+                cursor += section.lineNumbers.size * LINE_NUMBER_SIZE
+            }
+        }
+        file.symbolOffset = cursor
+        cursor += file.symbolCount * SYMBOL_SIZE
+        val outputSymbols = if (state.debugEnabled) sortSymbolTable(state.symbols, state.functionDebug) else state.symbols
+        val strings = if (state.debugEnabled) buildStringTable(outputSymbols) else byteArrayOf()
+        if (state.debugEnabled) cursor += 4 + strings.size
+        val output = ByteArray(cursor)
+        writeFileHeader(output, file)
+        writeOptionalHeader(output, FILE_HEADER_SIZE, optional)
+        headers.forEachIndexed { index, header -> writeSectionHeader(output, FILE_HEADER_SIZE + OPTIONAL_HEADER_SIZE + index * SECTION_HEADER_SIZE, header) }
+        included.forEachIndexed { index, section ->
+            val header = headers[index]
+            copyAt(output, header.dataOffset, section.data, section.size)
+            var offset = header.relocationOffset
+            section.relocations.forEach { relocation ->
+                put32(output, offset, relocation.address.toInt()); put16(output, offset + 4, relocation.symbolIndex)
+                put16(output, offset + 6, relocation.displacement); put16(output, offset + 8, relocation.type)
+                offset += 10
+            }
+            offset = header.lineOffset
+            section.lineNumbers.forEach { line ->
+                put32(output, offset, line.symbolIndex ?: line.address.toInt())
+                put16(output, offset + 4, if (line.symbolIndex != null) 0 else line.line)
+                offset += LINE_NUMBER_SIZE
+            }
+        }
+        if (state.debugEnabled) {
+            val symbolData = serializeSymbols(outputSymbols, state.functionDebug)
+            copyAt(output, file.symbolOffset, symbolData, symbolData.size)
+            put32(output, file.symbolOffset + symbolData.size, strings.size + 4)
+            copyAt(output, file.symbolOffset + symbolData.size + 4, strings, strings.size)
+        }
+        return Output(output, file, optional, headers)
+    }
+
+    private fun coffEntryCount(symbol: ElfSymbol): Int = when (symbol.info) {
+        FILE_SYMBOL -> 1
+        FUNCTION_SYMBOL -> 6
+        else -> 2
+    }
+
+    private fun buildStringTable(symbols: List<ElfSymbol>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        symbols.filter { it.name.toByteArray().size > 8 }.forEach { symbol ->
+            require(out.size() + symbol.name.toByteArray().size < MAX_STRING_TABLE) { "String table too large" }
+            out.write(symbol.name.toByteArray(Charsets.UTF_8)); out.write(0)
+        }
+        return out.toByteArray()
+    }
+
+    private fun serializeSymbols(symbols: List<ElfSymbol>, functions: List<FunctionDebug>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        var symbolIndex = 0
+        var stringOffset = 4
+        for (symbol in symbols) {
+            val entry = ByteArray(SYMBOL_SIZE)
+            val symbolNameOffset = stringOffset
+            if (symbol.name.toByteArray(Charsets.UTF_8).size > 8) stringOffset += symbol.name.toByteArray(Charsets.UTF_8).size + 1
+            writeSymbolName(entry, symbol.name, symbolNameOffset)
+            put32(entry, 8, symbol.value.toInt())
+            when (symbol.info) {
+                FILE_SYMBOL -> { put32(entry, 8, 33); put16(entry, 12, DEBUG_SECTION); put8(entry, 16, 103) }
+                FUNCTION_SYMBOL -> {
+                    val debug = functions.firstOrNull { it.name == symbol.name } ?: error("debug info can't find function: ${symbol.name}")
+                    put16(entry, 12, 1); put16(entry, 14, 4 or (2 shl 4)); put8(entry, 16, 2); put8(entry, 17, 1)
+                    out.write(entry)
+                    val auxFunc = ByteArray(18)
+                    put32(auxFunc, 4, (debug.endAddress - symbol.value).toInt())
+                    put32(auxFunc, 8, debug.lineFilePointer)
+                    put32(auxFunc, 12, symbolIndex + 6)
+                    out.write(auxFunc)
+                    writeFunctionBoundary(out, ".bf", symbol.value.toInt(), 1, debug.lineEntryCount, symbolIndex + 6, true)
+                    writeFunctionBoundary(out, ".ef", debug.endAddress.toInt(), 1, debug.lastLine, 0, false)
+                    symbolIndex += 6
+                    continue
+                }
+                else -> {
+                    val (type, storage) = coffType(symbol.other)
+                    put16(entry, 12, 2); put16(entry, 14, type); put8(entry, 16, storage); put8(entry, 17, 1)
+                }
+            }
+            out.write(entry)
+            if (symbol.info != FILE_SYMBOL) out.write(ByteArray(18))
+            symbolIndex += coffEntryCount(symbol)
+        }
+        return out.toByteArray()
+    }
+
+    private fun writeFunctionBoundary(out: java.io.ByteArrayOutputStream, name: String, value: Int, section: Int, line: Int, nextEntry: Int, begin: Boolean) {
+        val entry = ByteArray(18)
+        writeInlineName(entry, name)
+        put32(entry, 8, value); put16(entry, 12, section); put8(entry, 16, 101); put8(entry, 17, 1)
+        out.write(entry)
+        val aux = ByteArray(18)
+        if (begin) {
+            put16(aux, 6, line)
+            put32(aux, 12, nextEntry)
+        } else put16(aux, 4, line)
+        out.write(aux)
+    }
+
+    private fun coffType(baseType: Int): Pair<Int, Int> = when (baseType and 0xf) {
+        1 -> 2 to 2; 2 -> 3 to 2; 3 -> 4 to 2; 8 -> 6 to 2; 9 -> 7 to 2
+        else -> 4 to 6
+    }
+
+    private fun writeSymbolName(target: ByteArray, name: String, stringOffset: Int) {
+        val nameBytes = name.toByteArray(Charsets.UTF_8)
+        if (nameBytes.size <= 8) writeInlineName(target, name)
+        else {
+            put32(target, 0, 0)
+            put32(target, 4, stringOffset)
+        }
+    }
+
+    private fun writeInlineName(target: ByteArray, name: String) {
+        val bytes = name.toByteArray(Charsets.UTF_8).take(8)
+        bytes.forEachIndexed { index, byte -> target[index] = byte }
+    }
+
+    private fun writeFileHeader(output: ByteArray, header: FileHeader) {
+        put16(output, 0, header.magic); put16(output, 2, header.sections); put32(output, 4, header.timestamp)
+        put32(output, 8, header.symbolOffset); put32(output, 12, header.symbolCount); put16(output, 16, header.optionalHeaderSize)
+        put16(output, 18, header.flags); put16(output, 20, header.targetId)
+    }
+
+    private fun writeOptionalHeader(output: ByteArray, offset: Int, header: OptionalHeader) {
+        put16(output, offset, header.magic); put16(output, offset + 2, header.version)
+        put32(output, offset + 4, header.textSize); put32(output, offset + 8, header.dataSize); put32(output, offset + 12, header.bssSize)
+        put32(output, offset + 16, header.entryPoint); put32(output, offset + 20, header.textStart); put32(output, offset + 24, header.dataStart)
+    }
+
+    private fun writeSectionHeader(output: ByteArray, offset: Int, header: SectionHeader) {
+        val name = header.name.toByteArray().take(8); name.forEachIndexed { i, value -> output[offset + i] = value }
+        put32(output, offset + 8, header.physicalAddress.toInt()); put32(output, offset + 12, header.virtualAddress.toInt())
+        put32(output, offset + 16, header.size); put32(output, offset + 20, header.dataOffset); put32(output, offset + 24, header.relocationOffset)
+        put32(output, offset + 28, header.lineOffset); put32(output, offset + 32, header.relocationCount); put32(output, offset + 36, header.lineCount)
+        put32(output, offset + 40, header.flags); put16(output, offset + 44, 0); put16(output, offset + 46, 0)
+    }
+
+    private fun copyAt(target: ByteArray, offset: Int, source: ByteArray, length: Int) {
+        if (length > 0) source.copyInto(target, offset, 0, minOf(length, source.size))
+    }
+    private fun put8(data: ByteArray, offset: Int, value: Int) { data[offset] = value.toByte() }
+    private fun put16(data: ByteArray, offset: Int, value: Int) { put8(data, offset, value); put8(data, offset + 1, value ushr 8) }
+    private fun put32(data: ByteArray, offset: Int, value: Int) { put16(data, offset, value); put16(data, offset + 2, value ushr 16) }
 }
