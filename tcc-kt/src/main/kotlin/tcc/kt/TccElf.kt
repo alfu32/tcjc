@@ -185,6 +185,7 @@ object TccElf {
                 ensureHashChainWord(hash, index)
                 writeInt32(hash.data, 8 + (bucketCount + index) * 4, oldFirst)
                 writeInt32(hash.data, 4, readInt32(hash.data, 4) + 1)
+                if (hash.hashedSymbols > 2 * bucketCount) rebuildHash(section)
             } else {
                 hash.hashChains += 0
                 ensureHashChainWord(hash, index)
@@ -239,6 +240,27 @@ object TccElf {
     private fun ensureHashChainWord(hash: ElfSection, symbolIndex: Int) {
         val needed = 8 + (readInt32(hash.data, 0) + symbolIndex + 1) * 4
         while (hash.data.size < needed) hash.data += 0
+        hash.dataOffset = hash.data.size
+    }
+    private fun rebuildHash(symbols: ElfSection) {
+        val hash = requireNotNull(symbols.hash)
+        val oldCount = readInt32(hash.data, 4)
+        val bucketCount = (readInt32(hash.data, 0) * 2).coerceAtLeast(1)
+        hash.data.clear(); hash.dataOffset = 0
+        appendInt32(hash, bucketCount)
+        appendInt32(hash, oldCount)
+        repeat(bucketCount + oldCount) { appendInt32(hash, 0) }
+        hash.hashedSymbols = 0
+        symbols.symbols.forEachIndexed { index, symbol ->
+            if (index == 0 || symbolBind(symbol.info) == STB_LOCAL) return@forEachIndexed
+            val name = elfString(requireNotNull(symbols.link), symbol.nameOffset)
+            val bucket = elfHash(name) % bucketCount
+            val bucketOffset = 8 + bucket * 4
+            val previous = readInt32(hash.data, bucketOffset)
+            writeInt32(hash.data, bucketOffset, index)
+            writeInt32(hash.data, 8 + (bucketCount + index) * 4, previous)
+            hash.hashedSymbols++
+        }
     }
     private fun appendInt32(section: ElfSection, value: Int) {
         repeat(4) { shift -> section.data += (value ushr (shift * 8)).toByte() }
