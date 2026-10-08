@@ -13,6 +13,39 @@ class LibTcc(
         var errorHandler: ((Any?, String) -> Unit)? = null,
         var warnError: Boolean = false, var warnNone: Boolean = false, var warningOption: Int = 0,
         var currentFilename: String? = null, var errors: Int = 0, var verbose: Int = 0,
+        var outputType: Int = 0, var fileType: Int = 0, var outputFormat: Int = 0,
+        var noStandardIncludes: Boolean = false, var noStandardLibraryPaths: Boolean = false,
+        var noStandardLibrary: Boolean = false, var staticLink: Boolean = false, var debug: Boolean = false,
+        var positionIndependentExecutable: Boolean = false, var gnuExtensions: Boolean = true,
+        var tccExtensions: Boolean = true, var noCommon: Boolean = true, var cVersion: Int = 199901,
+        var warnImplicitFunction: Boolean = true, var warnDiscardedQualifiers: Boolean = true,
+        var msExtensions: Boolean = true, var unwindTables: Boolean = true,
+        var soname: String? = null, var rpath: String? = null, var outputFile: String? = null,
+        var commandLineDefinitions: String = "", var commandLineIncludes: String = "",
+        val includePaths: MutableList<String> = mutableListOf(), val systemIncludePaths: MutableList<String> = mutableListOf(),
+        val libraryPaths: MutableList<String> = mutableListOf(), val crtPaths: MutableList<String> = mutableListOf(),
+        val inputFiles: MutableList<String> = mutableListOf(), val targetDependencies: MutableList<String> = mutableListOf(),
+        val pragmaLibraries: MutableList<String> = mutableListOf(), val loadedLibraries: MutableList<DllReference> = mutableListOf(),
+        var entryName: String? = null, var initSymbol: String? = null, var finiSymbol: String? = null,
+        var mapFile: String? = null, var dependencyOutput: String? = null,
+    )
+    data class DllReference(val name: String, var level: Int = 0, var found: Boolean = false, var index: Int = 0, var handle: Any? = null)
+    data class CompileHooks(
+        val enter: (CompilerState) -> Unit = {}, val openSource: (String, String?, Int) -> Unit = { _, _, _ -> },
+        val preprocessStart: (CompilerState, Int) -> Unit = { _, _ -> }, val generatorInit: (CompilerState) -> Unit = {},
+        val preprocess: () -> Unit = {}, val beginObjectFile: () -> Unit = {}, val assemble: (Boolean) -> Unit = {},
+        val compile: () -> Unit = {}, val endObjectFile: () -> Unit = {}, val generatorFinish: () -> Unit = {},
+        val preprocessEnd: () -> Unit = {}, val exit: (CompilerState) -> Unit = {},
+    )
+    data class OutputHooks(
+        val addSystemIncludes: (CompilerState) -> Unit = {}, val createSections: (CompilerState) -> Unit = {},
+        val addLibraryPaths: (CompilerState) -> Unit = {}, val addCrtPaths: (CompilerState) -> Unit = {},
+        val addCrtBegin: (CompilerState) -> Unit = {}, val addTargetSystemPaths: (CompilerState) -> Unit = {},
+    )
+    data class FileHooks(
+        val open: (String) -> Int = { -1 }, val close: (Int) -> Unit = {},
+        val compile: (CompilerState, Int, String, Int) -> Int = { _, _, _, _ -> 0 },
+        val binaryType: (Int) -> Int = { 0 }, val loadBinary: (CompilerState, Int, String, Int) -> Int = { _, _, _, _ -> 0 },
     )
     data class FunctionContext(var callingConvention: Int = 0)
     data class BufferedSource(
@@ -33,6 +66,19 @@ class LibTcc(
         const val ERROR_FATAL = 2
         const val DEFAULT_IO_BUFFER_SIZE = 4096
         const val CH_EOB = 0x1a
+        const val OUTPUT_PREPROCESS = 1
+        const val OUTPUT_OBJECT = 2
+        const val OUTPUT_MEMORY = 3
+        const val OUTPUT_EXECUTABLE = 4
+        const val FORMAT_ELF = 1
+        const val TYPE_ASM = 1
+        const val TYPE_ASM_PREPROCESSED = 2
+        const val TYPE_C = 4
+        const val TYPE_BINARY = 8
+        const val TYPE_PRINT_ERROR = 16
+        const val TYPE_WHOLE_ARCHIVE = 32
+        const val FILE_NOT_FOUND = -2
+        const val FILE_NOT_RECOGNIZED = -3
     }
 
     var state: CompilerState? = null
@@ -50,6 +96,159 @@ class LibTcc(
 
     fun enterState(next: CompilerState) { state = next }
     fun exitState(expected: CompilerState? = state) { if (state === expected) state = null }
+
+    fun createState(libraryPath: String, configureOptions: ((CompilerState) -> Unit)? = null): CompilerState =
+        CompilerState(libraryPath = libraryPath).also { configureOptions?.invoke(it) }
+
+    fun deleteState(compilerState: CompilerState, release: (String) -> Unit = {}) {
+        compilerState.listOfOwnedPaths().forEach(release)
+        compilerState.includePaths.clear(); compilerState.systemIncludePaths.clear()
+        compilerState.libraryPaths.clear(); compilerState.crtPaths.clear()
+        compilerState.inputFiles.clear(); compilerState.targetDependencies.clear()
+        compilerState.pragmaLibraries.clear(); compilerState.loadedLibraries.clear()
+        if (state === compilerState) state = null
+    }
+
+    private fun CompilerState.listOfOwnedPaths(): List<String> = listOfNotNull(
+        libraryPath.takeIf(String::isNotEmpty), soname, rpath, outputFile, entryName, initSymbol, finiSymbol, mapFile, dependencyOutput,
+    )
+
+    fun setOutputType(compilerState: CompilerState, requestedType: Int, headers: (CompilerState) -> List<String>,
+        libraries: (CompilerState) -> List<String>, crt: (CompilerState) -> List<String>, hooks: OutputHooks = OutputHooks(),
+        targetPlatform: String = "unix"): Int {
+        compilerState.outputType = if (compilerState.positionIndependentExecutable && requestedType == OUTPUT_EXECUTABLE) requestedType or 0x100 else requestedType
+        if (!compilerState.noStandardIncludes) {
+            hooks.addSystemIncludes(compilerState)
+            compilerState.systemIncludePaths.addAll(headers(compilerState))
+        }
+        if (requestedType == OUTPUT_PREPROCESS) { compilerState.debug = false; return 0 }
+        hooks.createSections(compilerState)
+        if (requestedType == OUTPUT_OBJECT) { compilerState.outputFormat = FORMAT_ELF; return 0 }
+        if (!compilerState.noStandardLibraryPaths) {
+            hooks.addLibraryPaths(compilerState)
+            compilerState.libraryPaths.addAll(libraries(compilerState))
+        }
+        hooks.addTargetSystemPaths(compilerState)
+        if (targetPlatform !in setOf("pe", "macho")) {
+            hooks.addCrtPaths(compilerState)
+            compilerState.crtPaths.addAll(crt(compilerState))
+            if (requestedType != OUTPUT_MEMORY && !compilerState.noStandardLibrary) hooks.addCrtBegin(compilerState)
+        }
+        return if (compilerState.errors != 0) -1 else 0
+    }
+
+    fun addIncludePath(compilerState: CompilerState, path: String): Int { compilerState.includePaths += splitSearchPath(path); return 0 }
+    fun addSystemIncludePath(compilerState: CompilerState, path: String): Int { compilerState.systemIncludePaths += splitSearchPath(path); return 0 }
+    fun addLibraryPath(compilerState: CompilerState, path: String): Int { compilerState.libraryPaths += splitSearchPath(path); return 0 }
+    fun setLibraryPath(compilerState: CompilerState, path: String) { compilerState.libraryPath = path }
+
+    fun defineSymbol(compilerState: CompilerState, symbol: String, value: String? = null) {
+        val equal = symbol.indexOf('=')
+        val name = if (equal < 0) symbol else symbol.substring(0, equal)
+        val resolved = value ?: if (equal >= 0) symbol.substring(equal + 1) else "1"
+        compilerState.commandLineDefinitions += "#define $name $resolved\n"
+    }
+
+    fun undefineSymbol(compilerState: CompilerState, symbol: String) {
+        compilerState.commandLineDefinitions += "#undef $symbol\n"
+    }
+
+    fun compileSource(compilerState: CompilerState, fileType: Int, text: String?, fileDescriptor: Int, hooks: CompileHooks): Int {
+        enterState(compilerState)
+        hooks.enter(compilerState)
+        var failed = false
+        compilerState.currentFilename = if (fileDescriptor < 0) "<string>" else text
+        try {
+            hooks.openSource(compilerState.currentFilename.orEmpty(), text, fileDescriptor)
+            hooks.preprocessStart(compilerState, fileType)
+            hooks.generatorInit(compilerState)
+            if (compilerState.outputType == OUTPUT_PREPROCESS) hooks.preprocess()
+            else {
+                hooks.beginObjectFile()
+                if (fileType and (TYPE_ASM or TYPE_ASM_PREPROCESSED) != 0) hooks.assemble(fileType and TYPE_ASM_PREPROCESSED != 0)
+                else hooks.compile()
+                hooks.endObjectFile()
+            }
+        } catch (_: RuntimeException) {
+            failed = true
+            compilerState.errors++
+        } finally {
+            runCatching(hooks.generatorFinish)
+            runCatching(hooks.preprocessEnd)
+            hooks.exit(compilerState)
+            exitState(compilerState)
+        }
+        return if (failed || compilerState.errors != 0) -1 else 0
+    }
+
+    fun compileString(compilerState: CompilerState, text: String, hooks: CompileHooks): Int =
+        compileSource(compilerState, compilerState.fileType, text, -1, hooks)
+
+    fun addDllReference(compilerState: CompilerState, name: String, level: Int): DllReference? {
+        val existing = compilerState.loadedLibraries.firstOrNull { it.name == name }
+        if (level == -1) return existing
+        if (existing != null) {
+            if (level < existing.level) existing.level = level
+            existing.found = true
+            return existing
+        }
+        return DllReference(name, level, false, compilerState.loadedLibraries.size + 1).also { compilerState.loadedLibraries += it }
+    }
+
+    fun guessFileType(filename: String, caseSensitive: Boolean = true): Int {
+        val extension = fileExtension(filename).removePrefix(".")
+        if (extension.isEmpty()) return TYPE_C
+        if (extension == "S") return TYPE_ASM_PREPROCESSED
+        if (extension == "s") return TYPE_ASM
+        val cExtension = if (caseSensitive) extension in setOf("c", "h", "i") else extension.lowercase() in setOf("c", "h", "i")
+        return if (cExtension) TYPE_C else TYPE_BINARY
+    }
+
+    fun addFile(compilerState: CompilerState, filename: String, flags: Int, hooks: FileHooks): Int {
+        val fileType = if (flags and (TYPE_ASM or TYPE_ASM_PREPROCESSED or TYPE_C or TYPE_BINARY) == 0) flags or guessFileType(filename) else flags
+        if (compilerState.outputType == OUTPUT_PREPROCESS && fileType and TYPE_BINARY != 0) return 0
+        val descriptor = hooks.open(filename)
+        if (descriptor < 0) return FILE_NOT_FOUND
+        return try {
+            if (fileType and TYPE_BINARY != 0) hooks.loadBinary(compilerState, fileType, filename, descriptor)
+            else {
+                compilerState.targetDependencies += filename
+                hooks.compile(compilerState, fileType, filename, descriptor)
+            }
+        } finally { hooks.close(descriptor) }
+    }
+
+    fun addLibraryInternal(compilerState: CompilerState, formats: List<String>, name: String, flags: Int,
+        paths: List<String>, addFile: (String, Int) -> Int): Int {
+        for (path in paths) for (format in formats) {
+            val candidate = format.replaceFirst("%s", path).replace("%n", name).replaceFirst("%s", name)
+            val result = addFile(candidate, flags and TYPE_PRINT_ERROR.inv())
+            if (result != FILE_NOT_FOUND) return result
+        }
+        if (flags and TYPE_PRINT_ERROR != 0) {
+            val what = if (flags and TYPE_BINARY != 0) "file" else "library"
+            reportError(compilerState, ERROR_NO_ABORT, "$what '$name' not found")
+        }
+        return FILE_NOT_FOUND
+    }
+
+    fun addLibrary(compilerState: CompilerState, name: String, formats: List<String>, addFile: (String, Int) -> Int): Int {
+        val flags = TYPE_BINARY or (compilerState.fileType and TYPE_WHOLE_ARCHIVE)
+        if (name.startsWith(':')) return addLibraryInternal(compilerState, listOf("%s/%n"), name.drop(1), flags, compilerState.libraryPaths, addFile)
+        val candidates = if (compilerState.staticLink) formats.takeLast(1) else formats
+        for (format in candidates) {
+            val result = addLibraryInternal(compilerState, listOf(format), name, flags, compilerState.libraryPaths, addFile)
+            if (result != FILE_NOT_FOUND) return result
+        }
+        return addLibraryInternal(compilerState, listOf("%s/%n"), name, flags or TYPE_PRINT_ERROR, compilerState.libraryPaths, addFile)
+    }
+
+    fun addSupportLibrary(compilerState: CompilerState, name: String, crossPrefix: String, addFile: (String, Int) -> Int): Int =
+        addLibrary(compilerState, if (crossPrefix.isEmpty()) name else crossPrefix + name, listOf("%s/%n"), addFile)
+
+    fun addPragmaLibraries(compilerState: CompilerState, addLibrary: (String) -> Int) {
+        compilerState.pragmaLibraries.toList().forEach { addLibrary(it) }
+    }
 
     fun copyTruncated(destination: ByteArray, source: String): ByteArray {
         if (destination.isNotEmpty()) {
