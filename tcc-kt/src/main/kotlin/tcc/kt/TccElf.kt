@@ -164,6 +164,22 @@ object TccElf {
     )
     data class VersionRecords(val definitions: ByteArray? = null, val requirements: ByteArray? = null)
     enum class UnixPlatform { OPENBSD, FREEBSD, NETBSD, ANDROID, OTHER }
+    data class RuntimeOptions(
+        val sharedLibrary: Boolean = false,
+        val executable: Boolean = true,
+        val memoryOutput: Boolean = false,
+        val boundsChecking: Boolean = false,
+        val backtrace: Boolean = false,
+        val pthread: Boolean = false,
+        val staticLink: Boolean = false,
+        val libgcc: String = "",
+        val armFreeBsd: Boolean = false,
+        val libtcc1: String = "",
+        val openBsd: Boolean = false,
+        val netBsd: Boolean = false,
+        val machoTarget: Boolean = false,
+    )
+    data class RuntimeAction(val kind: String, val name: String = "")
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -340,6 +356,34 @@ object TccElf {
             UnixPlatform.ANDROID -> add(if (sharedLibrary) "crtend_so.o" else "crtend_android.o")
             UnixPlatform.OTHER -> add("crtn.o")
         }
+    }
+
+    /** Returns the ordered support objects and libraries selected by tcc_add_runtime. */
+    fun runtimeActions(options: RuntimeOptions): List<RuntimeAction> = buildList {
+        add(RuntimeAction("pragma-libraries"))
+        var addPthread = options.pthread
+        if (options.boundsChecking && !options.sharedLibrary) {
+            add(RuntimeAction("support", if (options.memoryOutput) "bcheck_run.o" else "bcheck.o"))
+            if (!options.openBsd && !options.netBsd) add(RuntimeAction("library", "dl"))
+            addPthread = true
+        }
+        if (options.backtrace) {
+            if (options.executable) add(RuntimeAction("support", "bt-exe.o"))
+            if (!options.sharedLibrary) add(RuntimeAction("support", "bt-log.o"))
+            add(RuntimeAction("backtrace-stub"))
+            addPthread = true
+        }
+        if (addPthread) add(RuntimeAction("library", "pthread"))
+        add(RuntimeAction("library", "c"))
+        if (!options.staticLink && options.libgcc.isNotEmpty()) {
+            add(RuntimeAction(if (options.libgcc.startsWith('/')) "file" else "dll", options.libgcc))
+        }
+        if (options.armFreeBsd) add(RuntimeAction("library", "gcc_s"))
+        if (options.libtcc1.isNotEmpty()) {
+            add(RuntimeAction("support", options.libtcc1))
+            add(RuntimeAction("library", "c"))
+        }
+        if (!options.machoTarget && !options.memoryOutput) add(RuntimeAction("crt-end"))
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
