@@ -436,6 +436,12 @@ object ArmGen {
     data class VlaAllocationPlan(val alignment: Int, val instructions: List<Int>, val boundsCheckEnabled: Boolean)
 
     enum class ValueType { BYTE, BOOL, SHORT, INT, LONG_LONG, FLOAT, DOUBLE, LONG_DOUBLE }
+    enum class ValueLocation { CONSTANT, LOCAL, LOCAL_LVALUE, CONSTANT_LVALUE, REGISTER_LVALUE, REGISTER, COMPARE, JUMP, JUMP_INDIRECT }
+    data class CodeValue(
+        val location: ValueLocation, val type: ValueType = ValueType.INT, val value: Int = 0,
+        val register: Int = -1, val symbol: Symbol? = null, val unsigned: Boolean = false,
+        val condition: Condition? = null, val tls: Boolean = false,
+    )
     data class MemoryInstruction(val baseRegister: Int, val offset: Int, val negativeOffset: Boolean, val words: List<Int>)
 
     /** Encodes a scalar load from an ARM base register plus/minus an offset. */
@@ -513,6 +519,72 @@ object ArmGen {
             words += opcode or (sourceRegister shl 12) or magnitude or (addressBase shl 16)
         }
         return MemoryInstruction(addressBase, magnitude, negative, words)
+    }
+
+    /** Loads an ARM compiler value into a core or VFP register. */
+    fun loadRegister(value: CodeValue, destination: Int, vfp: Boolean, cpuVersion: Int = 5, pic: Boolean = false,
+        output: (Int) -> Unit, currentPosition: () -> Int = { 0 }, relocate: (Symbol, Int, String) -> Unit = { _, _, _ -> },
+        patchJumpChain: (Int) -> Unit = {}): List<Int> {
+        val words = mutableListOf<Int>()
+        fun emit(word: Int) { words += word; output(word) }
+        fun loadConstant(constant: Int, symbol: Symbol?, register: Int) = emitLoadValue(
+            ConstantValue(constant, symbol), register, cpuVersion, pic, ::emit, currentPosition, relocate)
+        fun destinationCore() = integerRegister(destination)
+        when (value.location) {
+            ValueLocation.CONSTANT -> {
+                val opcode = stuffConstant(0xe3a00000.toInt() or (destinationCore() shl 12), value.value)
+                if (value.symbol != null || opcode == 0) loadConstant(value.value, value.symbol, destination)
+                else emit(opcode)
+            }
+            ValueLocation.LOCAL -> {
+                val opcode = stuffConstant(0xe28b0000.toInt() or (destinationCore() shl 12), value.value)
+                if (value.symbol != null || opcode == 0) {
+                    loadConstant(value.value, value.symbol, destination)
+                    emit(0xe08b0000.toInt() or (destinationCore() shl 12) or destinationCore())
+                } else emit(opcode)
+            }
+            ValueLocation.LOCAL_LVALUE, ValueLocation.CONSTANT_LVALUE, ValueLocation.REGISTER_LVALUE -> {
+                val addressBase: Int
+                val offset: Int
+                if (value.tls && value.symbol != null) {
+                    emit(0xee1d0fe0.toInt())
+                    relocate(value.symbol, currentPosition(), "R_ARM_TLS_LE32")
+                    emit(0xe510e000.toInt() or (destinationCore() shl 12))
+                    return words
+                }
+                when (value.location) {
+                    ValueLocation.LOCAL_LVALUE -> { addressBase = 11; offset = value.value }
+                    ValueLocation.CONSTANT_LVALUE -> {
+                        loadConstant(value.value, value.symbol, TREG_LR)
+                        addressBase = 14; offset = 0
+                    }
+                    else -> { addressBase = integerRegister(value.register); offset = 0 }
+                }
+                val access = memoryLoad(destination, addressBase, offset, value.type, value.unsigned, vfp)
+                access.words.forEach(::emit)
+            }
+            ValueLocation.REGISTER -> {
+                if (value.type in setOf(ValueType.FLOAT, ValueType.DOUBLE, ValueType.LONG_DOUBLE)) {
+                    val source = floatingRegister(value.register, vfp)
+                    val target = floatingRegister(destination, vfp)
+                    emit(if (vfp) 0xeeb00a40.toInt() or (target shl 12) or source or if (value.type == ValueType.FLOAT) 0 else 0x100
+                        else 0xee008180.toInt() or (target shl 12) or source)
+                } else emit(0xe1a00000.toInt() or (destinationCore() shl 12) or integerRegister(value.register))
+            }
+            ValueLocation.COMPARE -> {
+                val condition = value.condition ?: error("missing ARM compare condition")
+                emit(mapCondition(condition) or 0x03a00001 or (destinationCore() shl 12))
+                emit(mapCondition(negateCondition(condition)) or 0x03a00000 or (destinationCore() shl 12))
+            }
+            ValueLocation.JUMP, ValueLocation.JUMP_INDIRECT -> {
+                val truth = if (value.location == ValueLocation.JUMP) 1 else 0
+                emit(0xe3a00000.toInt() or (destinationCore() shl 12) or truth)
+                emit(0xea000000.toInt())
+                patchJumpChain(value.value)
+                emit(0xe3a00000.toInt() or (destinationCore() shl 12) or (truth xor 1))
+            }
+        }
+        return words
     }
 
     fun vlaAllocation(register: Int, alignment: Int, eabi: Boolean, boundsCheck: Boolean): VlaAllocationPlan {
