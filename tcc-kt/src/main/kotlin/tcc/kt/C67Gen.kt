@@ -21,6 +21,7 @@ class C67Gen(
     data class FunctionFrame(val argumentSizes: List<Int>, val parameterOffsets: List<Int>, val pushedArgumentBytes: Int,
         val stackAdjustmentOffset: Int, val returnSubtraction: Int, val structReturnOffset: Int?)
     data class CallArgument(val type: ValueType, val value: Value)
+    data class OperationResult(val comparison: Boolean, val inverted: Boolean, val resultRegister: Int?, val helper: String? = null)
     companion object {
         const val NB_REGS = 24
         const val RC_INT = 0x0001
@@ -202,6 +203,98 @@ class C67Gen(
         writeWord(functionStackAdjustmentOffset, adjustAddConstant(adjustment, -local + totalBytesPushedOnStack))
         nop(3)
     }
+
+    /** Emits C67 integer arithmetic/comparisons; runtime division remains an explicit helper call. */
+    fun integerOperation(operation: String, left: Int, right: Int, callHelper: (String) -> Unit = {}): OperationResult {
+        val comparison = operation in setOf("<", ">", "==", "!=", ">=", "<=", "u<", "u>", "u>=", "u<=")
+        if (comparison) {
+            compareRegister = C67_B2
+            val (instruction, invert) = when (operation) {
+                "<" -> "CMPLT.L1" to false; ">=" -> "CMPLT.L1" to true
+                ">" -> "CMPGT.L1" to false; "<=" -> "CMPGT.L1" to true
+                "==" -> "CMPEQ.L1" to false; "!=" -> "CMPEQ.L1" to true
+                "u<" -> "CMPLTU.L1" to false; "u>=" -> "CMPLTU.L1" to true
+                "u>" -> "CMPGTU.L1" to false; else -> "CMPGTU.L1" to true
+            }
+            asm(instruction, left, right, C67_B2)
+            invertTest = invert
+            return OperationResult(true, invert, C67_B2)
+        }
+        when (operation) {
+            "+" -> add(right, left, right)
+            "-" -> subtract(right, left, right)
+            "&" -> and(right, left, right)
+            "|" -> or(right, left, right)
+            "^" -> xor(right, left, right)
+            "*", "umul" -> { multiplyInteger(right, left, right); nop(8) }
+            "<<" -> shiftLeft(right, left, right)
+            ">>>" -> shiftRightUnsigned(right, left, right)
+            ">>" -> shiftRight(right, left, right)
+            "/", "udiv", "%", "umod" -> {
+                val helper = when (operation) { "/" -> "__divi"; "udiv" -> "__divu"; "%" -> "__remi"; else -> "__remu" }
+                callHelper(helper)
+                return OperationResult(false, false, 4, helper)
+            }
+            else -> throw IllegalArgumentException("unsupported C67 integer operation: $operation")
+        }
+        return OperationResult(false, false, right)
+    }
+
+    fun floatingOperation(operation: String, left: Int, right: Int, double: Boolean,
+        callHelper: (String) -> Unit = {}): OperationResult {
+        if (operation in setOf("<", ">", "==", "!=", ">=", "<=")) {
+            compareRegister = C67_B2
+            val suffix = if (double) "DP" else "SP"
+            val (instruction, invert) = when (operation) {
+                "<" -> "CMPLT$suffix.S1" to false; ">=" -> "CMPLT$suffix.S1" to true
+                ">" -> "CMPGT$suffix.S1" to false; "<=" -> "CMPGT$suffix.S1" to true
+                "==" -> "CMPEQ$suffix.S1" to false; else -> "CMPEQ$suffix.S1" to true
+            }
+            asm(instruction, left, right, C67_B2)
+            invertTest = invert
+            return OperationResult(true, invert, C67_B2)
+        }
+        when (operation) {
+            "+" -> { addFloat(right, left, right, double); nop(if (double) 6 else 3) }
+            "-" -> { subtractFloat(right, left, right, double); nop(if (double) 6 else 3) }
+            "*" -> { multiplyFloat(right, left, right, double); nop(if (double) 9 else 3) }
+            "/" -> {
+                val helper = if (double) "__divd" else "__divf"
+                callHelper(helper)
+                return OperationResult(false, false, 4, helper)
+            }
+            else -> throw IllegalArgumentException("unsupported C67 floating operation: $operation")
+        }
+        return OperationResult(false, false, right)
+    }
+
+    fun convertIntegerToFloating(register: Int, unsigned: Boolean, double: Boolean) {
+        convertIntToFloat(register, register, unsigned, double)
+        nop(if (double) 4 else 3)
+    }
+
+    fun convertFloatingToInteger(register: Int, sourceDouble: Boolean, targetInteger: Boolean = true) {
+        require(targetInteger) { "long long not supported" }
+        if (sourceDouble) truncateDoubleToFloat(register, register) else truncateFloatToDouble(register, register)
+        nop(3)
+    }
+
+    fun convertFloatingPrecision(register: Int, fromDouble: Boolean, toDouble: Boolean, pairedRegister: Int? = null) {
+        if (fromDouble && !toDouble) {
+            convertDoubleToFloat(register, register)
+            nop(3)
+        } else if (!fromDouble && toDouble) {
+            require(pairedRegister != null) { "single-to-double conversion requires a paired register" }
+            convertFloatToDouble(register, register)
+            nop(1)
+        } else throw IllegalArgumentException("C67 floating precision conversion must change precision")
+    }
+
+    fun generateComputedGoto(target: CallTarget, returnAddressSymbol: Int? = null) = callOrJump(true, target, returnAddressSymbol)
+
+    fun saveVlaStackPointer(address: Int): Nothing = throw UnsupportedOperationException("variable length arrays unsupported for this target")
+    fun restoreVlaStackPointer(address: Int): Nothing = throw UnsupportedOperationException("variable length arrays unsupported for this target")
+    fun allocateVla(): Nothing = throw UnsupportedOperationException("variable length arrays unsupported for this target")
 
     private fun memorySize(type: ValueType): Int = when (type) {
         ValueType.BYTE, ValueType.BOOL -> 1
