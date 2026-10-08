@@ -40,6 +40,11 @@ object TccDbg {
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
         val operations: MutableList<Byte> = mutableListOf(),
         var currentFile: Int = 1,
+        var lastFile: Int = 1,
+        var lastPc: Int = 0,
+        var lastLine: Int = 1,
+        var lastSourceLine: Int = 0,
+        var newFile: Boolean = false,
     )
 
     class StringPool {
@@ -396,6 +401,68 @@ object TccDbg {
     fun lineOperation(state: DwarfLineState, opcode: Int) { state.operations += opcode.toByte() }
     fun lineOperationUleb(state: DwarfLineState, value: Long) { state.operations.addAll(uleb128(value).toList()) }
     fun lineOperationSleb(state: DwarfLineState, value: Long) { state.operations.addAll(sleb128(value).toList()) }
+
+    /** Emits the compact DWARF line opcodes used by tcc_debug_line. */
+    fun emitDwarfLine(state: DwarfLineState, address: Int, sourceLine: Int, minimumInstructionLength: Int = 1): Boolean {
+        if (sourceLine == state.lastSourceLine) return false
+        state.lastSourceLine = sourceLine
+        val pcDelta = (address - state.lastPc) / minimumInstructionLength
+        val lineDelta = sourceLine - state.lastLine
+        if (state.currentFile != state.lastFile) {
+            state.lastFile = state.currentFile
+            lineOperation(state, 4) // DW_LNS_set_file
+            lineOperationUleb(state, state.currentFile.toLong())
+        }
+        var special = pcDelta * DWARF_LINE_RANGE + lineDelta + DWARF_OPCODE_BASE - DWARF_LINE_BASE
+        if (pcDelta != 0 && lineDelta in DWARF_LINE_BASE..(DWARF_OPCODE_BASE + DWARF_LINE_BASE) && special in DWARF_OPCODE_BASE..255) {
+            lineOperation(state, special)
+        } else {
+            if (pcDelta != 0) {
+                special = pcDelta * DWARF_LINE_RANGE + DWARF_OPCODE_BASE - DWARF_LINE_BASE
+                if (special in DWARF_OPCODE_BASE..255) lineOperation(state, special)
+                else { lineOperation(state, 2); lineOperationUleb(state, pcDelta.toLong()) }
+            }
+            if (lineDelta != 0) {
+                special = lineDelta + DWARF_OPCODE_BASE - DWARF_LINE_BASE
+                if (lineDelta in DWARF_LINE_BASE..(DWARF_OPCODE_BASE + DWARF_LINE_BASE) && special in DWARF_OPCODE_BASE..255) {
+                    lineOperation(state, special)
+                } else {
+                    lineOperation(state, 3); lineOperationSleb(state, lineDelta.toLong())
+                    lineOperation(state, DWARF_OPCODE_BASE - DWARF_LINE_BASE)
+                }
+            }
+        }
+        state.lastPc = address
+        state.lastLine = sourceLine
+        return true
+    }
+
+    fun debugNewFile(state: DebugSections, line: DwarfLineState, filename: String): Int {
+        if (!state.dwarfEnabled) { line.newFile = true; return line.currentFile }
+        return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
+    }
+
+    fun debugIncludeBegin(state: DebugSections, line: DwarfLineState, filename: String): Int {
+        if (state.dwarfEnabled) return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
+        putStabs(state, filename, N_BINCL, 0, 0, 0)
+        line.newFile = true
+        return line.currentFile
+    }
+
+    fun debugIncludeEnd(state: DebugSections, line: DwarfLineState, filename: String = ""): Int {
+        if (state.dwarfEnabled) return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
+        putStabs(state, null, N_EINCL, 0, 0, 0)
+        line.newFile = true
+        return line.currentFile
+    }
+
+    fun emitStabsSourceLine(state: DebugSections, line: DwarfLineState, sourceLine: Int, address: Long, functionAddress: Long? = null): Boolean {
+        if (sourceLine == line.lastSourceLine) return false
+        line.lastSourceLine = sourceLine
+        val value = if (functionAddress == null) address else address - functionAddress
+        putStabs(state, null, N_SLINE, 0, sourceLine, value)
+        return true
+    }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
