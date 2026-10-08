@@ -195,6 +195,7 @@ object TccElf {
         val data: ByteArray,
     )
     data class InputElf(val wordSize: Int, val machine: Int, val fileType: Int, val sections: List<InputSectionHeader>)
+    data class InputSymbol(val name: String, val value: Long, val size: Long, val info: Int, val other: Int, val sectionIndex: Int)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -490,6 +491,44 @@ object TccElf {
         }
         val machine = readUnsigned(18, 2).toInt()
         return InputElf(if (is64) 8 else 4, machine, readUnsigned(16, 2).toInt(), sections)
+    }
+
+    fun parseInputSymbols(input: ByteArray, elf: InputElf, symbolSectionIndex: Int): List<InputSymbol>? {
+        val symbolSection = elf.sections.getOrNull(symbolSectionIndex) ?: return null
+        if (symbolSection.type != SHT_SYMTAB && symbolSection.type != SHT_DYNSYM) return null
+        val strings = elf.sections.getOrNull(symbolSection.link)?.data ?: return null
+        val entrySize = symbolSection.entrySize.toInt()
+        val expectedSize = if (elf.wordSize == 8) 24 else 16
+        if (entrySize < expectedSize || entrySize == 0 || symbolSection.data.size % entrySize != 0) return null
+        val littleEndian = input.getOrNull(5)?.toInt()?.and(0xff) == 1
+        fun read(data: ByteArray, offset: Int, width: Int): Long {
+            if (offset < 0 || offset + width > data.size) return -1
+            var result = 0L
+            repeat(width) { index ->
+                val shift = if (littleEndian) index * 8 else (width - index - 1) * 8
+                result = result or ((data[offset + index].toLong() and 0xff) shl shift)
+            }
+            return result
+        }
+        fun getString(offset: Int): String {
+            if (offset !in strings.indices) return ""
+            var end = offset
+            while (end < strings.size && strings[end] != 0.toByte()) end++
+            return strings.copyOfRange(offset, end).toString(Charsets.UTF_8)
+        }
+        return (0 until symbolSection.data.size / entrySize).map { index ->
+            val data = symbolSection.data
+            val base = index * entrySize
+            if (elf.wordSize == 8) InputSymbol(
+                getString(read(data, base, 4).toInt()), read(data, base + 8, 8), read(data, base + 16, 8),
+                data[base + 4].toInt() and 0xff, data[base + 5].toInt() and 0xff,
+                read(data, base + 6, 2).toInt(),
+            ) else InputSymbol(
+                getString(read(data, base, 4).toInt()), read(data, base + 4, 4), read(data, base + 8, 4),
+                data[base + 12].toInt() and 0xff, data[base + 13].toInt() and 0xff,
+                read(data, base + 14, 2).toInt(),
+            )
+        }
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
