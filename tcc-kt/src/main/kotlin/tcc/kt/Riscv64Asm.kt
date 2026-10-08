@@ -450,4 +450,52 @@ class Riscv64Asm(
         emitLittleEndian16(opcode or (registerValue(rs2.register) shl 2) or encoded)
         return true
     }
+
+    fun emitTernaryInstruction(name: String, operands: List<Operand>): Boolean {
+        if (operands.size != 3) { expect("three operands"); return false }
+        val (rd, rs1, rs2) = operands
+        val rOpcodes = mapOf(
+            "sll" to (0x33 or (1 shl 12)), "srl" to (0x33 or (5 shl 12)), "sra" to (0x33 or (5 shl 12) or (0x20 shl 25)),
+            "sllw" to (0x3b or (1 shl 12)), "srlw" to (0x3b or (5 shl 12)), "sraw" to (0x3b or (5 shl 12)),
+            "add" to 0x33, "sub" to (0x33 or (0x20 shl 25)), "addw" to 0x3b,
+            "subw" to (0x3b or (0x20 shl 25)), "xor" to (0x33 or (4 shl 12)),
+            "or" to (0x33 or (6 shl 12)), "and" to (0x33 or (7 shl 12)),
+            "slt" to (0x33 or (2 shl 12)), "sltu" to (0x33 or (3 shl 12)),
+            "mul" to (0x33 or (1 shl 25)), "mulh" to (0x33 or (1 shl 12) or (1 shl 25)),
+            "mulhsu" to (0x33 or (2 shl 12) or (1 shl 25)), "mulhu" to (0x33 or (3 shl 12) or (1 shl 25)),
+            "mulw" to (0x3b or (1 shl 25)), "div" to (0x33 or (4 shl 12) or (1 shl 25)),
+            "divu" to (0x33 or (5 shl 12) or (1 shl 25)), "divw" to (0x3b or (4 shl 12) or (1 shl 25)),
+            "divuw" to (0x3b or (5 shl 12) or (1 shl 25)), "rem" to (0x33 or (6 shl 12) or (1 shl 25)),
+            "remu" to (0x33 or (7 shl 12) or (1 shl 25)), "remw" to (0x3b or (6 shl 12) or (1 shl 25)),
+            "remuw" to (0x3b or (7 shl 12) or (1 shl 25)),
+        )
+        rOpcodes[name]?.let { return emitR(it, rd, rs1, rs2) }
+        val iOpcodes = mapOf(
+            "slli" to (0x13 or (1 shl 12)), "srli" to (0x13 or (5 shl 12)), "srai" to (0x13 or (5 shl 12) or (16 shl 26)),
+            "slliw" to (0x1b or (1 shl 12)), "srliw" to (0x1b or (5 shl 12)), "sraiw" to (0x1b or (5 shl 12)),
+            "addi" to 0x13, "addiw" to 0x1b, "xori" to (0x13 or (4 shl 12)), "ori" to (0x13 or (6 shl 12)),
+            "andi" to (0x13 or (7 shl 12)), "slti" to (0x13 or (2 shl 12)), "sltiu" to (0x13 or (3 shl 12)),
+        )
+        iOpcodes[name]?.let { return emitI(it, rd, rs1, rs2) }
+        expect("ternary instruction")
+        return false
+    }
+
+    fun emitBinaryInstruction(name: String, rd: Operand, source: Operand): Boolean = when (name) {
+        "lui" -> emitU(0x37, rd, source)
+        "auipc" -> emitU(0x17, rd, source)
+        "c.add" -> emitCompressedCr(2 or (9 shl 12), rd, source)
+        "c.mv" -> emitCompressedCr(2 or (8 shl 12), rd, source)
+        "c.addi" -> emitCompressedCi(name, 1, rd, source)
+        "c.addiw" -> emitCompressedCi(name, 1 or (1 shl 13), rd, source)
+        "c.addi16sp" -> emitCompressedCi(name, 1 or (3 shl 13), rd, source)
+        "c.fldsp" -> emitCompressedCi(name, 2 or (1 shl 13), rd, source)
+        "c.flwsp", "c.ldsp" -> emitCompressedCi(name, 2 or (3 shl 13), rd, source)
+        "c.li" -> emitCompressedCi(name, 1 or (2 shl 13), rd, source)
+        "c.lui" -> emitCompressedCi(name, 1 or (3 shl 13), rd, source)
+        "c.lwsp" -> emitCompressedCi(name, 2 or (2 shl 13), rd, source)
+        "c.slli" -> emitCompressedCi(name, 2, rd, source)
+        "c.addi4spn" -> emitCompressedCiw(0, rd, source)
+        else -> { expect("binary instruction"); false }
+    }
 }
