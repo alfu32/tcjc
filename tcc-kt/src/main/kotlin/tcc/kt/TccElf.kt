@@ -1307,6 +1307,16 @@ object TccElf {
         return setElfSymbol(state, table, value, 0, (binding shl 4) or STT_NOTYPE, 0, sectionIndex, name ?: "")
     }
 
+    /** Converts an existing symbol to a local untyped definition in the supplied section. */
+    fun setLocalSymbol(table: ElfSection, name: String, section: ElfSection, offset: Int) {
+        val index = findElfSymbol(table, name)
+        if (index == 0) return
+        val symbol = table.symbols[index]
+        symbol.info = (STB_LOCAL shl 4) or STT_NOTYPE
+        symbol.value = offset.toLong()
+        symbol.sectionIndex = section.index
+    }
+
     fun addSymbol(
         state: ElfState,
         name: String,
