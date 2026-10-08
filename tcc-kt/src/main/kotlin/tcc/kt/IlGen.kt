@@ -192,12 +192,14 @@ class IlGen(
         popValueStack()
     }
 
-    fun emitFunctionCall(context: FunctionContext, functionType: TypeDesc, direct: Boolean, loadIndirectFunction: () -> Unit = {}) {
+    fun emitFunctionCall(context: FunctionContext, functionType: TypeDesc, direct: Boolean,
+        loadIndirectFunction: () -> Unit = {}, popFunctionValue: () -> Unit = {}) {
         if (direct) stdout.append(" call ").append(formatType(functionType, "xxx")).append('\n')
         else {
             loadIndirectFunction()
             stdout.append(" calli ").append(formatType(functionType)).append('\n')
         }
+        popFunctionValue()
     }
 
     fun emitFunctionPrologue(signature: FunctionSignature, defineParameter: (FunctionParameter, Int) -> Unit = { _, _ -> }) {
@@ -251,7 +253,7 @@ class IlGen(
     fun generateIntegerOperation(operation: String): Boolean {
         val opcode = when (operation) {
             "+" -> IlOpcode.ADD; "-" -> IlOpcode.SUB; "*" -> IlOpcode.MUL
-            "/" -> IlOpcode.DIV; "udiv" -> IlOpcode.DIV_UN; "%" -> IlOpcode.REM; "umod" -> IlOpcode.REM_UN
+            "/", "pdiv" -> IlOpcode.DIV; "udiv" -> IlOpcode.DIV_UN; "%" -> IlOpcode.REM; "umod" -> IlOpcode.REM_UN
             "&" -> IlOpcode.AND; "|" -> IlOpcode.OR; "^" -> IlOpcode.XOR
             "shl" -> IlOpcode.SHL; "shr" -> IlOpcode.SHR_UN; "sar" -> IlOpcode.SHR
             "==" -> IlOpcode.CEQ; ">" -> IlOpcode.CGT; "u>" -> IlOpcode.CGT_UN; "<" -> IlOpcode.CLT; "u<" -> IlOpcode.CLT_UN
