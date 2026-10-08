@@ -495,16 +495,17 @@ object TccDbg {
         minimumInstructionLength: Int = 1,
         longDoubleSize: Int = 16,
         charUnsignedByDefault: Boolean = false,
+        debugEnabled: Boolean = true,
     ): DebugUnit {
         val sections = createSections(dwarfVersion, backtrace)
         val line = if (dwarfVersion > 0) createDwarfLineState(filename, compilationDirectory, dwarfVersion) else DwarfLineState()
         line.currentFilename = filename
-        val session = DebugSession(sections, line, minimumInstructionLength)
-        val unit = if (dwarfVersion > 0) beginDwarfCompilationUnit(
+        val session = DebugSession(sections, line, minimumInstructionLength, enabled = debugEnabled)
+        val unit = if (dwarfVersion > 0 && debugEnabled) beginDwarfCompilationUnit(
             sections, dwarfVersion, pointerSize, textStart, filename, compilationDirectory,
             producer, cVersion, refs, minimumInstructionLength,
         ) else null
-        if (dwarfVersion == 0) {
+        if (dwarfVersion == 0 && debugEnabled) {
             val directoryName = if (compilationDirectory.endsWith('/')) compilationDirectory else "$compilationDirectory/"
             putStabsReloc(sections, directoryName, N_SO, 0, 0, textStart, refs.text)
             putStabsReloc(sections, filename, N_SO, 0, 0, textStart, refs.text)
@@ -525,7 +526,7 @@ object TccDbg {
         }
         debugUnit.unit?.let { finishDwarfCompilationUnit(debugUnit.session.sections, it, textSize) }
         endEhFrame(debugUnit.ehFrame)
-        if (!debugUnit.session.sections.dwarfEnabled) {
+        if (debugUnit.session.enabled && !debugUnit.session.sections.dwarfEnabled) {
             putStabs(debugUnit.session.sections, null, N_SO, 0, 0, textSize.toLong())
         }
         return debugUnit.session.sections
