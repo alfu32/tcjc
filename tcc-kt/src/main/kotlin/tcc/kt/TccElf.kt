@@ -138,6 +138,18 @@ object TccElf {
         val tlsStart: Long,
         val tlsEnd: Long,
     )
+    data class ElfSectionHeader(
+        val name: Int = 0,
+        val type: Int = SHT_NULL,
+        val flags: Long = 0,
+        val address: Long = 0,
+        val offset: Long = 0,
+        val size: Long = 0,
+        val link: Int = 0,
+        val info: Int = 0,
+        val alignment: Long = 0,
+        val entrySize: Long = 0,
+    )
     const val NO_GOTPLT_ENTRY = 0
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
@@ -529,6 +541,127 @@ object TccElf {
         header.fileSize = fileOffset - header.offset
         header.memorySize = address - header.virtualAddress
         if (type == 0x6474e552) header.alignment = 1
+    }
+
+    /** Serializes an ELF relocatable, executable, or shared object into a byte array. */
+    fun serializeElf(
+        state: ElfState,
+        fileType: Int,
+        machine: Int,
+        entry: Long,
+        layout: LayoutResult,
+        flags: Int = 0,
+    ): ByteArray {
+        val symbols = state.symbolTable
+        if (symbols != null) sortSymbols(state, symbols)
+        state.dynamicOutputSymbols?.let { sortSymbols(state, it) }
+        state.sections.drop(1).filterNotNull().forEach(::encodeSectionRecords)
+        val is64 = state.wordSize == 8
+        val ehdrSize = if (is64) 64 else 52
+        val phdrSize = if (is64) 56 else 32
+        val shdrSize = if (is64) 64 else 40
+        val shOffset = (ehdrSize + layout.programHeaderCount * phdrSize + 3L) and -4L
+        val output = mutableListOf<Byte>()
+        appendElfHeader(output, state, fileType, machine, entry, layout, flags, shOffset, ehdrSize, phdrSize, shdrSize)
+        layout.headers.forEach { appendProgramHeader(output, it, is64) }
+        while (output.size < shOffset.toInt()) output += 0
+        val sectionHeaders = state.sections.map { section ->
+            if (section == null) ElfSectionHeader() else ElfSectionHeader(
+                section.nameOffset, section.type, section.flags.toLong() and 0xffffffffL,
+                section.address, section.offset, section.outputSize, section.link?.index ?: 0,
+                section.sectionInfo, section.alignment.toLong(), section.entrySize.toLong(),
+            )
+        }
+        sectionHeaders.forEach { appendSectionHeader(output, it, is64) }
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if (section.type == SHT_NOBITS) return@forEach
+            while (output.size < section.offset.toInt()) output += 0
+            val size = section.outputSize.toInt().coerceAtLeast(0)
+            repeat(size) { byteIndex -> output += section.data.getOrElse(byteIndex) { 0 } }
+        }
+        return output.toByteArray()
+    }
+
+    private fun encodeSectionRecords(section: ElfSection) {
+        when (section.type) {
+            SHT_SYMTAB, SHT_DYNSYM -> {
+                val bytes = mutableListOf<Byte>()
+                section.symbols.forEach { symbol ->
+                    appendInt32(bytes, symbol.nameOffset)
+                    if (section.entrySize == 24) {
+                        bytes += symbol.info.toByte(); bytes += symbol.other.toByte(); append16(bytes, symbol.sectionIndex)
+                        appendInt64(bytes, symbol.value); appendInt64(bytes, symbol.size)
+                    } else {
+                        appendInt32(bytes, symbol.value.toInt()); appendInt32(bytes, symbol.size.toInt())
+                        bytes += symbol.info.toByte(); bytes += symbol.other.toByte(); append16(bytes, symbol.sectionIndex)
+                    }
+                }
+                replaceSectionData(section, bytes)
+            }
+            SHT_REL, SHT_RELA -> {
+                val bytes = mutableListOf<Byte>()
+                section.relocations.forEach { relocation ->
+                    if (stateWordSize(section) == 8) {
+                        appendInt64(bytes, relocation.offset)
+                        appendInt64(bytes, (relocation.symbolIndex.toLong() shl 32) or (relocation.type.toLong() and 0xffffffffL))
+                        if (section.type == SHT_RELA) appendInt64(bytes, relocation.addend)
+                    } else {
+                        appendInt32(bytes, relocation.offset.toInt())
+                        appendInt32(bytes, (relocation.symbolIndex shl 8) or (relocation.type and 0xff))
+                        if (section.type == SHT_RELA) appendInt32(bytes, relocation.addend.toInt())
+                    }
+                }
+                replaceSectionData(section, bytes)
+            }
+        }
+    }
+
+    private fun stateWordSize(section: ElfSection): Int = if (section.entrySize >= 16) 8 else 4
+
+    private fun replaceSectionData(section: ElfSection, bytes: MutableList<Byte>) {
+        section.data.clear(); section.data.addAll(bytes); section.dataOffset = bytes.size
+    }
+
+    private fun appendElfHeader(
+        out: MutableList<Byte>, state: ElfState, fileType: Int, machine: Int, entry: Long,
+        layout: LayoutResult, flags: Int, sectionOffset: Long, headerSize: Int, programSize: Int, sectionSize: Int,
+    ) {
+        out += byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()).toList()
+        out += (if (state.wordSize == 8) 2 else 1).toByte(); out += 1; out += 1
+        repeat(9) { out += 0 }
+        append16(out, when (fileType) { 3 -> 1; 4 -> 3; else -> if (fileType == 2) 2 else 3 })
+        append16(out, machine); appendInt32(out, 1)
+        if (state.wordSize == 8) {
+            appendInt64(out, entry); appendInt64(out, if (layout.programHeaderCount == 0) 0 else headerSize.toLong()); appendInt64(out, sectionOffset)
+        } else {
+            appendInt32(out, entry.toInt()); appendInt32(out, if (layout.programHeaderCount == 0) 0 else headerSize); appendInt32(out, sectionOffset.toInt())
+        }
+        appendInt32(out, flags); append16(out, headerSize)
+        append16(out, if (layout.programHeaderCount == 0) 0 else programSize); append16(out, layout.programHeaderCount)
+        append16(out, sectionSize); append16(out, state.sections.size); append16(out, state.sections.size - 1)
+    }
+
+    private fun appendProgramHeader(out: MutableList<Byte>, header: ElfProgramHeader, is64: Boolean) {
+        if (is64) {
+            appendInt32(out, header.type); appendInt32(out, header.flags)
+            appendInt64(out, header.offset); appendInt64(out, header.virtualAddress); appendInt64(out, header.physicalAddress)
+            appendInt64(out, header.fileSize); appendInt64(out, header.memorySize); appendInt64(out, header.alignment)
+        } else {
+            appendInt32(out, header.type); appendInt32(out, header.offset.toInt()); appendInt32(out, header.virtualAddress.toInt())
+            appendInt32(out, header.physicalAddress.toInt()); appendInt32(out, header.fileSize.toInt()); appendInt32(out, header.memorySize.toInt())
+            appendInt32(out, header.flags); appendInt32(out, header.alignment.toInt())
+        }
+    }
+
+    private fun appendSectionHeader(out: MutableList<Byte>, header: ElfSectionHeader, is64: Boolean) {
+        appendInt32(out, header.name); appendInt32(out, header.type)
+        if (is64) {
+            appendInt64(out, header.flags); appendInt64(out, header.address); appendInt64(out, header.offset); appendInt64(out, header.size)
+            appendInt32(out, header.link); appendInt32(out, header.info); appendInt64(out, header.alignment); appendInt64(out, header.entrySize)
+        } else {
+            appendInt32(out, header.flags.toInt()); appendInt32(out, header.address.toInt()); appendInt32(out, header.offset.toInt()); appendInt32(out, header.size.toInt())
+            appendInt32(out, header.link); appendInt32(out, header.info); appendInt32(out, header.alignment.toInt()); appendInt32(out, header.entrySize.toInt())
+        }
     }
 
     fun initializeSymbolTable(symbols: ElfSection) {
@@ -1415,6 +1548,15 @@ object TccElf {
     private fun appendInt32(section: ElfSection, value: Int) {
         repeat(4) { shift -> section.data += (value ushr (shift * 8)).toByte() }
         section.dataOffset = section.data.size
+    }
+    private fun append16(output: MutableList<Byte>, value: Int) {
+        output += value.toByte(); output += (value ushr 8).toByte()
+    }
+    private fun appendInt32(output: MutableList<Byte>, value: Int) {
+        repeat(4) { shift -> output += (value ushr (shift * 8)).toByte() }
+    }
+    private fun appendInt64(output: MutableList<Byte>, value: Long) {
+        repeat(8) { shift -> output += (value ushr (shift * 8)).toByte() }
     }
     private fun readInt32(input: List<Byte>, offset: Int): Int =
         (input[offset].toInt() and 0xff) or ((input[offset + 1].toInt() and 0xff) shl 8) or
