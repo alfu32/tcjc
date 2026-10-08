@@ -53,6 +53,7 @@ class LibTcc(
         var installName: String? = null, var compatibilityVersion: Int = 0, var currentVersion: Int = 0,
         var armFloatAbi: String? = null, var runtimeStdin: String? = null, var backtraceCallers: Int = 0,
         var doBacktrace: Boolean = false, var boundsChecking: Boolean = false,
+        var dwarfVersion: Int = 4,
     )
     data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
     data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
@@ -589,7 +590,19 @@ class LibTcc(
                 }
                 "optimize" -> compilerState.optimize = optionArgument.firstOrNull()?.digitToIntOrNull() ?: if (optionArgument == "s") 2 else 1
                 "std" -> { compilerState.languageStandard = optionArgument; if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112 }
-                "debug" -> compilerState.debug = true
+                "debug" -> {
+                    compilerState.debug = true
+                    compilerState.debugLevel = 2
+                    when {
+                        optionArgument.startsWith("dwarf") -> compilerState.dwarfVersion = optionArgument.removePrefix("dwarf").toIntOrNull()?.let { -it } ?: 4
+                        optionArgument == "stabs" -> compilerState.dwarfVersion = 0
+                        optionArgument.firstOrNull()?.isDigit() == true -> {
+                            val level = optionArgument.first().digitToInt().coerceAtMost(2)
+                            compilerState.debugLevel = if (level == 0 && compilerState.doBacktrace) 1 else level
+                        }
+                        optionArgument == ".pdb" && targetPlatform == "pe" -> { compilerState.dwarfVersion = 5; compilerState.debugLevel = compilerState.debugLevel or 16 }
+                    }
+                }
                 "d" -> when (optionArgument.firstOrNull()) {
                     'D' -> compilerState.debugFlags = 3
                     'M' -> compilerState.debugFlags = 7
