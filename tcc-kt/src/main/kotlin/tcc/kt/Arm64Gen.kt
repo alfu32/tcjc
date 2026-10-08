@@ -709,4 +709,97 @@ class Arm64Gen(
         return VaArgPlan(type.size, type.alignment, hfa, type.size > 16,
             if (hfa != 0) "vector" else "general")
     }
+
+    /** Emits the register-register integer operation selected by the source operator token. */
+    fun integerOperation(operation: String, is64Bit: Boolean, destination: Int, left: Int, right: Int) {
+        val width = if (is64Bit) 1 shl 31 else 0
+        val rd = destination and 31; val rn = left and 31; val rm = right and 31
+        when (operation) {
+            "%", "umod" -> { o((if (operation == "%") 0x1ac00c00 else 0x1ac00800) or width or (30) or (rn shl 5) or (rm shl 16)); o(0x1b008000 or width or rd or (30 shl 5) or (rm shl 16) or (rn shl 10)) }
+            "&" -> o(0x0a000000 or width or rd or (rn shl 5) or (rm shl 16))
+            "*" -> o(0x1b007c00 or width or rd or (rn shl 5) or (rm shl 16))
+            "+" -> o(ARM64_ADD_REG or width or rd or (rn shl 5) or (rm shl 16))
+            "-" -> o(ARM64_SUB_REG or width or rd or (rn shl 5) or (rm shl 16))
+            "/", "pdiv" -> o(0x1ac00c00 or width or rd or (rn shl 5) or (rm shl 16))
+            "udiv" -> o(0x1ac00800 or width or rd or (rn shl 5) or (rm shl 16))
+            "^" -> o(0x4a000000 or width or rd or (rn shl 5) or (rm shl 16))
+            "|" -> o(0x2a000000 or width or rd or (rn shl 5) or (rm shl 16))
+            "sar", "shl", "shr" -> o((when (operation) { "sar" -> 0x1ac02800; "shl" -> 0x1ac02000; else -> 0x1ac02400 }) or width or rd or (rn shl 5) or (rm shl 16))
+            "==", "!=", "<", "<=", ">", ">=", "u<", "u<=", "u>", "u>=" -> {
+                o(0x6b00001f or width or (rn shl 5) or (rm shl 16))
+                val cset = when (operation) { "==" -> 0x1a9f17e0; "!=" -> 0x1a9f07e0; "<" -> 0x1a9fa7e0; "<=" -> 0x1a9fc7e0; ">" -> 0x1a9fd7e0; ">=" -> 0x1a9fb7e0; "u<" -> 0x1a9f27e0; "u<=" -> 0x1a9f87e0; "u>" -> 0x1a9f97e0; else -> 0x1a9f37e0 }
+                o(cset or rd)
+            }
+            else -> error("unsupported integer operation: $operation")
+        }
+    }
+
+    /** Emits the common constant forms for integer arithmetic, logical operations, and shifts. */
+    fun integerImmediate(operation: String, is64Bit: Boolean, reverse: Boolean, value: ULong, destination: Int, source: Int): Boolean {
+        var op = operation
+        var immediate = if (is64Bit) value else value and 0xffffffffuL
+        val rd = destination and 31; val rn = source and 31; val width = if (is64Bit) 1 shl 31 else 0
+        if (op == "-" && !reverse) { immediate = 0uL - immediate; op = "+" }
+        when (op) {
+            "+" -> {
+                val subtract = immediate shr (if (is64Bit) 63 else 31) != 0uL
+                val magnitude = if (subtract) 0uL - immediate else immediate
+                if (magnitude and 0xfffuL.inv() == 0uL) o(0x11000000 or width or (if (subtract) 1 shl 30 else 0) or rd or (rn shl 5) or (magnitude.toInt() shl 10))
+                else if (magnitude and 0xfff000uL.inv() == 0uL) o(0x11400000 or width or (if (subtract) 1 shl 30 else 0) or rd or (rn shl 5) or ((magnitude shr 12).toInt() shl 10))
+                else { moveImmediate(30, magnitude); o(0x0b1e0000 or width or (if (subtract) 1 shl 30 else 0) or rd or (rn shl 5)) }
+                return true
+            }
+            "-" -> {
+                when (immediate) {
+                    0uL -> o(0x4b0003e0 or width or rd or (rn shl 16))
+                    if (is64Bit) ULong.MAX_VALUE else 0xffffffffuL -> o(0x2a2003e0 or width or rd or (rn shl 16))
+                    else -> { moveImmediate(30, immediate); o(0x4b0003c0 or width or rd or (rn shl 16)) }
+                }
+                return true
+            }
+            "^" -> if (immediate == ULong.MAX_VALUE || (!is64Bit && immediate == 0xffffffffuL)) { o(0x2a2003e0 or width or rd or (rn shl 16)); return true }
+            "&", "|", "^" -> {
+                val encoded = encodeBitmaskImmediate(if (is64Bit) immediate else immediate or (immediate shl 32))
+                if (encoded < 0) return false
+                val opcode = when (op) { "&" -> 0x12000000; "|" -> 0x32000000; else -> 0x52000000 }
+                o(opcode or width or rd or (rn shl 5) or (encoded shl 10)); return true
+            }
+            "sar", "shl", "shr" -> {
+                val bits = if (is64Bit) 64 else 32
+                val shift = (immediate.toInt() and (bits - 1))
+                if (reverse) return false
+                if (shift == 0) o(0x2a0003e0 or width or rd or (rn shl 16))
+                else if (op == "shl") o(0x53000000 or width or (if (is64Bit) 1 shl 22 else 0) or rd or (rn shl 5) or ((bits - shift) shl 16) or ((bits - 1 - shift) shl 10))
+                else o(0x13000000 or (if (op == "shr") 1 shl 30 else 0) or width or (if (is64Bit) 1 shl 22 else 0) or rd or (rn shl 5) or (shift shl 16) or ((bits - 1) shl 10))
+                return true
+            }
+        }
+        return false
+    }
+
+    fun floatingOperation(operation: String, isDouble: Boolean, destination: Int, left: Int, right: Int? = null) {
+        val precision = if (isDouble) 1 shl 22 else 0
+        val d = destination and 31; val n = left and 31; val m = (right ?: 0) and 31
+        if (operation == "neg") { o(0x1e214000 or precision or d or (n shl 5)); return }
+        val opcode = when (operation) { "*" -> 0x1e200800; "+" -> 0x1e202800; "-" -> 0x1e203800; "/" -> 0x1e201800; else -> 0 }
+        if (opcode != 0) { o(opcode or precision or d or (n shl 5) or (m shl 16)); return }
+        val condition: Int = when (operation) { "==" -> 0x1a9f17e0.toInt(); "!=" -> 0x1a9f07e0.toInt(); "<" -> 0x1a9f57e0.toInt(); "<=" -> 0x1a9f87e0.toInt(); ">" -> 0x1a9fd7e0.toInt(); ">=" -> 0x1a9fb7e0.toInt(); else -> throw IllegalArgumentException("unsupported floating operation: $operation") }
+        o(0x1e202000 or precision or (n shl 5) or (m shl 16))
+        o(condition or d)
+    }
+
+    fun signExtendWord(register: Int) { val r = register and 31; o(0x93407c00.toInt() or r or (r shl 5)) }
+    fun convertCharShortToInt(register: Int, shortValue: Boolean, unsigned: Boolean) {
+        val r = register and 31
+        o(0x13001c00 or (if (shortValue) 1 shl 13 else 0) or (if (unsigned) 1 shl 30 else 0) or r or (r shl 5))
+    }
+    fun convertIntegerToFloat(destination: Int, source: Int, source64: Boolean, unsigned: Boolean, destinationDouble: Boolean) {
+        o(0x1e220000 or (if (unsigned) 1 shl 16 else 0) or (if (destinationDouble) 1 shl 22 else 0) or (destination and 31) or (if (source64) 1 shl 31 else 0) or ((source and 31) shl 5))
+    }
+    fun convertFloatToInteger(destination: Int, source: Int, sourceDouble: Boolean, destination64: Boolean, unsigned: Boolean) {
+        o(0x1e380000 or (if (unsigned) 1 shl 16 else 0) or (if (destination64) 1 shl 31 else 0) or (destination and 31) or (if (sourceDouble) 1 shl 22 else 0) or ((source and 31) shl 5))
+    }
+    fun convertFloatPrecision(destination: Int, source: Int, fromFloat: Boolean) {
+        o((if (fromFloat) 0x1e22c000 else 0x1e624000) or (destination and 31) or ((source and 31) shl 5))
+    }
 }
