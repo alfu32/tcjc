@@ -279,10 +279,10 @@ class I386Asm(private val emit: (Int) -> Unit) {
         operands: MutableList<ConstraintOperand>, outputCount: Int,
         clobbers: BooleanArray,
     ): Int {
-        val allocated = BooleanArray(8)
-        clobbers.indices.take(8).forEach { allocated[it] = clobbers[it] }
-        allocated[4] = true // esp
-        allocated[5] = true // ebp
+        val allocated = IntArray(8)
+        clobbers.indices.take(8).forEach { if (clobbers[it]) allocated[it] = 3 }
+        allocated[4] = 3 // esp
+        allocated[5] = 3 // ebp
         val referenced = mutableSetOf<Int>()
         val priorities = operands.mapIndexed { operandIndex, operand ->
             val constraint = skipConstraintModifiers(operand.alternatives)
@@ -297,17 +297,19 @@ class I386Asm(private val emit: (Int) -> Unit) {
                 5
             } else if (operand.isLocalPointer) 1 else constraintPriority(constraint)
         }
+        val tiedOutputs = operands.mapIndexedNotNull { index, operand -> operand.tiedTo.takeIf { it >= 0 } }.toSet()
         val order = operands.indices.sortedBy { priorities[it] }
         order.forEach { index ->
             val operand = operands[index]
             if (operand.tiedTo >= 0) return@forEach
             val isOutput = index < outputCount
             if (operand.alternatives.startsWith('+')) operand.isReadWrite = true
+            val registerMask = if (operand.isReadWrite || index in tiedOutputs) 3 else if (isOutput) 1 else 2
             val choices = skipConstraintModifiers(operand.alternatives)
             var assigned = false
             for (choice in choices) {
                 val candidates = when (choice) {
-                    'A' -> if (!allocated[0] && !allocated[2]) listOf(0) else emptyList()
+                    'A' -> if (allocated[0] and registerMask == 0 && allocated[2] and registerMask == 0) listOf(0) else emptyList()
                     'a' -> listOf(0); 'b' -> listOf(3); 'c' -> listOf(1); 'd' -> listOf(2)
                     'S' -> listOf(6); 'D' -> listOf(7)
                     'q' -> listOf(0, 3, 1, 2)
@@ -316,24 +318,24 @@ class I386Asm(private val emit: (Int) -> Unit) {
                     'I', 'N', 'M' -> if (operand.isConstant) listOf(-1) else emptyList()
                     'm' -> when {
                         operand.isMemory -> listOf(-1)
-                        operand.isLocalPointer && (isOutput || choice == 'm') -> (0..7).toList()
+                        operand.isLocalPointer && (isOutput || choice == 'm') -> (0..7).filter { allocated[it] and 2 == 0 }
                         else -> emptyList()
                     }
                     'g' -> when {
                         operand.isConstant || operand.isMemory -> listOf(-1)
-                        operand.isLocalPointer && isOutput -> (0..7).toList()
+                        operand.isLocalPointer && isOutput -> (0..7).filter { allocated[it] and 2 == 0 }
                         else -> (0..7).toList()
                     }
                     '=', '&', '+' , '%' -> emptyList()
                     else -> emptyList()
                 }
-                val reg = candidates.firstOrNull { candidate -> candidate < 0 || !allocated[candidate] }
+                val reg = candidates.firstOrNull { candidate -> candidate < 0 || allocated[candidate] and registerMask == 0 }
                 if (reg != null) {
                     if (reg >= 0) {
-                        allocated[reg] = true
+                        allocated[reg] = allocated[reg] or registerMask
                         operand.register = reg
                         if (choice == 'A') {
-                            allocated[2] = true
+                            allocated[2] = allocated[2] or registerMask
                             operand.isLongLong = true
                         }
                         if (operand.isLocalPointer && (choice == 'm' || (choice == 'g' && isOutput))) operand.isMemory = true
@@ -352,7 +354,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
             }
         }
         if (operands.any { it.isLocalPointer && it.register >= 0 })
-            return (0..7).firstOrNull { !allocated[it] } ?: -1
+            return (0..7).firstOrNull { allocated[it] and 1 == 0 } ?: -1
         return -1
     }
 
