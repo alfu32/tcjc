@@ -409,7 +409,7 @@ object ArmGen {
         when (operation) {
             "+" -> {
                 if (leftIsZero) { val swap = lhs; lhs = rhs; rhs = swap }
-                if (rightIsZero) return FloatingOperationPlan(emptyList())
+                if (leftIsZero || rightIsZero) return FloatingOperationPlan(emptyList())
                 opcode = opcode or 0x300000
             }
             "-" -> {
@@ -443,7 +443,7 @@ object ArmGen {
         }
         val word = if (operation == "-" && leftIsZero) opcode or (dest shl 12) or lhs
             else opcode or (dest shl 12) or (lhs shl 16) or rhs
-        return FloatingOperationPlan(listOf(word), consumedOperands = if (operation in setOf("abs", "sqrt") || operation == "-" && leftIsZero) 1 else 2)
+        return FloatingOperationPlan(listOf(word), consumedOperands = if (operation == "-" && leftIsZero) 1 else 2)
     }
 
     /** Encodes FPA arithmetic and comparison operations, including immediate constants. */
