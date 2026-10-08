@@ -28,6 +28,11 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OPC_MODRM = 0x08
         const val OPC_GROUP_SHIFT = 13
         const val OPC_FWAIT = 0x10
+        const val OPC_SHIFT = 0x20
+        const val OPC_ARITH = 0x30
+        const val OPC_FARITH = 0x40
+        const val OPC_TEST = 0x50
+        const val OPC_0F01 = 0x60
         const val OPC_0F = 0x100
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
@@ -87,7 +92,8 @@ class I386Asm(private val emit: (Int) -> Unit) {
             emit(opcode)
             return true
         }
-        emitInstruction(instruction, operands, opcodeForMnemonic(instruction, mnemonic, opcode), emitExpression = emitExpression)
+        val group = groupForMnemonic(instruction, mnemonic)
+        emitInstruction(instruction, operands, opcodeForMnemonic(instruction, mnemonic, opcode), groupOverride = group, emitExpression = emitExpression)
         return true
     }
 
@@ -96,17 +102,31 @@ class I386Asm(private val emit: (Int) -> Unit) {
         val root = mnemonic.dropLastWhile { it in "bwl" }
         val group = when (kind) {
             0x30 -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
-            0x20 -> mapOf("rol" to 0, "ror" to 1, "rcl" to 2, "rcr" to 3, "shl" to 4, "sal" to 4, "shr" to 5, "sar" to 7)[root]
-            0x40 -> mapOf("fadd" to 0, "fmul" to 1, "fcom" to 2, "fcomp" to 3, "fsub" to 4, "fsubr" to 5, "fdiv" to 6, "fdivr" to 7)[root]
+            0x40 -> groupForMnemonic(instruction, mnemonic)
             else -> null
         }
-        if (group != null) return baseOpcode + (group shl 3)
+        if (group != null && kind != OPC_SHIFT) return baseOpcode + (group shl 3)
+        if (kind == OPC_0F01) return baseOpcode or 0x0f0100
         if (kind == 0x50) {
             val condition = conditionNames.indexOf(root.removePrefix("cmov").removePrefix("set").removePrefix("j"))
             if (condition >= 0) return baseOpcode + condition
         }
         val width = when (mnemonic.lastOrNull()) { 'b' -> 0; 'w' -> 1; 'l' -> 2; else -> 0 }
         return if (instruction.instructionType and 1 != 0 && width > 0) baseOpcode + 1 else baseOpcode
+    }
+
+    private fun groupForMnemonic(instruction: Instruction, mnemonic: String): Int? {
+        val root = mnemonic.dropLastWhile { it in "bwl" }
+        return when (instruction.instructionType and 0x70) {
+            OPC_ARITH -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
+            OPC_SHIFT -> mapOf("rol" to 0, "ror" to 1, "rcl" to 2, "rcr" to 3, "shl" to 4, "sal" to 4, "shr" to 5, "sar" to 7)[root]
+            OPC_FARITH -> mapOf("fadd" to 0, "fmul" to 1, "fcom" to 2, "fcomp" to 3, "fsub" to 4, "fsubr" to 5, "fdiv" to 6, "fdivr" to 7)[root.removeSuffix("p")]
+            OPC_TEST -> {
+                val cc = root.removePrefix("cmov").removePrefix("set").removePrefix("j")
+                conditionNames.indexOf(cc).takeIf { it >= 0 }
+            }
+            else -> null
+        }
     }
 
     private val conditionNames = listOf(
@@ -476,7 +496,8 @@ class I386Asm(private val emit: (Int) -> Unit) {
     /** Emits a selected i386 template's opcode, ModRM byte, and immediate operands. */
     fun emitInstruction(
         instruction: Instruction, operands: List<Operand>, opcode: Int,
-        suffixOpcodeBits: Int = 0, emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
+        suffixOpcodeBits: Int = 0, groupOverride: Int? = null,
+        emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
     ) {
         var op = opcode + suffixOpcodeBits
         var modRmIndex = -1
@@ -494,14 +515,14 @@ class I386Asm(private val emit: (Int) -> Unit) {
         if ((op ushr 8) and 0xff != 0) emit(op ushr 8)
         emit(op)
         if (modRmIndex == -2) {
-            val group = (instruction.instructionType ushr OPC_GROUP_SHIFT) and 7
+            val group = groupOverride ?: ((instruction.instructionType ushr OPC_GROUP_SHIFT) and 7)
             val syntheticRegister = if (instruction.mnemonic == "endbr32") 3 else 0
             emit(0xc0 or (group shl 3) or syntheticRegister)
         } else if (modRmIndex >= 0) {
             val otherRegister = operands.indices.firstOrNull { index ->
                 index != modRmIndex && operands[index].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0
             }
-            val group = (instruction.instructionType ushr OPC_GROUP_SHIFT) and 7
+            val group = groupOverride ?: ((instruction.instructionType ushr OPC_GROUP_SHIFT) and 7)
             val field = otherRegister?.let { operands[it].register } ?: group
             modRm(field, operands[modRmIndex]) { -1 }
         }
