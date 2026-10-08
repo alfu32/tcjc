@@ -68,7 +68,7 @@ class Riscv64Gen(
     )
     data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
     data class CallArgument(val type: AbiType, val alignment: Int = 8, val named: Boolean = true)
-    data class CallArgumentValue(val argument: CallArgument, val value: Value)
+    data class CallArgumentValue(val argument: CallArgument, val value: Value, val fields: List<Value> = emptyList())
     data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
     data class ParameterLocation(
         val stackOffset: Int,
@@ -482,7 +482,11 @@ class Riscv64Gen(
     }
 
     /** Materializes scalar arguments into their assigned ABI registers or outgoing stack slots. */
-    fun materializeScalarCallArguments(arguments: List<CallArgumentValue>, plan: CallPlan) {
+    fun materializeScalarCallArguments(
+        arguments: List<CallArgumentValue>,
+        plan: CallPlan,
+        copyAggregate: (source: Value, destinationStackOffset: Int, size: Int) -> Unit = { _, _, _ -> error("aggregate copy callback is required") },
+    ) {
         require(arguments.size == plan.encodedArguments.size)
         var stackOffset = 0
         for (index in arguments.indices) {
@@ -490,13 +494,23 @@ class Riscv64Gen(
             val encoded = plan.encodedArguments[index]
             val type = item.argument.type
             if (type.size == 0) continue
-            if (type.baseType == VT_STRUCT || type.size > 8 || encoded and 64 != 0) {
-                error("aggregate call argument requires value-stack copy lowering")
-                return
-            }
+            val byReference = encoded and 64 != 0
             if (encoded and 32 != 0) {
                 val alignment = maxOf(item.argument.alignment, 8)
                 stackOffset = (stackOffset + alignment - 1) and -alignment
+                if (type.baseType == VT_STRUCT && !byReference) {
+                    copyAggregate(item.value, stackOffset, type.size)
+                    stackOffset += (type.size + alignment - 1) and -alignment
+                    continue
+                }
+                if (byReference) {
+                    val temporary = plan.stackAdjustment + (encoded ushr 7)
+                    copyAggregate(item.value, temporary, type.size)
+                    emitStackAddress(5, temporary)
+                    emitStore(0x23, 3, 2, 5, stackOffset)
+                    stackOffset += 8
+                    continue
+                }
                 val float = type.isFloat
                 val source = if (item.value.kind == ValueKind.REGISTER) item.value.register else if (float) 15 else 7
                 if (item.value.kind != ValueKind.REGISTER) load(source, item.value)
@@ -506,6 +520,30 @@ class Riscv64Gen(
                 continue
             }
             val register = encoded and 15
+            if (byReference) {
+                val temporary = plan.stackAdjustment + (encoded ushr 7)
+                copyAggregate(item.value, temporary, type.size)
+                emitStackAddress(register, temporary)
+                continue
+            }
+            if (type.baseType == VT_STRUCT) {
+                val pass = registerPass(type, item.argument.named)
+                if (item.fields.size < pass.classes[0]) {
+                    error("aggregate fields must be provided for register argument materialization")
+                    return
+                }
+                for (fieldIndex in 0 until pass.classes[0]) {
+                    val slot = if (fieldIndex == 0) register else (encoded ushr 7) and 31
+                    if (fieldIndex == 1 && encoded and 16 != 0) {
+                        val field = item.fields[fieldIndex]
+                        val source = if (field.kind == ValueKind.REGISTER) field.register else 7
+                        if (field.kind != ValueKind.REGISTER) load(source, field)
+                        emitStore(0x23, 3, 2, integerRegister(source), stackOffset)
+                        stackOffset += 8
+                    } else load(slot, item.fields[fieldIndex])
+                }
+                continue
+            }
             val target = if (type.isFloat) register + 8 else register
             load(target, item.value)
             val second = (encoded ushr 7) and 31
@@ -513,6 +551,15 @@ class Riscv64Gen(
                 error("split aggregate call argument requires field lowering")
                 return
             }
+        }
+    }
+
+    private fun emitStackAddress(destination: Int, offset: Int) {
+        val rd = integerRegister(destination)
+        if (lowOverflow(offset) == 0) emitImmediate(0x13, 0, rd, 2, offset)
+        else {
+            loadLargeConstant(5, offset, 0)
+            emitRegister(0x33, 0, rd, 2, 5, 0)
         }
     }
 
