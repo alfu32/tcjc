@@ -20,6 +20,7 @@ class C67Gen(
     data class CallTarget(val symbol: Int? = null, val targetRegister: Int = -1, val addend: Int = 0)
     data class FunctionFrame(val argumentSizes: List<Int>, val parameterOffsets: List<Int>, val pushedArgumentBytes: Int,
         val stackAdjustmentOffset: Int, val returnSubtraction: Int, val structReturnOffset: Int?)
+    data class CallArgument(val type: ValueType, val value: Value)
     companion object {
         const val NB_REGS = 24
         const val RC_INT = 0x0001
@@ -132,6 +133,74 @@ class C67Gen(
     fun fillNops(byteCount: Int) {
         require(byteCount % 4 == 0) { "alignment of code section not multiple of 4" }
         repeat(byteCount.coerceAtLeast(0) / 4) { nop(4) }
+    }
+
+    /** Saves compiler values to the temporary stack, reloads the first ten ABI registers, and calls. */
+    fun lowerFunctionCall(arguments: List<CallArgument>, target: CallTarget,
+        materializeArgument: (Int, Int) -> Int, returnAddressSymbol: Int) {
+        require(arguments.size <= NO_CALL_ARGS_PASSED_ON_STACK) { "more than 10 function params not currently supported" }
+        val sizes = IntArray(arguments.size)
+        for (index in arguments.indices) {
+            val argument = arguments[index]
+            require(argument.type != ValueType.STRUCT) { "C67 structure arguments are unsupported" }
+            require(argument.type != ValueType.LONG_LONG && argument.type != ValueType.LONG_DOUBLE) { "C67 long arguments are unsupported" }
+            val size = if (argument.type == ValueType.DOUBLE) 8 else 4
+            val reg = materializeArgument(index, 0x100 shl (index * 2))
+            push(reg)
+            if (size == 8) storeWordPreIncrement(reg + 1, C67_SP, 3)
+            sizes[index] = size
+        }
+        for (index in arguments.indices.reversed()) {
+            if (sizes[index] == 8) popDoubleWord(4 + index * 2) else pop(4 + index * 2)
+        }
+        callOrJump(false, target, returnAddressSymbol)
+    }
+
+    /** Emits the C67 fixed frame setup, including argument register spill slots. */
+    fun emitFunctionPrologue(arguments: List<CallArgument>, returnsStructure: Boolean = false,
+        stdcall: Boolean = false, setParameter: (Int, Int, Boolean) -> Unit = { _, _, _ -> }): FunctionFrame {
+        require(arguments.size <= NO_CALL_ARGS_PASSED_ON_STACK) { "more than 10 function params not currently supported" }
+        var address = 8
+        val structureReturnOffset = if (returnsStructure) address.also { address += PTR_SIZE } else null
+        val parameterOffsets = mutableListOf<Int>()
+        val sizes = arguments.map { argument ->
+            val offset = address
+            parameterOffsets += offset
+            setParameter(parameterOffsets.lastIndex, offset, false)
+            val size = (when (argument.type) { ValueType.DOUBLE, ValueType.LONG_LONG -> 8; else -> 4 } + 3) and -4
+            address += size
+            size
+        }
+        val retSub = if (stdcall) address - 8 else 0
+        var localOffset = 0
+        numberOfCurrentFunctionArguments = arguments.size
+        for (index in arguments.indices) {
+            parameterLocationsOnStack[index] = localOffset
+            localOffset -= 8
+            push(4 + index * 2)
+            if (sizes[index] == 8) storeWordPreIncrement(5 + index * 2, C67_SP, 3)
+            translateStackToRegister[index] = sizes[index]
+        }
+        totalBytesPushedOnStack = -localOffset
+        functionStackAdjustmentOffset = position()
+        addConstant(0, C67_SP)
+        push(C67_A0)
+        push(C67_B3)
+        functionReturnSubtraction = retSub
+        return FunctionFrame(sizes, parameterOffsets, totalBytesPushedOnStack, functionStackAdjustmentOffset, retSub, structureReturnOffset)
+    }
+
+    /** Emits the return epilogue and patches the deferred local stack adjustment. */
+    fun emitFunctionEpilogue(localBytes: Int) {
+        val local = (-localBytes + 7) and -8
+        pop(C67_B3)
+        nop(4)
+        conditionalBranch(false, C67_CREG_ZERO, C67_B3)
+        pop(C67_FP)
+        addConstant(local, C67_SP)
+        val adjustment = readWord(functionStackAdjustmentOffset)
+        writeWord(functionStackAdjustmentOffset, adjustAddConstant(adjustment, -local + totalBytesPushedOnStack))
+        nop(3)
     }
 
     private fun memorySize(type: ValueType): Int = when (type) {
