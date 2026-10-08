@@ -95,6 +95,95 @@ object ArmGen {
         return 0
     }
 
+    /** Expands larger add/sub constants into a sequence of ARM data-processing words. */
+    fun stuffConstantHarder(opcode: Int, value: Int): List<Int> {
+        val direct = stuffConstant(opcode, value)
+        if (direct != 0) return listOf(direct)
+        val masks = IntArray(16)
+        masks[0] = 0xff
+        val secondOpcode = (opcode and 0xfff0ffff.toInt()) or ((opcode and 0xf000) shl 4)
+        for (i in 1 until masks.size) masks[i] = (masks[i - 1] ushr 2) or (masks[i - 1] shl 30)
+        for (i in 0 until 12) {
+            for (j in (if (i < 4) i + 12 else 15) downTo i + 4) {
+                if (value and (masks[i] or masks[j]) == value)
+                    return listOf(stuffConstant(opcode, value and masks[i]), stuffConstant(secondOpcode, value and masks[j]))
+            }
+        }
+        val negativeOpcode = opcode xor 0x00c00000
+        val negativeSecondOpcode = secondOpcode xor 0x00c00000
+        val negativeValue = -value
+        for (i in 0 until 12) {
+            for (j in (if (i < 4) i + 12 else 15) downTo i + 4) {
+                if (negativeValue and (masks[i] or masks[j]) == negativeValue)
+                    return listOf(stuffConstant(negativeOpcode, negativeValue and masks[i]), stuffConstant(negativeSecondOpcode, negativeValue and masks[j]))
+            }
+        }
+        for (i in 0 until 8) {
+            for (j in i + 4 until 12) {
+                for (k in (if (i < 4) i + 12 else 15) downTo j + 4) {
+                    if (value and (masks[i] or masks[j] or masks[k]) == value)
+                        return listOf(stuffConstant(opcode, value and masks[i]), stuffConstant(secondOpcode, value and masks[j]), stuffConstant(secondOpcode, value and masks[k]))
+                }
+            }
+        }
+        for (i in 0 until 8) {
+            for (j in i + 4 until 12) {
+                for (k in (if (i < 4) i + 12 else 15) downTo j + 4) {
+                    if (negativeValue and (masks[i] or masks[j] or masks[k]) == negativeValue)
+                        return listOf(stuffConstant(negativeOpcode, negativeValue and masks[i]), stuffConstant(negativeSecondOpcode, negativeValue and masks[j]), stuffConstant(negativeSecondOpcode, negativeValue and masks[k]))
+                }
+            }
+        }
+        return listOf(stuffConstant(opcode, value and masks[0]), stuffConstant(secondOpcode, value and masks[4]),
+            stuffConstant(secondOpcode, value and masks[8]), stuffConstant(secondOpcode, value and masks[12]))
+    }
+
+    data class AddressCalculation(val base: Int, val offset: Int, val sign: Int, val words: List<Int>)
+
+    /** Materializes an out-of-range or unaligned address offset through LR. */
+    fun calculateAddress(base: Int, offset: Int, sign: Int, maxOffset: Int, shift: Int): AddressCalculation {
+        var newBase = base
+        var newOffset = offset
+        var newSign = sign
+        val words = mutableListOf<Int>()
+        if (newOffset > maxOffset || newOffset and ((1 shl shift) - 1) != 0) {
+            var opcode = if (newSign != 0) 0xe240e000.toInt() else 0xe280e000.toInt()
+            opcode = opcode or (newBase shl 16)
+            newBase = 14
+            var encoded = stuffConstant(opcode, newOffset and maxOffset.inv())
+            if (encoded != 0) {
+                words += encoded
+                newOffset = newOffset and maxOffset
+                return AddressCalculation(newBase, newOffset, newSign, words)
+            }
+            encoded = stuffConstant(opcode, (newOffset + maxOffset) and maxOffset.inv())
+            if (encoded != 0) {
+                words += encoded
+                newSign = if (newSign == 0) 1 else 0
+                newOffset = ((newOffset + maxOffset) and maxOffset.inv()) - newOffset
+                return AddressCalculation(newBase, newOffset, newSign, words)
+            }
+            words += stuffConstantHarder(opcode, newOffset and maxOffset.inv())
+            newOffset = newOffset and maxOffset
+        }
+        return AddressCalculation(newBase, newOffset, newSign, words)
+    }
+
+    fun integerRegister(register: Int): Int = when {
+        register == TREG_R12 -> 12
+        register in TREG_R0..TREG_R3 -> register - TREG_R0
+        register in TREG_SP..TREG_LR -> register + (13 - TREG_SP)
+        else -> throw IllegalArgumentException("compiler error! register $register is no int register")
+    }
+
+    fun floatingRegister(register: Int, vfp: Boolean): Int {
+        val limit = if (vfp) TREG_F7 else TREG_F3
+        require(register in TREG_F0..limit) {
+            "compiler error! register $register is no ${if (vfp) "vfp" else "fpa"} register"
+        }
+        return register - TREG_F0
+    }
+
     /** Encodes a PC-relative ARM branch displacement. */
     fun encodeBranch(position: Int, address: Int, fail: Boolean, error: (String) -> Unit = { throw IllegalArgumentException(it) }): Int {
         val displacement = address - position - 8
