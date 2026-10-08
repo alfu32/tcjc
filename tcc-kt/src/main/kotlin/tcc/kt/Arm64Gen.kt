@@ -21,6 +21,13 @@ class Arm64Gen(
     data class BoundsPrologue(val sectionOffset: Long, val instructionOffset: Int, val addEpilogue: Boolean = false)
     data class BoundsRelocation(val wordIndex: Int, val symbol: Symbol, val type: String, val addend: Long = 0)
     data class BoundsEpilogue(val patchedPrologue: List<Int>, val body: List<Int>, val relocations: List<BoundsRelocation>, val terminator: Long?)
+    data class AbiField(val type: AbiType, val offset: Int)
+    data class AbiType(
+        val type: Type, val size: Int, val alignment: Int = 8,
+        val fields: List<AbiField> = emptyList(), val union: Boolean = false,
+        val arrayCount: Int? = null, val elementType: AbiType? = null,
+    )
+    data class AbiAssignment(val stackBytes: Int, val locations: List<Int>)
 
     companion object {
         const val NB_REGS = 28
@@ -462,4 +469,101 @@ class Arm64Gen(
     }
 
     fun generateJumpAddress(address: Int) { o(ARM64_B or ((address - position() shr 2) and 0x3ffffff)) }
+
+    private fun isAbiFloat(type: Type): Boolean = type == Type.FLOAT || type == Type.DOUBLE
+
+    private fun homogeneousFloatAux(type: AbiType, fsize: IntArray, count: Int): Int {
+        if (isAbiFloat(type.type)) {
+            if (count >= 4 || fsize[0] != 0 && fsize[0] != type.size) return -1
+            fsize[0] = type.size
+            return count + 1
+        }
+        if (type.type == Type.STRUCT) {
+            if (!type.union) {
+                var n = count
+                for (field in type.fields) {
+                    if (field.offset != (n - count) * fsize[0]) return -1
+                    n = homogeneousFloatAux(field.type, fsize, n)
+                    if (n < 0) return -1
+                }
+                return if (type.size == (n - count) * fsize[0]) n else -1
+            }
+            var n = count
+            for (field in type.fields) {
+                val branchSize = intArrayOf(fsize[0])
+                val branch = homogeneousFloatAux(field.type, branchSize, count)
+                if (branch < 0) return -1
+                if (n == count || branch < n) { n = branch; fsize[0] = branchSize[0] }
+            }
+            return if (type.size == (n - count) * fsize[0]) n else -1
+        }
+        if (type.arrayCount != null && type.elementType != null) {
+            if (type.arrayCount == 0) return count
+            val elementCount = homogeneousFloatAux(type.elementType, fsize, count)
+            if (elementCount < 0 || elementCount != count && type.arrayCount > 4) return -1
+            val result = count + type.arrayCount * (elementCount - count)
+            return if (result <= 4) result else -1
+        }
+        return -1
+    }
+
+    /** Returns the homogeneous float aggregate element count and writes element size to outSize[0]. */
+    fun homogeneousFloatAggregate(type: AbiType, outSize: IntArray? = null): Int {
+        if (type.type != Type.STRUCT) return 0
+        val fsize = intArrayOf(0)
+        val count = homogeneousFloatAux(type, fsize, 0)
+        if (count !in 1..4) return 0
+        if (outSize != null) outSize[0] = fsize[0]
+        return count
+    }
+
+    /** Implements AArch64 PCS parameter placement; locations encode GPR, vector, or stack slots. */
+    fun assignAbiArguments(types: List<AbiType>, variadicIndex: Int = 0, macho: Boolean = false, pe: Boolean = false): AbiAssignment {
+        var nextInteger = 0
+        var nextVector = 0
+        var stack = 32
+        val locations = MutableList(types.size) { -1 }
+        for (i in types.indices) {
+            val type = types[i]
+            var hfa = homogeneousFloatAggregate(type)
+            var size = if (type.type == Type.POINTER || type.type == Type.FUNCTION) 8 else type.size
+            val alignment = if (type.type == Type.POINTER || type.type == Type.FUNCTION) 8 else type.alignment
+            if (macho && variadicIndex > 0 && i == variadicIndex) { nextInteger = 8; nextVector = 8 }
+            if (pe && variadicIndex > 0 && i >= variadicIndex) {
+                hfa = 0
+                if (isAbiFloat(type.type)) size = 8
+            }
+            if (hfa == 0 && size > 16) {
+                if (nextInteger < 8) locations[i] = nextInteger++ * 2 + 1
+                else { stack = (stack + 7) and -8; locations[i] = stack + 1; stack += 8 }
+                continue
+            }
+            if (type.type == Type.STRUCT && hfa == 0) size = (size + 7) and -8
+            if (isAbiFloat(type.type) && nextVector < 8) { locations[i] = 16 + (nextVector++ * 2); continue }
+            if (hfa != 0 && nextVector + hfa <= 8) { locations[i] = 16 + nextVector * 2; nextVector += hfa; continue }
+            if (hfa != 0) { nextVector = 8; size = (size + 7) and -8 }
+            if (hfa != 0 || type.type == Type.LONG_DOUBLE) {
+                stack = (stack + 7) and -8
+                stack = (stack + alignment - 1) and -alignment
+            }
+            if (type.type == Type.FLOAT) size = 8
+            if (hfa != 0 || isAbiFloat(type.type)) { locations[i] = stack; stack += size; continue }
+            if (type.type != Type.STRUCT && size <= 8 && nextInteger < 8) { locations[i] = nextInteger++ * 2; continue }
+            if (alignment == 16) nextInteger = (nextInteger + 1) and -2
+            if (type.type != Type.STRUCT && size == 16 && nextInteger < 7) { locations[i] = nextInteger * 2; nextInteger += 2; continue }
+            if (type.type == Type.STRUCT && size <= (8 - nextInteger) * 8) {
+                locations[i] = nextInteger * 2
+                nextInteger += (size + 7) shr 3
+                continue
+            }
+            nextInteger = 8
+            stack = (stack + 7) and -8
+            stack = (stack + alignment - 1) and -alignment
+            if (type.type == Type.STRUCT) { locations[i] = stack; stack += size; continue }
+            if (size < 8) size = 8
+            locations[i] = stack
+            stack += size
+        }
+        return AbiAssignment(stack - 32, locations)
+    }
 }
