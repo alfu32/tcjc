@@ -305,4 +305,74 @@ object BoundCheck {
     @JvmStatic
     fun isInvalidPointer(pointer: Long): Boolean = pointer == INVALID_POINTER
 
+
+    /** Registers argv/env strings and their pointer vectors, as __bound_main_arg does. */
+    @JvmStatic
+    fun registerMainArguments(arguments: List<Pair<Long, Long>>, argvVector: Long, env: List<Pair<Long, Long>> = emptyList(), envVector: Long? = null, pointerSize: Int = 8) = lock.withLock {
+        arguments.forEach { (address, length) -> regions[address] = Region(address, length) }
+        if (arguments.isNotEmpty()) regions[argvVector] = Region(argvVector, (arguments.size + 1L) * pointerSize)
+        env.forEach { (address, length) -> regions[address] = Region(address, length) }
+        if (env.isNotEmpty() && envVector != null) regions[envVector] = Region(envVector, (env.size + 1L) * pointerSize)
+    }
+
+    /** Releases active heap/stack tracking during the C runtime destructor path. */
+    @JvmStatic
+    fun exit() = lock.withLock {
+        frameRegions.clear()
+        allocations.keys.toList().forEach { regions.remove(it) }
+        allocations.clear()
+        initialized = false
+    }
+
+    data class ThreadHandle(val thread: Thread)
+
+    /** Wraps a created thread so it begins with a fresh bounds-checking state. */
+    @JvmStatic
+    fun createThread(name: String? = null, start: () -> Unit): ThreadHandle {
+        val thread = Thread({
+            checkingDepth.set(0)
+            start()
+        }, name)
+        thread.start()
+        return ThreadHandle(thread)
+    }
+
+    @JvmStatic
+    fun joinThread(handle: ThreadHandle) = handle.thread.join()
+
+    private val signalHandlers = mutableMapOf<Int, (Int) -> Unit>()
+
+    @JvmStatic
+    fun signal(signum: Int, handler: ((Int) -> Unit)?): ((Int) -> Unit)? = lock.withLock {
+        val old = signalHandlers[signum]
+        if (handler == null) signalHandlers.remove(signum) else signalHandlers[signum] = handler
+        old
+    }
+
+    @JvmStatic
+    fun dispatchSignal(signum: Int) {
+        val handler = lock.withLock { signalHandlers[signum] }
+        handler?.invoke(signum)
+    }
+
+    /** Maps and unmaps direct buffers while keeping their address ranges registered. */
+    private val mappedRegions = mutableMapOf<Long, java.nio.ByteBuffer>()
+    @JvmStatic
+    fun mmap(size: Int): Pair<Long, java.nio.ByteBuffer> = lock.withLock {
+        require(size >= 0)
+        val address = allocate(size, 0).address
+        val buffer = java.nio.ByteBuffer.allocateDirect(size)
+        mappedRegions[address] = buffer
+        address to buffer
+    }
+
+    @JvmStatic
+    fun munmap(address: Long): Boolean = lock.withLock {
+        val removed = mappedRegions.remove(address) ?: return@withLock false
+        regions.remove(address)
+        allocations.remove(address)
+        removed.clear()
+        true
+    }
+
 }
