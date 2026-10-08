@@ -223,6 +223,37 @@ object ArmGen {
 
     data class StructReturn(val registerCount: Int, val alignment: Int? = null, val registerSize: Int? = null, val type: String? = null)
 
+    data class IntegerOperationPlan(
+        val dataProcessingOpcode: Int? = null, val shiftOpcode: Int? = null,
+        val helper: String? = null, val resultRegister: Int = TREG_R0,
+        val multiply: Boolean = false, val unsigned: Boolean = false,
+    )
+
+    /** Selects the ARM instruction or runtime helper used by gen_opi. */
+    fun integerOperationPlan(operation: String, eabi: Boolean): IntegerOperationPlan = when (operation) {
+        "+" -> IntegerOperationPlan(dataProcessingOpcode = 8)
+        "addc1" -> IntegerOperationPlan(dataProcessingOpcode = 9)
+        "-" -> IntegerOperationPlan(dataProcessingOpcode = 4)
+        "subc1" -> IntegerOperationPlan(dataProcessingOpcode = 5)
+        "addc2" -> IntegerOperationPlan(dataProcessingOpcode = 10)
+        "subc2" -> IntegerOperationPlan(dataProcessingOpcode = 12)
+        "&" -> IntegerOperationPlan(dataProcessingOpcode = 0)
+        "^" -> IntegerOperationPlan(dataProcessingOpcode = 2)
+        "|" -> IntegerOperationPlan(dataProcessingOpcode = 0x18)
+        "*" -> IntegerOperationPlan(multiply = true)
+        "shl" -> IntegerOperationPlan(shiftOpcode = 0)
+        "shr" -> IntegerOperationPlan(shiftOpcode = 1, unsigned = true)
+        "sar" -> IntegerOperationPlan(shiftOpcode = 2)
+        "/", "pdiv" -> IntegerOperationPlan(helper = "__divsi3")
+        "udiv" -> IntegerOperationPlan(helper = "__udivsi3", unsigned = true)
+        "%" -> if (eabi) IntegerOperationPlan(helper = "__aeabi_idivmod", resultRegister = TREG_R1)
+            else IntegerOperationPlan(helper = "__modsi3")
+        "umod" -> if (eabi) IntegerOperationPlan(helper = "__aeabi_uidivmod", resultRegister = TREG_R1, unsigned = true)
+            else IntegerOperationPlan(helper = "__umodsi3", unsigned = true)
+        "umull" -> IntegerOperationPlan(multiply = true, unsigned = true)
+        else -> IntegerOperationPlan(dataProcessingOpcode = 0x15)
+    }
+
     /** Applies ARM EABI structure and homogeneous-float aggregate return rules. */
     fun structureReturn(size: Int, hardFloat: Boolean, variadic: Boolean, isFloat: Boolean, homogeneousFloatAggregate: Boolean, eabi: Boolean): StructReturn {
         if (!eabi) return StructReturn(0)
