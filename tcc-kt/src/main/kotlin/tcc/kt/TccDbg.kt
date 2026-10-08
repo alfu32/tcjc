@@ -227,7 +227,7 @@ object TccDbg {
             sections[".debug_str"] = DwarfSection(".debug_str", entrySize = 1, flags = flags or 0x30)
             if (dwarfVersion >= 5) sections[".debug_line_str"] = DwarfSection(".debug_line_str", entrySize = 1, flags = flags or 0x30)
         } else {
-            sections[".stab"] = DwarfSection(".stab", alignment = 8, entrySize = 12, flags = flags)
+            sections[".stab"] = DwarfSection(".stab", alignment = 4, entrySize = 12, flags = flags)
             sections[".stabstr"] = DwarfSection(".stabstr", flags = flags)
             sections[".stab"]!!.bytes += ByteArray(12).toList()
         }
