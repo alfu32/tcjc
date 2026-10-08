@@ -148,6 +148,76 @@ class I386Asm(private val emit: (Int) -> Unit) {
 
     data class InlineOperand(val register: Int, val readWrite: Boolean = false, val isMemory: Boolean = false, val isLongLong: Boolean = false)
 
+    data class ConstraintOperand(
+        val alternatives: String, val isConstant: Boolean = false,
+        val isMemory: Boolean = false, val isLocalPointer: Boolean = false,
+        var tiedTo: Int = -1, var register: Int = -1,
+        var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
+    )
+
+    /** Performs the i386 register and tied-operand allocation phase. */
+    fun allocateConstraints(
+        operands: MutableList<ConstraintOperand>, outputCount: Int,
+        clobbers: BooleanArray,
+    ): Int {
+        val allocated = BooleanArray(8)
+        clobbers.indices.take(8).forEach { allocated[it] = clobbers[it] }
+        allocated[4] = true // esp
+        allocated[5] = true // ebp
+        val priorities = operands.mapIndexed { operandIndex, operand ->
+            val constraint = skipConstraintModifiers(operand.alternatives)
+            val ref = constraint.toIntOrNull()
+            if (ref != null) {
+                require(ref < operandIndex && operandIndex >= outputCount) { "invalid tied operand reference" }
+                operand.tiedTo = ref
+                5
+            } else if (operand.isLocalPointer) 1 else constraintPriority(constraint)
+        }
+        val order = operands.indices.sortedBy { priorities[it] }
+        order.forEach { index ->
+            val operand = operands[index]
+            if (operand.tiedTo >= 0) return@forEach
+            val isOutput = index < outputCount
+            if (operand.alternatives.startsWith('+')) operand.isReadWrite = true
+            val choices = skipConstraintModifiers(operand.alternatives)
+            var assigned = false
+            for (choice in choices) {
+                val candidates = when (choice) {
+                    'a' -> listOf(0); 'b' -> listOf(3); 'c' -> listOf(1); 'd' -> listOf(2)
+                    'S' -> listOf(6); 'D' -> listOf(7)
+                    'q' -> listOf(0, 3, 1, 2)
+                    'r', 'R', 'p' -> (0..7).toList()
+                    'e', 'i' -> if (operand.isConstant) listOf(-1) else emptyList()
+                    'I', 'N', 'M' -> if (operand.isConstant) listOf(-1) else emptyList()
+                    'm' -> if (operand.isMemory || operand.isLocalPointer) listOf(-1) else emptyList()
+                    'g' -> if (operand.isConstant || operand.isMemory) listOf(-1) else (0..7).toList()
+                    '=', '&', '+' , '%' -> emptyList()
+                    else -> emptyList()
+                }
+                val reg = candidates.firstOrNull { candidate -> candidate < 0 || !allocated[candidate] }
+                if (reg != null) {
+                    if (reg >= 0) {
+                        allocated[reg] = true
+                        operand.register = reg
+                    }
+                    if (choice == '+') operand.isReadWrite = true
+                    assigned = true
+                    break
+                }
+            }
+            require(assigned) { "asm constraint $index ('${operand.alternatives}') could not be satisfied" }
+        }
+        operands.forEachIndexed { index, operand ->
+            if (operand.tiedTo >= 0) {
+                operand.register = operands[operand.tiedTo].register
+                operand.isLongLong = operands[operand.tiedTo].isLongLong
+            }
+        }
+        if (operands.any { it.isLocalPointer && it.register >= 0 })
+            return (0..7).firstOrNull { !allocated[it] } ?: -1
+        return -1
+    }
+
     fun immediate(value: Int): Operand {
         var type = OP_IM32
         if (value == (value.toByte().toInt())) type = type or OP_IM8
