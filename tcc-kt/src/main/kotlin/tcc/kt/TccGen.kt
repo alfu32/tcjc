@@ -1120,6 +1120,39 @@ object TccGen {
         state.hooks.loadRegister(destination, source, type)
     }
 
+    fun incrementLvalueOffset(
+        state: RuntimeState,
+        offset: Int,
+        pointerDifferenceType: Int,
+        sizeType: Int,
+        addressOf: () -> Unit,
+        binaryOperation: (Int) -> Unit,
+    ) {
+        val value = state.values.lastOrNull() ?: run { state.hooks.error("value stack is empty"); return }
+        val originalType = value.type.type
+        addressOf()
+        state.values.lastOrNull()?.type?.type = pointerDifferenceType
+        pushPointerSized(state, offset.toLong(), sizeType)
+        binaryOperation('+'.code)
+        state.values.lastOrNull()?.let {
+            it.register = it.register or VT_LVAL
+            it.type.type = originalType
+        }
+    }
+
+    fun incrementBitfieldAddress(
+        state: RuntimeState,
+        offset: Int,
+        pointerDifferenceType: Int,
+        sizeType: Int,
+        addressOf: () -> Unit,
+        binaryOperation: (Int) -> Unit,
+    ) {
+        val value = state.values.lastOrNull() ?: run { state.hooks.error("value stack is empty"); return }
+        value.type.type = VT_BYTE or VT_UNSIGNED
+        incrementLvalueOffset(state, offset, pointerDifferenceType, sizeType, addressOf, binaryOperation)
+    }
+
     const val VT_CONST = 0x0040
     const val VT_SYM = 0x0200
 }
