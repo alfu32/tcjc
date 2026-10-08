@@ -129,6 +129,94 @@ class Arm64Asm(
     fun emitDataProcessingRegister(opcode: Int, rd: Int, rn: Int, rm: Int, is64Bit: Boolean) =
         emitInstruction(opcode or (if (is64Bit) 0x80000000.toInt() else 0) or ((rm and 31) shl 16) or ((rn and 31) shl 5) or (rd and 31))
 
+    fun emitLoadStoreImmediate(baseOpcode: Int, rt: Int, rn: Int, offset: Int, sizeLog2: Int): Int {
+        var instruction = baseOpcode
+        if (offset >= 0 && offset and ((1 shl sizeLog2) - 1) == 0) {
+            val imm12 = offset ushr sizeLog2
+            if (imm12 <= 0xfff) {
+                instruction = instruction or (imm12 shl 10) or ((rn and 31) shl 5) or (rt and 31)
+                emitInstruction(instruction)
+                return instruction
+            }
+        }
+        val unscaled = when (baseOpcode) {
+            0xf9400000.toInt() -> 0xf8400000.toInt(); 0xb9400000.toInt() -> 0xb8400000.toInt()
+            0x39400000 -> 0x38400000; 0x79400000 -> 0x78400000
+            0xfd400000.toInt() -> 0xfc400000.toInt(); 0xf9000000.toInt() -> 0xf8000000.toInt()
+            0xb9000000.toInt() -> 0xb8000000.toInt(); 0x39000000 -> 0x38000000
+            0x79000000 -> 0x78000000; 0xfd000000.toInt() -> 0xfc000000.toInt()
+            else -> 0
+        }
+        if (unscaled != 0 && offset in -256..255) {
+            instruction = unscaled or ((offset and 0x1ff) shl 12) or ((rn and 31) shl 5) or (rt and 31)
+            emitInstruction(instruction)
+            return instruction
+        }
+        if (offset and ((1 shl sizeLog2) - 1) != 0) error("invalid load/store offset")
+        error("load/store offset out of range")
+        return 0
+    }
+
+    fun emitLoadStorePair(baseOpcode: Int, rt: Int, rt2: Int, rn: Int, offset: Int, sizeLog2: Int): Int {
+        if (offset and ((1 shl sizeLog2) - 1) != 0) error("invalid pair load/store offset")
+        val imm7 = offset shr sizeLog2
+        if (imm7 !in -64..63) error("pair load/store offset out of range")
+        val instruction = baseOpcode or ((imm7 and 0x7f) shl 15) or ((rt2 and 31) shl 10) or ((rn and 31) shl 5) or (rt and 31)
+        emitInstruction(instruction)
+        return instruction
+    }
+
+    /** Encodes an AArch64 bitmask immediate in N:immr:imms form. */
+    fun encodeBitmaskImmediate(input: Long): Int {
+        var value = input
+        val negative = value and 1L != 0L
+        if (negative) value = value.inv()
+        if (value == 0L) return -1
+        var repetition: Int
+        fun periodic(bits: Int): Boolean {
+            val mask = (1L shl bits) - 1
+            return (value ushr bits) == (value and ((1L shl (64 - bits)) - 1))
+        }
+        repetition = when {
+            periodic(2) -> { value = value and 3; 2 }
+            periodic(4) -> { value = value and 15; 4 }
+            periodic(8) -> { value = value and 255; 8 }
+            periodic(16) -> { value = value and 65535; 16 }
+            periodic(32) -> { value = value and 0xffffffffL; 32 }
+            else -> 64
+        }
+        var position = 0
+        for (bits in listOf(32, 16, 8, 4, 2, 1)) {
+            val mask = (1L shl bits) - 1
+            if (value and mask == 0L) { value = value ushr bits; position += bits }
+        }
+        var length = 0
+        for (bits in listOf(32, 16, 8, 4, 2, 1)) {
+            val mask = (1L shl bits) - 1
+            if (value.inv() and mask == 0L) { value = value ushr bits; length += bits }
+        }
+        if (value != 0L) return -1
+        if (negative) {
+            position = (position + length) and (repetition - 1)
+            length = repetition - length
+        }
+        return ((if (repetition == 64) 1 else 0) shl 12) or
+            ((((repetition - 1) xor 31) shl 1) and 63) or
+            (((repetition - position) and (repetition - 1)) shl 6) or (length - 1)
+    }
+
+    fun emitLogicalImmediate(opcode: Int, rd: Int, rn: Int, immediate: Long, is64Bit: Boolean): Int {
+        var value = immediate
+        if (!is64Bit) { value = immediate.toInt().toLong() and 0xffffffffL; value = value or (value shl 32) }
+        val encoded = encodeBitmaskImmediate(value)
+        if (encoded < 0) { error("logical immediate out of range"); return 0 }
+        val instruction = opcode or (if (is64Bit) 0x80000000.toInt() else 0) or
+            (((encoded ushr 12) and 1) shl 22) or (((encoded ushr 6) and 63) shl 16) or
+            ((encoded and 63) shl 10) or ((rn and 31) shl 5) or (rd and 31)
+        emitInstruction(instruction)
+        return instruction
+    }
+
     fun emitBranch(offset: Int, link: Boolean = false) = emitInstruction((if (link) 0x94000000.toInt() else 0x14000000) or ((offset shr 2) and 0x03ffffff))
     fun emitBranchRegister(register: Int, link: Boolean = false) = emitInstruction((if (link) 0xd63f0000.toInt() else 0xd61f0000.toInt()) or ((register and 31) shl 5))
     fun emitReturn(register: Int = 30) = emitInstruction(0xd65f0000.toInt() or ((register and 31) shl 5))
