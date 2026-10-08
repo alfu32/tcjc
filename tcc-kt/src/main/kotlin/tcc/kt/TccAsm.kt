@@ -40,6 +40,7 @@ class TccAsm(
     data class DirectiveResult(val section: String, val emittedBytes: Int, val relocations: List<AsmRelocation> = emptyList())
 
     private val labels = mutableMapOf<String, Symbol>()
+    private val numericLabels = mutableMapOf<Long, MutableList<Symbol>>()
     private val sections = linkedMapOf(currentSection().name to currentSection())
     private var activeSection = currentSection()
     private var previousSection: Section? = null
@@ -63,6 +64,23 @@ class TccAsm(
         if (dotted) symbol.asmLabel = name
         labels[assemblerName] = symbol
         defineSymbol(assemblerName, symbol)
+        return symbol
+    }
+
+    fun defineLabel(name: String, local: Boolean = false): Symbol {
+        val transformed = asmToCName(name).first
+        val symbol = if (local) {
+            val localNumber = transformed.removePrefix("L.." ).toLongOrNull()
+            if (localNumber != null) {
+                val versions = numericLabels.getOrPut(localNumber) { mutableListOf() }
+                versions.lastOrNull()?.takeIf { !it.defined } ?: Symbol(transformed).also { versions += it }
+            } else getAsmSymbol(name)
+        } else getAsmSymbol(name)
+        require(!symbol.defined || symbol.external) { "assembler label '$name' already defined" }
+        symbol.value = activeSection.offset
+        symbol.sectionIndex = activeSection.index
+        symbol.defined = true
+        symbol.external = false
         return symbol
     }
 
@@ -146,6 +164,19 @@ class TccAsm(
             "size" -> {
                 val symbol = findAsmSymbol(args.firstOrNull()?.trim() ?: error("identifier expected")) ?: error("label not found")
                 symbol.size = asmIntExpression(args.getOrElse(1) { "0" }).toLong()
+            }
+            "reloc" -> {
+                require(args.size >= 3) { ".reloc expects offset, relocation type, and symbol" }
+                val offset = evaluateExpression(args[0])
+                val relocation = args[1].trim().removePrefix("R_")
+                val supported = setOf(
+                    "AARCH64_CALL26", "RISCV_CALL", "RISCV_CALL_PLT", "RISCV_BRANCH", "RISCV_JAL",
+                    "RISCV_PCREL_HI20", "RISCV_PCREL_LO12_I", "RISCV_PCREL_LO12_S", "RISCV_32_PCREL",
+                    "RISCV_32", "RISCV_64",
+                )
+                require(relocation in supported) { "unimplemented relocation '$relocation'" }
+                val symbol = getAsmSymbol(args[2].trim())
+                relocations += AsmRelocation(activeSection.name, offset.value, symbol.name, relocation, 0)
             }
             "ident", "file", "symver", "code16", "code32", "code64", "option" -> Unit
             else -> error("unknown assembler directive '.$directive'")
@@ -388,8 +419,11 @@ class TccAsm(
             if (text.matches(Regex("[0-9]+[bf]"))) {
                 val number = parseInteger(text.dropLast(1))
                 val localSuffix = text.last()
-                val symbol = getAsmSymbol(localLabelName(number))
-                if (localSuffix == 'b' && !symbol.defined) error("local label '$number' not found backward")
+                val versions = numericLabels.getOrPut(number) { mutableListOf() }
+                val symbol = if (localSuffix == 'b') versions.lastOrNull { it.defined }
+                    ?: error("local label '$number' not found backward")
+                else versions.lastOrNull()?.takeIf { !it.defined }
+                    ?: Symbol(localLabelName(number)).also { versions += it }
                 return Expression(symbol = symbol)
             }
             return Expression(parseInteger(text))
