@@ -709,6 +709,16 @@ class Riscv64Gen(
         emitStore(0x23, 3, addressRegister, valueRegister, 0)
     }
 
+    fun generateIntegerOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int, longWidth: Boolean = false) =
+        integerOperation(operation, left, right, destination, longWidth)
+
+    fun generateLongOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int) =
+        integerOperation(operation, left, right, destination, true)
+
+    fun generateGoto(target: CallTarget) = callOrJump(target, false)
+
+    fun generateVaStart(frame: FunctionFrame): Int = frame.variadicListOffset
+
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
         var current = chain
