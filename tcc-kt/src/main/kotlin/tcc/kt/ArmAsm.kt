@@ -670,4 +670,57 @@ class ArmAsm(
         emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1,
             vd, conversion, vm, opcode2, false)
     }
+
+    /** Encodes VMOV between VFP and ARM core registers. */
+    fun emitVfpArmRegisterTransfer(token: Int, firstConditionToken: Int, coprocessor: Int, operands: List<Operand>) {
+        if (coprocessor == 10) {
+            if (operands.size != 2 || operands.count { it.kind == Kind.REG32 } != 1 || operands.count { it.kind == Kind.VREG32 } != 1) {
+                expect("one ARM and one single-precision register operand"); return
+            }
+            val coreIsDestination = operands[0].kind == Kind.REG32
+            val arm = operands.first { it.kind == Kind.REG32 }.copy()
+            val vfp = operands.first { it.kind == Kind.VREG32 }.copy()
+            var opcode1 = if (coreIsDestination) 1 else 0
+            var opcode2 = 0
+            if (vfp.register and 1 != 0) {
+                if (coreIsDestination) opcode2 = opcode2 or 4 else opcode1 = opcode1 or 4
+            }
+            val vd = if (coreIsDestination) arm.register else vfp.register ushr 1
+            val vn = if (coreIsDestination) vfp.register ushr 1 else arm.register
+            emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor,
+                opcode1, vd, vn, 0x10, opcode2, false)
+        } else if (coprocessor == 11) {
+            if (operands.size != 3 || operands.count { it.kind == Kind.REG32 } != 2 || operands.count { it.kind == Kind.VREG64 } != 1) {
+                expect("one double-precision and two ARM register operands"); return
+            }
+            val vfpDestination = operands[0].kind == Kind.VREG64
+            val dreg = operands.first { it.kind == Kind.VREG64 }.register
+            val armRegisters = operands.filter { it.kind == Kind.REG32 }
+            val offset = Operand(Kind.VREG64, register = dreg)
+            emitCoprocessorDataTransfer(conditionCode(token, firstConditionToken), coprocessor,
+                armRegisters[0].register, armRegisters[1], offset,
+                preincrement = false, longTransfer = true, load = !vfpDestination)
+        } else expect("unknown VFP coprocessor")
+    }
+
+    /** Encodes VMRS and VMSR transfers to VFP system registers. */
+    fun emitVfpStatus(
+        group: String, token: Int, firstConditionToken: Int,
+        armRegister: Operand, systemRegister: String,
+    ) {
+        val system = when (systemRegister) { "fpsid" -> 0; "fpscr" -> 1; "fpexc" -> 8; else -> -1 }
+        if (system < 0) { expect("VFP system register"); return }
+        if (armRegister.kind != Kind.REG32) { expect("ARM register"); return }
+        val opcode = when (group) {
+            "vmrs" -> 15
+            "vmsr" -> 14
+            else -> { expect("floating point status register instruction"); return }
+        }
+        if (group == "vmrs" && armRegister.register == 15 && system != 1) {
+            error("vmrs to APSR_NZCV only supports FPSCR"); return
+        }
+        if (group == "vmsr" && armRegister.register == 15) { error("vmsr does not support pc"); return }
+        emitCoprocessorOpcode(conditionCode(token, firstConditionToken), 10, opcode,
+            armRegister.register, system, 0x10, 0, false)
+    }
 }
