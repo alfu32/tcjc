@@ -150,6 +150,24 @@ object TccElf {
         val alignment: Long = 0,
         val entrySize: Long = 0,
     )
+    data class DynamicEntry(val tag: Long, val value: Long)
+    data class DynamicTableLayout(
+        val dynamic: ElfSection,
+        val dynamicStrings: ElfSection,
+        val dynamicSymbols: ElfSection,
+        val gnuHash: ElfSection,
+        val got: ElfSection?,
+        val pltRelocations: ElfSection?,
+        val relocationAddress: Long = 0,
+        val relocationSize: Long = 0,
+        val versionSymbols: ElfSection? = null,
+        val versionNeeds: ElfSection? = null,
+        val versionNeedCount: Int = 0,
+        val debugEnabled: Boolean = false,
+        val startOffset: Int = 0,
+        val relocationEntrySize: Int = 0,
+        val sections: Map<String, ElfSection> = emptyMap(),
+    )
     const val NO_GOTPLT_ENTRY = 0
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
@@ -523,6 +541,79 @@ object TccElf {
             header.alignment = 4
         }
         return LayoutResult(headers, phCount, (request.elfHeaderSize + phCount * request.programHeaderSize + 3L) and -4L, tlsStart, tlsEnd)
+    }
+
+    fun fillDynamic(layout: DynamicTableLayout): List<DynamicEntry> {
+        val dynamic = layout.dynamic
+        val entries = mutableListOf<DynamicEntry>()
+        fun put(tag: Long, value: Long) { entries += DynamicEntry(tag, value) }
+        put(4, layout.dynamicSymbols.hash?.address ?: 0) // DT_HASH
+        put(0x6ffffef5, layout.gnuHash.address) // DT_GNU_HASH
+        put(5, layout.dynamicStrings.address) // DT_STRTAB
+        put(6, layout.dynamicSymbols.address) // DT_SYMTAB
+        put(10, layout.dynamicStrings.dataOffset.toLong()) // DT_STRSZ
+        put(11, layout.dynamicSymbols.entrySize.toLong()) // DT_SYMENT
+        if (dynamic.entrySize == 16) {
+            put(7, layout.relocationAddress); put(8, layout.relocationSize); put(9, layout.relocationEntrySize.toLong())
+            layout.pltRelocations?.let { rel ->
+                put(3, layout.got?.address ?: 0); put(2, rel.dataOffset.toLong()); put(23, rel.address); put(20, 7)
+            }
+            put(0x6ffffff9, 0) // DT_RELACOUNT
+        } else {
+            put(17, layout.relocationAddress); put(18, layout.relocationSize); put(19, layout.relocationEntrySize.toLong())
+            layout.pltRelocations?.let { rel ->
+                put(3, layout.got?.address ?: 0); put(2, rel.dataOffset.toLong()); put(23, rel.address); put(20, 17)
+            }
+            put(0x6ffffffa, 0) // DT_RELCOUNT
+        }
+        if (layout.versionSymbols != null && layout.versionNeeds != null) {
+            put(0x6ffffff0, layout.versionSymbols.address)
+            put(0x6ffffffe, layout.versionNeeds.address)
+            put(0x6fffffff, layout.versionNeedCount.toLong())
+        }
+        val sections = listOf(
+            ".preinit_array" to (32L to 33L), ".init_array" to (25L to 27L), ".fini_array" to (26L to 28L),
+        )
+        sections.forEach { (name, tags) ->
+            layout.sections[name]?.takeIf { it.dataOffset != 0 }?.let { section ->
+                put(tags.first, section.address); put(tags.second, section.dataOffset.toLong())
+            }
+        }
+        layout.sections[".init"]?.takeIf { it.dataOffset != 0 }?.let { put(12, it.address) }
+        layout.sections[".fini"]?.takeIf { it.dataOffset != 0 }?.let { put(13, it.address) }
+        put(21, if (layout.debugEnabled) 0 else 0) // DT_DEBUG
+        put(0, 0) // DT_NULL
+        dynamic.dataOffset = layout.startOffset
+        dynamic.data.clear()
+        repeat(layout.startOffset) { dynamic.data += 0 }
+        entries.forEach { entry ->
+            if (dynamic.entrySize == 16) {
+                appendInt64(dynamic.data, entry.tag); appendInt64(dynamic.data, entry.value)
+            } else {
+                appendInt32(dynamic.data, entry.tag.toInt()); appendInt32(dynamic.data, entry.value.toInt())
+            }
+        }
+        dynamic.dataOffset = dynamic.data.size
+        dynamic.outputSize = dynamic.dataOffset.toLong()
+        return entries
+    }
+
+    fun compactDynamicRelocations(state: ElfState, pltRelocations: ElfSection?): Pair<Long, Long> {
+        var address = 0L
+        var size = 0L
+        var fileOffset = 0L
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if ((section.type != SHT_REL && section.type != SHT_RELA) || section === pltRelocations) return@forEach
+            if (size == 0L) {
+                address = section.address
+                fileOffset = section.offset
+            } else {
+                section.address = address + size
+                section.offset = fileOffset + size
+            }
+            size += section.outputSize
+        }
+        return address to size
     }
 
     private fun fillProgramHeader(header: ElfProgramHeader, type: Int, section: ElfSection) {
