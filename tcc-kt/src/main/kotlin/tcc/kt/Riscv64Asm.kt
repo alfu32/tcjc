@@ -116,10 +116,10 @@ class Riscv64Asm(
             return true
         }
         if (name == "jr") return emitI(0x67, Operand(OP_REG, register = 0), operand, Operand(OP_IM12S))
-        if (name == "call" || name == "tail") {
+        if (name == "call" || name == "tail" || name == "jump") {
             val symbol = operand.expression.symbol
             if (symbol == null) { error("Expected call target symbol"); return false }
-            val temporary = if (name == "call") 1 else 6
+            val temporary = when (name) { "call" -> 1; "tail" -> 6; else -> 5 }
             relocateCall(symbol, 18) // R_RISCV_CALL
             emitOpcode(3 or (5 shl 2) or encodeRd(temporary)) // auipc temporary, 0
             emitOpcode(0x67 or encodeRs1(temporary)) // jalr zero, 0(temporary)
@@ -552,7 +552,7 @@ class Riscv64Asm(
             val parsed = parseMemoryAccessOperands(operandText)
             return emitI(0x67, parsed[0], parsed[1], parsed[2])
         }
-        if (name in setOf("jr", "call", "tail", "rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth", "frflags", "frrm", "frcsr")) {
+        if (name in setOf("jr", "call", "tail", "jump", "rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth", "frflags", "frrm", "frcsr")) {
             val operand = if (name == "call" || name == "tail") Operand(OP_IM32, expression = parseExpression(operandText)) else parseOperand(operandText)
             return emitUnaryOpcode(name, operand) { symbol, _ -> hooks.relocateSymbol(symbol, "CALL") }
         }
@@ -593,7 +593,7 @@ class Riscv64Asm(
         if (name in setOf("lui", "auipc")) return emitBinaryInstruction(name, parsed.getOrElse(0) { Operand() }, parsed.getOrElse(1) { Operand() })
         if (name in setOf("mv", "not", "neg", "negw", "sext.w", "seqz", "snez", "sltz", "sgtz", "la", "lla", "li",
                 "fabs.s", "fabs.d", "fneg.s", "fneg.d", "fmv.s", "fmv.d", "csrr", "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci", "fsrm", "fscsr"))
-            return emitPseudoBinary(name, parsed) { hooks.relocateSymbol(it, "GOT_HI20") }
+            return emitPseudoBinary(name, parsed) { symbol -> hooks.relocateSymbol(symbol, if (hooks.isStaticSymbol(symbol)) "PCREL_HI20" else "GOT_HI20") }
         if (name == "fmadd.s" || name == "fmadd.d" || name == "fmadd_s" || name == "fmadd_d") return emitFusedMultiplyAdd(name, parsed)
         if (name.startsWith("f") && (name.startsWith("fcvt") || name.startsWith("fclass") || name.startsWith("fsqrt") ||
                     name.startsWith("fadd") || name.startsWith("fsub") || name.startsWith("fmul") || name.startsWith("fdiv") ||
