@@ -668,6 +668,21 @@ object TccElf {
         if (type == 0x6474e552) header.alignment = 1
     }
 
+    /** Serializes allocated sections in the flat binary format. */
+    fun serializeBinary(state: ElfState): ByteArray {
+        val output = mutableListOf<Byte>()
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if (section.type == SHT_NOBITS || section.flags and SHF_ALLOC == 0) return@forEach
+            require(section.offset >= 0 && section.outputSize >= 0) { "negative binary section range: ${section.name}" }
+            require(section.offset + section.outputSize <= Int.MAX_VALUE) { "binary output is too large" }
+            while (output.size < section.offset.toInt()) output += 0
+            repeat(section.outputSize.toInt()) { byteIndex ->
+                output += section.data.getOrElse(byteIndex) { 0 }
+            }
+        }
+        return output.toByteArray()
+    }
+
     /** Serializes an ELF relocatable, executable, or shared object into a byte array. */
     fun serializeElf(
         state: ElfState,
