@@ -53,6 +53,15 @@ object TccDbg {
         val symbols: MutableList<DebugSymbol> = mutableListOf(),
         val children: MutableList<DebugScope> = mutableListOf(),
     )
+    data class DebugFunctionState(
+        val name: String,
+        val external: Boolean,
+        val sourceFile: Int,
+        val sourceLine: Int,
+        val startAddress: Long,
+        val typeOffset: Int,
+        val lineState: DwarfLineState,
+    )
     data class DebugTypeEntry(val identity: Long, val offset: Int)
     data class ForwardTypeEntry(val identity: Long, val pendingOffsets: MutableList<Int> = mutableListOf())
     sealed interface DebugType {
@@ -693,6 +702,58 @@ object TccDbg {
     fun addDebugVariable(scope: DebugScope, name: String, stabType: Int, value: Long, typeOffset: Int, file: Int, line: Int) {
         scope.symbols += DebugSymbol(name, stabType, value, typeOffset = typeOffset, file = file, line = line)
     }
+
+    fun beginDebugFunction(
+        line: DwarfLineState,
+        name: String,
+        external: Boolean,
+        sourceFile: Int,
+        sourceLine: Int,
+        address: Long,
+        typeOffset: Int,
+    ): DebugFunctionState = DebugFunctionState(name, external, sourceFile, sourceLine, address, typeOffset, line)
+
+    /** Emits the function DIE and line markers after the function body has been generated. */
+    fun finishDebugFunction(
+        state: DebugSections,
+        function: DebugFunctionState,
+        endAddress: Long,
+        pointerSize: Int,
+        refs: DwarfSymbolRefs,
+        scope: DebugScope? = null,
+        backtrace: Boolean = false,
+    ) {
+        val line = function.lineState
+        if (state.dwarfEnabled) {
+            val info = state.sections.getValue(".debug_info")
+            writeData1(info, if (function.external) 20 else 21)
+            if (function.external) writeData1(info, 1)
+            writeStringReference(state, info, function.name, refs.strings, pointerSize = pointerSize)
+            writeUleb(info, function.sourceFile.toLong()); writeUleb(info, function.sourceLine.toLong())
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", refs.text)
+            val length = endAddress - function.startAddress
+            if (pointerSize == 4) { writeData4(info, function.startAddress.toInt()); writeData4(info, length.toInt()) }
+            else { writeData8(info, function.startAddress); writeData8(info, length) }
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
+            writeData4(info, function.typeOffset)
+            writeData1(info, 0) // DW_AT_frame_base expression: DW_OP_call_frame_cfa
+            writeData1(info, 1); writeData1(info, 0x9c)
+            if (backtrace) {
+                val payload = function.name.toByteArray(Charsets.UTF_8) + byteArrayOf(0)
+                lineOperation(line, 0); lineOperationUleb(line, (payload.size + 1).toLong()); lineOperation(line, 0x80)
+                payload.forEach { line.operations += it }
+            }
+            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
+            if (scope != null) writeData1(info, 0)
+        } else {
+            putStabs(state, "${function.name}:${if (function.external) 'F' else 'f'}", N_FUN, 0, function.sourceLine, function.startAddress)
+            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
+            putStabs(state, null, N_FUN, 0, 0, endAddress - function.startAddress)
+        }
+    }
+
+    fun markDebugPrologueEnd(state: DwarfLineState) { lineOperation(state, 10) }
+    fun markDebugEpilogueBegin(state: DwarfLineState) { lineOperation(state, 11) }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
