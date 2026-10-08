@@ -622,4 +622,52 @@ class ArmAsm(
         }
         emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1, vd, vn, vm, opcode2, false)
     }
+
+    /** Encodes VFP integer/floating conversion and precision-conversion instructions. */
+    fun emitVfpConvert(group: String, token: Int, firstConditionToken: Int, destination: Operand, source: Operand) {
+        val rounded = group.startsWith("vcvtr_")
+        val name = group.removePrefix("vcvtr_").removePrefix("vcvt_")
+        val parts = name.split('_')
+        if (parts.size != 2) { expect("VFP conversion mnemonic"); return }
+        val outputType = parts[0]
+        val inputType = parts[1]
+        val coprocessor = if (outputType == "f32" && inputType == "f64") 10
+            else if (outputType == "f64" || inputType == "f64") 11 else 10
+        val destinationKind = when {
+            outputType == "f64" -> Kind.VREG64
+            else -> Kind.VREG32
+        }
+        val sourceKind = when {
+            inputType == "f64" -> Kind.VREG64
+            else -> Kind.VREG32
+        }
+        if (destination.kind != destinationKind || source.kind != sourceKind) {
+            expect("valid VFP source and destination register types"); return
+        }
+        var opcode1 = 11
+        var opcode2 = 2
+        var conversion = 8
+        if (outputType in setOf("s32", "u32")) {
+            conversion = conversion or 4
+            if (outputType == "s32") conversion = conversion or 1
+            if (!rounded) opcode2 = opcode2 or 4
+        } else if (inputType in setOf("s32", "u32")) {
+            if (inputType == "s32") opcode2 = opcode2 or 4
+        } else if (outputType == "f64" || inputType == "f64") {
+            conversion = 7
+            opcode2 = opcode2 or 4
+        } else { expect("known VFP conversion"); return }
+        var vd = destination.register
+        var vm = source.register
+        if (destination.kind == Kind.VREG32) {
+            if (vd and 1 != 0) opcode1 = opcode1 or 4
+            vd = vd ushr 1
+        }
+        if (source.kind == Kind.VREG32) {
+            if (vm and 1 != 0) opcode2 = opcode2 or 1
+            vm = vm ushr 1
+        }
+        emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1,
+            vd, conversion, vm, opcode2, false)
+    }
 }
