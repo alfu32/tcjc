@@ -839,8 +839,7 @@ object TccElf {
         }
         val rawHeaders = (0 until sectionCount).map(::raw)
         val stringHeader = rawHeaders[stringIndex]
-        val names = if (stringHeader[1] == SHT_NOBITS.toLong() || stringHeader[4] < 0 || stringHeader[5] < 0 ||
-            stringHeader[4] + stringHeader[5] > input.size) return null else
+        val names = if (stringHeader[1] == SHT_NOBITS.toLong() || !validInputRange(stringHeader[4], stringHeader[5], input.size.toLong())) return null else
             input.copyOfRange(stringHeader[4].toInt(), (stringHeader[4] + stringHeader[5]).toInt())
         fun nameAt(offset: Int): String {
             if (offset !in names.indices) return ""
@@ -850,7 +849,7 @@ object TccElf {
         }
         val sections = rawHeaders.map { h ->
             val sectionData = if (h[1] == SHT_NOBITS.toLong()) byteArrayOf() else {
-                if (h[4] < 0 || h[5] < 0 || h[4] + h[5] > input.size) return null
+                if (!validInputRange(h[4], h[5], input.size.toLong())) return null
                 input.copyOfRange(h[4].toInt(), (h[4] + h[5]).toInt())
             }
             InputSectionHeader(nameAt(h[0].toInt()), h[1].toInt(), h[2], h[3], h[4], h[5], h[6].toInt(), h[7].toInt(), h[8], h[9], sectionData)
@@ -1032,7 +1031,8 @@ object TccElf {
             val info = read(infoOffset, offsetWidth)
             val symbolIndex = if (elf.wordSize == 8) (info ushr 32).toInt() else (info ushr 8).toInt()
             val type = if (elf.wordSize == 8) info.toInt() else (info and 0xff).toInt()
-            val addend = if (rela) read(base + offsetWidth * 2, offsetWidth) else 0L
+            val rawAddend = if (rela) read(base + offsetWidth * 2, offsetWidth) else 0L
+            val addend = if (rela && offsetWidth == 4) rawAddend.toInt().toLong() else rawAddend
             InputRelocation(read(base, offsetWidth), symbolIndex, type, addend)
         }
     }
@@ -1210,7 +1210,7 @@ object TccElf {
                 read(base, offsetWidth),
                 if (wordSize == 8) (info ushr 32).toInt() else (info ushr 8).toInt(),
                 if (wordSize == 8) info.toInt() else (info and 0xff).toInt(),
-                if (rela) read(base + offsetWidth * 2, offsetWidth) else 0L,
+                if (rela) read(base + offsetWidth * 2, offsetWidth).let { if (offsetWidth == 4) it.toInt().toLong() else it } else 0L,
             )
         }
     }
@@ -2938,6 +2938,9 @@ object TccElf {
     }
 
     private fun symbolBind(info: Int): Int = info ushr 4
+    private fun validInputRange(offset: Long, size: Long, totalSize: Long): Boolean =
+        offset >= 0 && size >= 0 && offset <= totalSize && size <= totalSize - offset
+
     private fun elfString(section: ElfSection, offset: Int): String {
         if (offset !in 0 until section.size) return ""
         var end = offset
