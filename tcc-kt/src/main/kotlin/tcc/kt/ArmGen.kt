@@ -435,6 +435,86 @@ object ArmGen {
 
     data class VlaAllocationPlan(val alignment: Int, val instructions: List<Int>, val boundsCheckEnabled: Boolean)
 
+    enum class ValueType { BYTE, BOOL, SHORT, INT, LONG_LONG, FLOAT, DOUBLE, LONG_DOUBLE }
+    data class MemoryInstruction(val baseRegister: Int, val offset: Int, val negativeOffset: Boolean, val words: List<Int>)
+
+    /** Encodes a scalar load from an ARM base register plus/minus an offset. */
+    fun memoryLoad(destination: Int, base: Int, offset: Int, type: ValueType, unsigned: Boolean,
+        vfp: Boolean, doubleLongDouble: Boolean = true): MemoryInstruction {
+        val dest = if (type in setOf(ValueType.FLOAT, ValueType.DOUBLE, ValueType.LONG_DOUBLE)) floatingRegister(destination, vfp) else integerRegister(destination)
+        var addressBase = base
+        var magnitude = kotlin.math.abs(offset)
+        var negative = offset < 0
+        val words = mutableListOf<Int>()
+        if (type in setOf(ValueType.FLOAT, ValueType.DOUBLE, ValueType.LONG_DOUBLE)) {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 1020, 2)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = if (vfp) 0xed100a00.toInt() else 0xed100100.toInt()
+            if (!negative) opcode = opcode or 0x800000
+            if (vfp) {
+                if (type != ValueType.FLOAT) opcode = opcode or 0x100
+            } else {
+                if (type == ValueType.DOUBLE) opcode = opcode or 0x8000
+                else if (type == ValueType.LONG_DOUBLE && !doubleLongDouble) opcode = opcode or 0x400000
+            }
+            val fpRegister = if (vfp) dest else dest
+            words += opcode or (fpRegister shl 12) or (magnitude shr 2) or (addressBase shl 16)
+        } else if (type == ValueType.BYTE && !unsigned || type == ValueType.SHORT) {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 255, 0)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = 0xe1500090.toInt()
+            if (type == ValueType.SHORT) opcode = opcode or 0x20
+            if (!unsigned) opcode = opcode or 0x40
+            if (!negative) opcode = opcode or 0x800000
+            words += opcode or (dest shl 12) or (addressBase shl 16) or ((magnitude and 0xf0) shl 4) or (magnitude and 15)
+        } else {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 4095, 0)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = 0xe5100000.toInt()
+            if (!negative) opcode = opcode or 0x800000
+            if (type == ValueType.BYTE || type == ValueType.BOOL) opcode = opcode or 0x400000
+            words += opcode or (dest shl 12) or magnitude or (addressBase shl 16)
+        }
+        return MemoryInstruction(addressBase, magnitude, negative, words)
+    }
+
+    /** Encodes a scalar store to an ARM base register plus/minus an offset. */
+    fun memoryStore(source: Int, base: Int, offset: Int, type: ValueType, vfp: Boolean,
+        doubleLongDouble: Boolean = true): MemoryInstruction {
+        val sourceRegister = if (type in setOf(ValueType.FLOAT, ValueType.DOUBLE, ValueType.LONG_DOUBLE)) floatingRegister(source, vfp) else integerRegister(source)
+        var addressBase = base
+        var magnitude = kotlin.math.abs(offset)
+        var negative = offset < 0
+        val words = mutableListOf<Int>()
+        if (type in setOf(ValueType.FLOAT, ValueType.DOUBLE, ValueType.LONG_DOUBLE)) {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 1020, 2)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = if (vfp) 0xed000a00.toInt() else 0xed000100.toInt()
+            if (!negative) opcode = opcode or 0x800000
+            if (vfp) {
+                if (type != ValueType.FLOAT) opcode = opcode or 0x100
+            } else {
+                if (type == ValueType.DOUBLE) opcode = opcode or 0x8000
+                else if (type == ValueType.LONG_DOUBLE && !doubleLongDouble) opcode = opcode or 0x400000
+            }
+            words += opcode or (sourceRegister shl 12) or (magnitude shr 2) or (addressBase shl 16)
+        } else if (type == ValueType.SHORT) {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 255, 0)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = 0xe14000b0.toInt()
+            if (!negative) opcode = opcode or 0x800000
+            words += opcode or (sourceRegister shl 12) or (addressBase shl 16) or ((magnitude and 0xf0) shl 4) or (magnitude and 15)
+        } else {
+            val address = calculateAddress(addressBase, magnitude, if (negative) 1 else 0, 4095, 0)
+            addressBase = address.base; magnitude = address.offset; negative = address.sign != 0; words += address.words
+            var opcode = 0xe5000000.toInt()
+            if (!negative) opcode = opcode or 0x800000
+            if (type == ValueType.BYTE || type == ValueType.BOOL) opcode = opcode or 0x400000
+            words += opcode or (sourceRegister shl 12) or magnitude or (addressBase shl 16)
+        }
+        return MemoryInstruction(addressBase, magnitude, negative, words)
+    }
+
     fun vlaAllocation(register: Int, alignment: Int, eabi: Boolean, boundsCheck: Boolean): VlaAllocationPlan {
         var aligned = alignment
         val minimum = if (eabi) 8 else 4
