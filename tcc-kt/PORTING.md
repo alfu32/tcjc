@@ -4,7 +4,7 @@
 - **DONE:** 29
 - **DOING:** 1
 - **TODO:** 24
-- **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
+- **Currently doing:** `lib/libtcc1.c` → `src/main/kotlin/tcc/kt/LibTcc1.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -37,7 +37,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `lib/builtin.c` | DONE |
 | `lib/dsohandle.c` | DONE |
 | `lib/lib-arm64.c` | TODO |
-| `lib/libtcc1.c` | TODO |
+| `lib/libtcc1.c` | DOING |
 | `lib/runmain.c` | DONE |
 | `lib/stdatomic.c` | DONE |
 | `lib/tcov.c` | DONE |
