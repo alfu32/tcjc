@@ -33,6 +33,7 @@ class Riscv64Asm(
 
     companion object {
         const val REGISTER_COUNT = 64
+        const val MAX_ASM_OPERANDS = 30
         const val REG_FLOAT_MASK = 0x20
         const val OPT_REG = 0
         const val OPT_IM12S = 1
@@ -190,8 +191,10 @@ class Riscv64Asm(
     }
 
     fun computeConstraints(operands: MutableList<InlineOperand>, outputCount: Int, clobbered: BooleanArray,
-        findReference: (String) -> Int? = { it.toIntOrNull() }): ConstraintResult? {
-        if (clobbered.size < REGISTER_COUNT || outputCount !in 0..operands.size) { error("invalid inline assembly operand state"); return null }
+        findReference: (String) -> Int? = { it.removePrefix("[").removeSuffix("]").toIntOrNull() }): ConstraintResult? {
+        if (operands.size > MAX_ASM_OPERANDS || clobbered.size < REGISTER_COUNT || outputCount !in 0..operands.size) {
+            error("invalid inline assembly operand state"); return null
+        }
         operands.forEach { it.inputIndex = -1; it.referenceIndex = -1; it.register = -1; it.isMemory = false; it.isReadWrite = false }
         operands.forEachIndexed { index, operand ->
             val constraint = skipConstraintModifiers(operand.constraint)
