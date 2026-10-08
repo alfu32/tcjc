@@ -1,0 +1,269 @@
+package tcc.kt
+
+/** AArch64 code generation helpers mechanically translated from arm64-gen.c. */
+class Arm64Gen(
+    private val output: (Int) -> Unit,
+    private val noCode: () -> Boolean = { false },
+    private val error: (String) -> Unit = { throw IllegalArgumentException(it) },
+    private val relocation: (Symbol, Int, String, Long) -> Unit = { _, _, _, _ -> },
+    private val position: () -> Int = { 0 },
+    private val patchWord: (Int, Int) -> Int = { _, _ -> 0 },
+) {
+    data class Symbol(val name: String, val isStatic: Boolean = false, val isTls: Boolean = false)
+    data class Relocation(val symbol: Symbol, val offset: Int, val type: String, val addend: Long = 0)
+    enum class Type { BYTE, SHORT, INT, LONG_LONG, POINTER, FUNCTION, STRUCT, FLOAT, DOUBLE, LONG_DOUBLE, BOOL }
+    enum class ValueLocation { CONSTANT, LOCAL, INDIRECT_LOCAL, COMPARE, JUMP, JUMP_INDIRECT, REGISTER }
+    data class Value(
+        val location: ValueLocation, val type: Type = Type.INT, val constant: Long = 0,
+        val register: Int = -1, val symbol: Symbol? = null, val lvalue: Boolean = false,
+        val unsigned: Boolean = false, val secondRegister: Int = -1,
+    )
+
+    companion object {
+        const val NB_REGS = 28
+        const val TREG_R30 = 19
+        const val TREG_F_BASE = 20
+        const val RC_INT = 1
+        const val RC_FLOAT = 2
+        const val PTR_SIZE = 8
+        const val LDOUBLE_SIZE = 16
+        const val LDOUBLE_ALIGN = 16
+        const val MAX_ALIGN = 16
+        const val ARM64_MOVZ = 0x52800000
+        const val ARM64_MOVN = 0x12800000
+        const val ARM64_MOVK = 0xf2800000.toInt()
+        const val ARM64_MOVZ64 = 0xd2800000.toInt()
+        const val ARM64_MOVN64 = 0x92800000.toInt()
+        const val ARM64_ADD_IMM = 0x11000000
+        const val ARM64_ADD_REG = 0x0b000000
+        const val ARM64_SUB_REG = 0x4b000000
+        const val ARM64_ADRP = 0x90000000.toInt()
+        const val ARM64_LDR_X = 0xf9400000.toInt()
+        const val ARM64_LDR_B = 0x39400000
+        const val ARM64_LDR_SCALAR = 0x3d400000
+        const val ARM64_LDR_D_REG = 0xfc606800.toInt()
+        const val ARM64_LDR_X_REG = 0xf8606800.toInt()
+        const val ARM64_LDR_Q_REG = 0x3c606800
+        const val ARM64_LDUR_Q = 0x3c400000
+        const val ARM64_STR_Q_REG = 0x3c206800
+        const val ARM64_B = 0x14000000
+        const val ARM64_NOP = 0xd503201f.toInt()
+        const val VT_CONST = 0x30
+        const val VT_LLOCAL = 0x31
+        const val VT_LOCAL = 0x32
+        const val VT_CMP = 0x33
+        const val VT_JMP = 0x34
+        const val VT_JMPI = 0x35
+        const val VT_VALMASK = 0x3f
+        const val VT_LVAL = 0x100
+        const val VT_SYM = 0x200
+        val targetMachineDefinitions = listOf("__aarch64__", "__AARCH64EL__")
+        fun machoTargetMachineDefinitions(): List<String> = listOf("__aarch64__", "__arm64__", "__AARCH64EL__")
+        fun registerClasses(): IntArray = IntArray(NB_REGS) { reg -> when {
+            reg <= 15 -> RC_INT or (1 shl (2 + reg))
+            reg <= 18 -> 1 shl (2 + reg)
+            reg == TREG_R30 -> 1 shl 21
+            else -> RC_FLOAT or (1 shl (22 + reg - TREG_F_BASE))
+        } }
+        fun integerRegister(register: Int): Int { require(register in 0..TREG_R30); return if (register < TREG_R30) register else 30 }
+        fun floatingRegister(register: Int): Int { require(register in TREG_F_BASE..TREG_F_BASE + 7); return register - TREG_F_BASE }
+        fun typeSize(type: Type): Int = when (type) {
+            Type.BYTE, Type.BOOL -> 0; Type.SHORT -> 1; Type.INT, Type.FLOAT -> 2
+            Type.LONG_LONG, Type.POINTER, Type.FUNCTION, Type.STRUCT, Type.DOUBLE -> 3
+            Type.LONG_DOUBLE -> 4
+        }
+    }
+
+    fun o(word: Int) { if (!noCode()) output(word) }
+    fun emitU32(word: Long) = o(word.toInt())
+
+    /** Returns the ARM64 logical bitmask immediate encoding, or -1 for invalid masks. */
+    fun encodeBitmaskImmediate(input: ULong): Int {
+        var value = input
+        val negative = value and 1uL != 0uL
+        if (negative) value = value.inv()
+        if (value == 0uL) return -1
+        fun periodic(bits: Int) = (value shr bits) == (value and ((1uL shl (64 - bits)) - 1uL))
+        val repetition = when {
+            periodic(2) -> { value = value and 3uL; 2 }
+            periodic(4) -> { value = value and 15uL; 4 }
+            periodic(8) -> { value = value and 255uL; 8 }
+            periodic(16) -> { value = value and 65535uL; 16 }
+            periodic(32) -> { value = value and 0xffffffffuL; 32 }
+            else -> 64
+        }
+        var position = 0
+        for (bits in listOf(32, 16, 8, 4, 2, 1)) {
+            val mask = (1uL shl bits) - 1uL
+            if (value and mask == 0uL) { value = value shr bits; position += bits }
+        }
+        var length = 0
+        for (bits in listOf(32, 16, 8, 4, 2, 1)) {
+            val mask = (1uL shl bits) - 1uL
+            if (value.inv() and mask == 0uL) { value = value shr bits; length += bits }
+        }
+        if (value != 0uL) return -1
+        if (negative) { position = (position + length) and (repetition - 1); length = repetition - length }
+        return (if (repetition == 64) 0x1000 else 0) or ((((repetition - 1) xor 31) shl 1) and 63) or
+            (((repetition - position) and (repetition - 1)) shl 6) or (length - 1)
+    }
+
+    fun movi(register: Int, value: ULong): Int {
+        val rd = register and 31
+        val lowMask = 0xffffuL
+        val x = value
+        if (x and lowMask.inv() == 0uL) return ARM64_MOVZ or rd or (x.toInt() shl 5)
+        if (x and (lowMask shl 16).inv() == 0uL) return ARM64_MOVZ or (1 shl 21) or rd or ((x shr 11).toInt() and 0x1fffe0)
+        if (x and (lowMask shl 32).inv() == 0uL) return ARM64_MOVZ64 or (2 shl 21) or rd or ((x shr 27).toInt() and 0x1fffe0)
+        if (x and (lowMask shl 48).inv() == 0uL) return ARM64_MOVZ64 or (3 shl 21) or rd or ((x shr 43).toInt() and 0x1fffe0)
+        if (x and lowMask.inv() == lowMask shl 16) return ARM64_MOVN or rd or ((x.inv().toInt() shl 5) and 0x1fffe0)
+        if (x and (lowMask shl 16).inv() == lowMask) return ARM64_MOVN or (1 shl 21) or rd or ((x.inv().toInt() ushr 11) and 0x1fffe0)
+        if (x.inv() and lowMask == 0uL) return ARM64_MOVN64 or rd or ((x.inv().toInt() shl 5) and 0x1fffe0)
+        if (x.inv() and (lowMask shl 16) == 0uL) return ARM64_MOVN64 or (1 shl 21) or rd or ((x.inv().toInt() ushr 11) and 0x1fffe0)
+        if (x.inv() and (lowMask shl 32) == 0uL) return ARM64_MOVN64 or (2 shl 21) or rd or ((x.inv().toInt() ushr 27) and 0x1fffe0)
+        if (x.inv() and (lowMask shl 48) == 0uL) return ARM64_MOVN64 or (3 shl 21) or rd or ((x.inv().toInt() ushr 43) and 0x1fffe0)
+        if (x shr 32 == 0uL) {
+            val encoded = encodeBitmaskImmediate(x or (x shl 32))
+            if (encoded >= 0) return 0x320003e0 or rd or (encoded shl 10)
+        }
+        val encoded = encodeBitmaskImmediate(x)
+        if (encoded >= 0) return 0xb20003e0.toInt() or rd or (encoded shl 10)
+        return 0
+    }
+
+    fun moveImmediate(register: Int, value: ULong) {
+        val single = movi(register, value)
+        if (single != 0) { o(single); return }
+        var zeros = 0
+        var ones = 0
+        var selected = value
+        var base = ARM64_MOVZ64
+        for (shift in 0..3) {
+            val half = (value shr (shift * 16)) and 0xffffuL
+            if (half == 0uL) zeros++
+            if (half == 0xffffuL) ones++
+        }
+        if (ones > zeros) { selected = value.inv(); base = ARM64_MOVN64 }
+        var first = -1
+        for (i in 0..3) if ((selected shr (i * 16)) and 0xffffuL != 0uL) { first = i; break }
+        if (first >= 0) o(base or (register and 31) or ((((selected shr (first * 16)).toInt()) and 0xffff) shl 5) or (first shl 21))
+        for (i in (first + 1)..3) {
+            val half = ((value shr (i * 16)).toInt()) and 0xffff
+            if ((selected shr (i * 16)) and 0xffffuL != 0uL)
+                o(ARM64_MOVK or 0x80000000.toInt() or (register and 31) or (half shl 5) or (i shl 21))
+        }
+    }
+
+    /** Patches a linked branch chain; patchWord returns the next link stored at the current site. */
+    fun patchBranchChain(first: Int, target: Int) {
+        var site = first
+        while (site != 0) {
+            val next = patchWord(site, 0)
+            val delta = target - site
+            if (delta.toLong() + 0x8000000L !in 0L until 0x10000000L) error("branch out of range")
+            patchWord(site, if (delta == 4) ARM64_NOP else ARM64_B or ((delta shr 2) and 0x3ffffff))
+            site = next
+        }
+    }
+
+    fun typeSize(type: Int): Int = when (type and 0x0f) {
+        1, 11 -> 0
+        2 -> 1
+        3, 8 -> 2
+        4, 5, 6, 7, 9 -> 3
+        10 -> 4
+        else -> error("invalid AArch64 type") as Int
+    }
+
+    fun stackOffset(register: Int, offset: ULong) {
+        val subtract = offset shr 63 != 0uL
+        val magnitude = if (subtract) 0uL - offset else offset
+        if (magnitude < 4096uL) {
+            o(ARM64_ADD_IMM or 0x80000000.toInt() or (31 shl 5) or (register and 31) or (magnitude.toInt() shl 10) or (if (subtract) (1 shl 30) else 0))
+        } else {
+            moveImmediate(30, magnitude)
+            o(ARM64_ADD_REG or 0x80000000.toInt() or (30 shl 16) or (31 shl 5) or (register and 31) or (if (subtract) (1 shl 30) else 0))
+        }
+    }
+
+    fun checkOffset(size: Int, offset: ULong, peTarget: Boolean = false): ULong {
+        if (peTarget) return 0uL
+        val scaledMask = 0xfffuL shl size
+        if (offset and scaledMask.inv() == 0uL || offset < 256uL || 0uL - offset <= 256uL) return ULong.MAX_VALUE
+        if (offset and scaledMask != 0uL) return scaledMask
+        if (offset and 0x1ffuL != 0uL) return 0x1ffuL
+        return 0uL
+    }
+
+    fun loadInteger(signed: Boolean, size: Int, destination: Int, base: Int, offset: ULong) {
+        val scaledMask = 0xfffuL shl size
+        val signBit = if (signed) 1 shl 23 else 0
+        if (size >= 2) {
+            o(ARM64_LDR_B or (destination and 31) or ((base and 31) shl 5) or (offset.toInt() shl (10 - size)) or signBit or (size shl 30))
+        } else if (offset and scaledMask.inv() == 0uL) {
+            o(ARM64_LDR_B or (destination and 31) or ((base and 31) shl 5) or (offset.toInt() shl (10 - size)) or signBit or (size shl 30))
+        } else if (offset < 256uL || 0uL - offset <= 256uL) {
+            o(0x38400000 or (destination and 31) or ((base and 31) shl 5) or ((offset.toInt() and 511) shl 12) or signBit or (size shl 30))
+        } else {
+            moveImmediate(30, offset)
+            o(ARM64_LDR_X_REG or (destination and 31) or ((base and 31) shl 5) or (30 shl 16) or ((if (signed) 2 else 1) shl 22) or (size shl 30))
+        }
+    }
+
+    fun loadVector(size: Int, destination: Int, base: Int, offset: ULong) {
+        val scaledMask = 0xfffuL shl size
+        if (offset and scaledMask.inv() == 0uL)
+            o(ARM64_LDR_SCALAR or destination or (base shl 5) or (offset.toInt() shl (10 - size)) or ((size and 4) shl 21) or ((size and 3) shl 30))
+        else if (offset < 256uL || 0uL - offset <= 256uL)
+            o(0x3c400000 or destination or (base shl 5) or ((offset.toInt() and 511) shl 12) or ((size and 4) shl 21) or ((size and 3) shl 30))
+        else {
+            moveImmediate(30, offset)
+            o(ARM64_LDR_Q_REG or destination or (base shl 5) or (30 shl 16) or (size shl 30) or ((size and 4) shl 21))
+        }
+    }
+
+    fun loadStructure(register: Int, size: Int) {
+        when (size) {
+            0 -> Unit
+            1 -> loadInteger(false, 0, register, register, 0uL)
+            2 -> loadInteger(false, 1, register, register, 0uL)
+            3 -> { loadInteger(false, 1, 30, register, 0uL); loadInteger(false, 0, register, register, 2uL); o(0x2a0043c0 or register or (register shl 16)) }
+            4 -> loadInteger(false, 2, register, register, 0uL)
+            5, 6, 7 -> {
+                loadInteger(false, 2, 30, register, 0uL)
+                loadInteger(false, if (size == 5) 0 else if (size == 6) 1 else 2, register, register, (if (size == 7) 3 else 4).toULong())
+                if (size == 7) o(0x53087c00 or register or (register shl 5))
+                o(0xaa0083c0.toInt() or register or (register shl 16))
+            }
+            8 -> loadInteger(false, 3, register, register, 0uL)
+            in 9..15 -> {
+                val upperSize = when (size) { 9 -> 0; 10 -> 1; 11, 12 -> 2; else -> 3 }
+                val upperOff = when (size) { 9, 10 -> 8; 11 -> 7; 12 -> 8; 13 -> 5; 14 -> 6; else -> 7 }
+                loadInteger(false, upperSize, register + 1, register, upperOff.toULong())
+                if (size >= 13) o((when (size) { 13 -> 0xd358fc00L; 14 -> 0xd350fc00L; else -> 0xd348fc00L }).toInt() or (register + 1) or ((register + 1) shl 5))
+                else if (size == 11) o(0x53087c00 or (register + 1) or ((register + 1) shl 5))
+                loadInteger(false, 3, register, register, 0uL)
+            }
+            16 -> o(0xa9400000.toInt() or register or ((register + 1) shl 10) or (register shl 5))
+            else -> error("unsupported structure size")
+        }
+    }
+
+    fun storeInteger(size: Int, source: Int, base: Int, offset: ULong) {
+        val scaledMask = 0xfffuL shl size
+        if (offset and scaledMask.inv() == 0uL)
+            o(0x39000000 or source or (base shl 5) or (offset.toInt() shl (10 - size)) or (size shl 30))
+        else if (offset < 256uL || 0uL - offset <= 256uL)
+            o(0x38000000 or source or (base shl 5) or ((offset.toInt() and 511) shl 12) or (size shl 30))
+        else { moveImmediate(30, offset); o(0x38206800 or source or (base shl 5) or (30 shl 16) or (size shl 30)) }
+    }
+
+    fun storeVector(size: Int, source: Int, base: Int, offset: ULong) {
+        val scaledMask = 0xfffuL shl size
+        if (offset and scaledMask.inv() == 0uL)
+            o(0x3d000000 or source or (base shl 5) or (offset.toInt() shl (10 - size)) or ((size and 4) shl 21) or ((size and 3) shl 30))
+        else if (offset < 256uL || 0uL - offset <= 256uL)
+            o(0x3c000000 or source or (base shl 5) or ((offset.toInt() and 511) shl 12) or ((size and 4) shl 21) or ((size and 3) shl 30))
+        else { moveImmediate(30, offset); o(ARM64_STR_Q_REG or source or (base shl 5) or (30 shl 16) or (size shl 30) or ((size and 4) shl 21)) }
+    }
+}
