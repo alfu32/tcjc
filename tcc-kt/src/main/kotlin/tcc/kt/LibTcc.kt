@@ -1,6 +1,8 @@
 package tcc.kt
 
 import java.nio.file.Paths
+import java.nio.file.Files
+import java.nio.file.Path
 
 /** Public library and shared utility functions mechanically translated from libtcc.c. */
 class LibTcc(
@@ -258,6 +260,31 @@ class LibTcc(
         if (extension == "s") return TYPE_ASM
         val cExtension = if (caseSensitive) extension in setOf("c", "h", "i") else extension.lowercase() in setOf("c", "h", "i")
         return if (cExtension) TYPE_C else TYPE_BINARY
+    }
+
+    /** OpenBSD's linker search chooses the highest lib version matching a wildcard. */
+    fun latestVersionedFile(pattern: String): String? {
+        val wildcard = pattern.indexOf('*')
+        if (wildcard < 0) return null
+        val parent = Paths.get(pattern).parent ?: Paths.get(".")
+        val filenamePattern = Paths.get(pattern).fileName.toString()
+        val matcher = java.nio.file.FileSystems.getDefault().getPathMatcher("glob:$filenamePattern")
+        var bestVersion = -1
+        var bestPath: Path? = null
+        val entries = runCatching { Files.newDirectoryStream(parent) }.getOrNull() ?: return null
+        entries.use { stream ->
+            for (entry in stream) {
+                if (!matcher.matches(entry.fileName)) continue
+                val suffixOffset = (wildcard - (pattern.lastIndexOf('/') + 1)).coerceAtLeast(0)
+                val suffix = entry.fileName.toString().drop(suffixOffset)
+                val version = Regex("^(\\d+)\\.(\\d+)(?:\\.(\\d+))?").find(suffix) ?: continue
+                val major = version.groupValues[1].toIntOrNull() ?: continue
+                val minor = version.groupValues[2].toIntOrNull() ?: continue
+                val number = major * 1000 + minor
+                if (number > bestVersion) { bestVersion = number; bestPath = entry }
+            }
+        }
+        return bestPath?.toString()
     }
 
     fun addFile(compilerState: CompilerState, filename: String, flags: Int, hooks: FileHooks): Int {
