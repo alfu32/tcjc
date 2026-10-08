@@ -13,10 +13,10 @@ object BoundCheck {
 
     private val lock = ReentrantLock()
     private val regions = java.util.TreeMap<Long, Region>()
-    @Volatile private var checkingDisabled = false
+    private val checkingDisabled = ThreadLocal.withInitial { false }
     @Volatile private var neverFatal = 0
 
-    @JvmStatic fun boundsChecking(noCheck: Boolean) { checkingDisabled = noCheck }
+    @JvmStatic fun boundsChecking(noCheck: Boolean) { checkingDisabled.set(noCheck) }
     @JvmStatic fun neverFatal(value: Int) { neverFatal = value }
     @JvmStatic fun lock() = lock.lock()
     @JvmStatic fun unlock() = lock.unlock()
@@ -38,7 +38,7 @@ object BoundCheck {
     /** Checks an address addition and returns INVALID_POINTER when it escapes a known region. */
     @JvmStatic
     fun pointerAdd(pointer: Long, offset: Long): Long {
-        if (checkingDisabled) return pointer + offset
+        if (checkingDisabled.get()) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
         val next = relative + offset
@@ -51,7 +51,7 @@ object BoundCheck {
     /** Checks access width, matching the generated __bound_ptr_indirN helpers. */
     @JvmStatic
     fun pointerIndir(pointer: Long, offset: Long, width: Int): Long {
-        if (checkingDisabled) return pointer + offset
+        if (checkingDisabled.get()) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
         if (region.invalid || relative + offset + width > region.size) {
@@ -247,5 +247,38 @@ object BoundCheck {
         nextAddress = alignedAddress + maxOf(size, 1) + 16L
         return allocation
     }
+
+
+    @JvmStatic
+    fun localRegions(frame: Long, stackSlots: LongArray) = lock.withLock {
+        var i = 0
+        while (i + 1 < stackSlots.size && stackSlots[i] != 0L) {
+            val address = frame + stackSlots[i]
+            val length = stackSlots[i + 1]
+            regions[address] = Region(address, length)
+            frameRegions.getOrPut(frame) { mutableListOf() }.add(address)
+            i += 2
+        }
+    }
+
+    @JvmStatic
+    fun invalidateRegion(start: Long) = lock.withLock {
+        regions[start]?.let { regions[start] = it.copy(invalid = true) }
+    }
+
+    data class JumpBuffer(val frame: Long)
+    class BoundLongJump(val value: Int) : RuntimeException(null, null, false, false)
+
+    @JvmStatic fun setjmp(frame: Long): JumpBuffer = JumpBuffer(frame)
+
+    /** Removes stack regions before transferring control to a saved jump point. */
+    @JvmStatic
+    fun longjmp(buffer: JumpBuffer, value: Int): Nothing {
+        deleteFrameRegions(buffer.frame)
+        throw BoundLongJump(if (value == 0) 1 else value)
+    }
+
+    @JvmStatic
+    fun isInvalidPointer(pointer: Long): Boolean = pointer == INVALID_POINTER
 
 }
