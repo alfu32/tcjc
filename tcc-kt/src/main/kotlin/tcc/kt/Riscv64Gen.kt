@@ -73,6 +73,7 @@ class Riscv64Gen(
         var variadicListOffset: Int = 0,
     )
     enum class IntegerOperation { ADD, SUBTRACT, SHIFT_LEFT, SHIFT_RIGHT, SHIFT_ARITHMETIC, MULTIPLY, DIVIDE, DIVIDE_UNSIGNED, REMAINDER, REMAINDER_UNSIGNED, AND, OR, XOR, LESS_THAN, LESS_THAN_UNSIGNED }
+    enum class Comparison { EQUAL, NOT_EQUAL, LESS, LESS_EQUAL, GREATER, GREATER_EQUAL, LESS_UNSIGNED, LESS_EQUAL_UNSIGNED, GREATER_UNSIGNED, GREATER_EQUAL_UNSIGNED }
 
     private var bytes = ByteArray(256)
     val relocations = mutableListOf<Relocation>()
@@ -567,6 +568,37 @@ class Riscv64Gen(
     fun clearInstructionCache() {
         emitInstruction(0x0ff0000f)
         emitInstruction(0x0000100f)
+    }
+
+    fun emitComparisonBranch(comparison: Comparison, left: Int, right: Int, targetWord: Int): Int {
+        val (function3, reverse) = when (comparison) {
+            Comparison.EQUAL -> 0 to false
+            Comparison.NOT_EQUAL -> 1 to false
+            Comparison.LESS -> 4 to false
+            Comparison.GREATER_EQUAL -> 5 to false
+            Comparison.LESS_EQUAL -> 5 to true
+            Comparison.GREATER -> 4 to true
+            Comparison.LESS_UNSIGNED -> 6 to false
+            Comparison.GREATER_EQUAL_UNSIGNED -> 7 to false
+            Comparison.LESS_EQUAL_UNSIGNED -> 7 to true
+            Comparison.GREATER_UNSIGNED -> 6 to true
+        }
+        return conditionalJump(function3, integerRegister(left), integerRegister(right), targetWord, reverse)
+    }
+
+    /** Emits the PC-relative load, increment, and store sequence for a coverage counter. */
+    fun incrementCoverageCounter(symbol: String, addressRegister: Int = 5, valueRegister: Int = 6) {
+        val label = "$symbol@pcrel${position}"
+        addRelocation(symbol, "PCREL_HI20", position)
+        emitInstruction(0x17 or (addressRegister shl 7))
+        addRelocation(label, "PCREL_LO12_I", position)
+        emitImmediate(0x03, 3, valueRegister, addressRegister, 0)
+        emitImmediate(0x13, 0, valueRegister, valueRegister, 1)
+        val storeLabel = "$symbol@pcrel${position}"
+        addRelocation(symbol, "PCREL_HI20", position)
+        emitInstruction(0x17 or (addressRegister shl 7))
+        addRelocation(storeLabel, "PCREL_LO12_S", position)
+        emitStore(0x23, 3, addressRegister, valueRegister, 0)
     }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
