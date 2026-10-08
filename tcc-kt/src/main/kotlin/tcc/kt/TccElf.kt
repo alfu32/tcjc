@@ -14,6 +14,7 @@ object TccElf {
     const val SHT_NOBITS = 8
     const val SHT_REL = 9
     const val SHT_DYNSYM = 11
+    const val SHT_NOTE = 7
     const val SHT_INIT_ARRAY = 14
     const val SHT_FINI_ARRAY = 15
     const val SHT_PREINIT_ARRAY = 16
@@ -994,6 +995,34 @@ object TccElf {
         appendInt32(section.data, data.toInt())
         section.dataOffset = section.data.size
         section.outputSize = section.dataOffset.toLong()
+    }
+
+    fun createBsdNoteSection(
+        state: ElfState,
+        name: String,
+        value: String,
+        platform: UnixPlatform,
+        osRelease: String = "",
+    ): ElfSection? {
+        val parts = osRelease.split('.')
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        if (platform == UnixPlatform.FREEBSD && major < 14) return null
+        val section = findSection(state, name)
+        section.type = SHT_NOTE
+        when (platform) {
+            UnixPlatform.OPENBSD -> fillBsdNote(section, 1, value, 0, state.wordSize)
+            UnixPlatform.NETBSD -> fillBsdNote(section, 1, value,
+                major * 100_000_000L + (minor % 100) * 1_000_000L + (patch % 10_000) * 100L, state.wordSize)
+            UnixPlatform.FREEBSD -> {
+                fillBsdNote(section, 1, value, major * 100_000L + (minor % 100) * 1_000L, state.wordSize)
+                fillBsdNote(section, 4, value, 0, state.wordSize)
+                fillBsdNote(section, 2, value, 0, state.wordSize)
+            }
+            else -> return null
+        }
+        return section
     }
 
     /** Serializes an ELF relocatable, executable, or shared object into a byte array. */
