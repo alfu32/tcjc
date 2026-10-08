@@ -894,7 +894,6 @@ object TccDbg {
                 writeData1(info, if (parameter) 6 else if (external) 3 else if (static) 4 else 5)
                 writeStringReference(state, info, symbol.name, refs.strings, pointerSize = pointerSize)
                 if (external || static) { writeUleb(info, symbol.file.toLong()); writeUleb(info, symbol.line.toLong()) }
-                state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
                 writeData4(info, symbol.typeOffset - unitStart)
                 if (external) writeData1(info, 1)
                 if (external || static) {
@@ -981,7 +980,6 @@ object TccDbg {
             if (function.external) writeData1(info, 1)
             writeStringReference(state, info, function.name, refs.strings, pointerSize = pointerSize)
             writeUleb(info, function.sourceFile.toLong()); writeUleb(info, function.sourceLine.toLong())
-            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
             writeData4(info, function.typeOffset - function.unitStart)
             state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", refs.text)
             val length = endAddress - function.startAddress
@@ -1018,7 +1016,6 @@ object TccDbg {
         val info = state.sections.getValue(".debug_info")
         writeData1(info, 10); writeStringReference(state, info, name, dwarf.refs.strings, pointerSize = dwarf.pointerSize)
         writeUleb(info, dwarf.file.toLong()); writeUleb(info, dwarf.line.toLong())
-        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", dwarf.refs.info)
         writeData4(info, typeOffset - dwarf.unitStart)
         return typeOffset
     }
@@ -1049,7 +1046,6 @@ object TccDbg {
         writeData1(info, if (global) 3 else 4)
         writeStringReference(state, info, name, context.refs.strings, pointerSize = context.pointerSize)
         writeUleb(info, context.file.toLong()); writeUleb(info, context.line.toLong())
-        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", context.refs.info)
         writeData4(info, typeOffset - context.unitStart)
         if (global) writeData1(info, 1)
         writeData1(info, context.pointerSize + 1); writeData1(info, 0x03)
