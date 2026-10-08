@@ -299,6 +299,35 @@ class Riscv64Asm(
         return true
     }
 
+    fun emitAtomicInstruction(name: String, rd: Operand, source: Operand?, base: Operand): Boolean {
+        val acquire = name.endsWith("_aq") || name.endsWith("_aqrl")
+        val release = name.endsWith("_rl") || name.endsWith("_aqrl")
+        val operation = name.removeSuffix("_aqrl").removeSuffix("_aq").removeSuffix("_rl")
+        val width = when { operation.endsWith("_w") -> 2; operation.endsWith("_d") -> 3; else -> { expect("atomic word or doubleword instruction"); return false } }
+        val mnemonic = operation.removeSuffix("_w").removeSuffix("_d")
+        val function = when (mnemonic) {
+            "lr" -> 0x0c; "sc" -> 0x18; "amoadd" -> 0x00; "amoswap" -> 0x01
+            "amoand" -> 0x0c; "amoor" -> 0x08; "amoxor" -> 0x04; "amomax" -> 0x14
+            "amomaxu" -> 0x1c; "amomin" -> 0x10; "amominu" -> 0x18
+            else -> { expect("atomic instruction"); return false }
+        }
+        val rs2 = if (mnemonic == "lr") Operand(OP_REG) else source ?: run { expect("atomic source register"); return false }
+        return emitAtomic(0x2f or (width shl 12) or (function shl 27), rd, rs2, base, acquire, release)
+    }
+
+    fun emitFusedMultiplyAdd(name: String, operands: List<Operand>): Boolean {
+        if (operands.size != 4) { expect("four fused multiply-add operands"); return false }
+        val format = when {
+            name.endsWith("_s") || name.endsWith(".s") -> 0
+            name.endsWith("_d") || name.endsWith(".d") -> 1
+            else -> { expect("single or double fused multiply-add"); return false }
+        }
+        if (name != "fmadd_s" && name != "fmadd_d" && name != "fmadd.s" && name != "fmadd.d") {
+            expect("fused multiply-add instruction"); return false
+        }
+        return emitFloatingQuaternary(0x43 or (format shl 25) or (7 shl 12), operands[0], operands[1], operands[2], operands[3])
+    }
+
     fun emitS(opcode: Int, rs1: Operand, rs2: Operand, immediate: Operand): Boolean {
         if (!requireRegister(rs1, "first source operand") || !requireRegister(rs2, "second source operand")) return false
         if (immediate.type != OP_IM12S) { error("Expected immediate value between 0 and 8191"); return false }
