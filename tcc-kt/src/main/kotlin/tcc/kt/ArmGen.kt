@@ -720,6 +720,25 @@ object ArmGen {
         return 0xe0000090.toInt() or (rd shl 16) or (rd shl 8) or rm
     }
 
+    fun integerShift(shift: Int, source: Int, destination: Int, amount: Int? = null, amountRegister: Int? = null): Int {
+        require(shift in 0..3) { "unknown ARM shift opcode $shift" }
+        val sourceRegister = integerRegister(source)
+        val destinationRegister = integerRegister(destination)
+        val opcode = 0xe1a00000.toInt() or (shift shl 5)
+        return if (amount != null) opcode or sourceRegister or ((amount and 31) shl 7) or (destinationRegister shl 12)
+        else opcode or sourceRegister or (destinationRegister shl 12) or (integerRegister(amountRegister ?: error("register shift requires a shift register")) shl 8) or 0x10
+    }
+
+    fun integerLongMultiply(left: Int, right: Int, destinationLow: Int, destinationHigh: Int,
+        signed: Boolean = false, accumulate: Boolean = false, setFlags: Boolean = false): Int {
+        var opcode = 0x00800090
+        if (signed) opcode = opcode or 0x00400000
+        if (accumulate) opcode = opcode or 0x00200000
+        if (setFlags) opcode = opcode or 0x00100000
+        return opcode or (integerRegister(destinationHigh) shl 16) or (integerRegister(destinationLow) shl 12) or
+            (integerRegister(left) shl 8) or integerRegister(right)
+    }
+
     fun floatsInCoreRegisters(helperSymbol: String?, vfp: Boolean): Boolean {
         val symbols = mutableSetOf("__floatundisf", "__floatundidf", "__fixunssfdi", "__fixunsdfdi",
             "__floatdisf", "__floatdidf", "__fixsfdi", "__fixdfdi")
