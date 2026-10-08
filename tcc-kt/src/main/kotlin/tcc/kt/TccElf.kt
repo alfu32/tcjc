@@ -14,6 +14,7 @@ object TccElf {
     const val SHT_DYNSYM = 11
     const val SHT_INIT_ARRAY = 14
     const val SHT_FINI_ARRAY = 15
+    const val SHT_PREINIT_ARRAY = 16
     const val SHF_WRITE = 1
     const val SHF_ALLOC = 2
     const val SHF_EXECINSTR = 4
@@ -581,8 +582,8 @@ object TccElf {
         }
         layout.sections[".init"]?.takeIf { it.dataOffset != 0 }?.let { put(12, it.address) }
         layout.sections[".fini"]?.takeIf { it.dataOffset != 0 }?.let { put(13, it.address) }
-        put(21, if (layout.debugEnabled) 0 else 0) // DT_DEBUG
-        put(0, 0) // DT_NULL
+            if (layout.debugEnabled) put(21, 0) // DT_DEBUG
+            put(0, 0) // DT_NULL
         val prefix = dynamic.data.take(layout.startOffset.coerceIn(0, dynamic.data.size))
         dynamic.data.clear(); dynamic.data.addAll(prefix)
         dynamic.dataOffset = dynamic.data.size
@@ -596,6 +597,29 @@ object TccElf {
         dynamic.dataOffset = dynamic.data.size
         dynamic.outputSize = dynamic.dataOffset.toLong()
         return entries
+    }
+
+    /** Compact allocated REL/RELA sections into one contiguous dynamic relocation range. */
+    fun updateRelocationSections(
+        state: ElfState,
+        pltRelocations: ElfSection?,
+    ): Pair<Long, Long> {
+        var relocationAddress = 0L
+        var relocationSize = 0L
+        var fileOffset = 0L
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if ((section.type != SHT_REL && section.type != SHT_RELA) || section === pltRelocations) return@forEach
+            if (section.flags and SHF_ALLOC == 0) return@forEach
+            if (relocationSize == 0L) {
+                relocationAddress = section.address
+                fileOffset = section.offset
+            } else {
+                section.address = relocationAddress + relocationSize
+                section.offset = fileOffset + relocationSize
+            }
+            relocationSize += section.outputSize
+        }
+        return relocationAddress to relocationSize
     }
 
     fun appendDynamicTag(dynamic: ElfSection, tag: Long, value: Long, wordSize: Int) {
