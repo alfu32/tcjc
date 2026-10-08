@@ -938,12 +938,13 @@ object TccElf {
         inputBytes: ByteArray,
         filename: String,
         level: Int,
+        expectedMachine: Int,
         versions: VersionRegistry,
         loadedLibraries: MutableSet<String>,
         reportError: (String) -> Unit = {},
     ): LoadedLibrary? {
         val input = parseElfSections(inputBytes)
-        if (input == null || input.fileType != 3 || !input.littleEndian) {
+        if (input == null || input.fileType != 3 || !input.littleEndian || input.machine != expectedMachine) {
             reportError("bad architecture")
             return null
         }
