@@ -41,7 +41,7 @@ object TccElf {
         var other: Int,
         var sectionIndex: Int,
     )
-    data class ElfRelocation(var offset: Long, var symbolIndex: Int, val type: Int, val addend: Long = 0)
+    data class ElfRelocation(var offset: Long, var symbolIndex: Int, var type: Int, val addend: Long = 0)
     data class SymbolAttributes(
         var gotOffset: Long = 0,
         var pltOffset: Long = 0,
@@ -93,6 +93,10 @@ object TccElf {
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
+    const val NO_GOTPLT_ENTRY = 0
+    const val BUILD_GOT_ONLY = 1
+    const val AUTO_GOTPLT_ENTRY = 2
+    const val ALWAYS_GOTPLT_ENTRY = 3
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
         state.namedSections[".text"] = newSection(state, ".text", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR)
@@ -547,6 +551,87 @@ object TccElf {
             attributes.pltSymbol = putElfSymbol(symbolTable, attributes.pltOffset, 0, (STB_GLOBAL shl 4) or STT_FUNC, 0, plt.index, pltName)
         } else attributes.gotOffset = gotOffset
         return attributes
+    }
+
+    fun buildGotEntries(
+        state: ElfState,
+        symbolTable: ElfSection,
+        dynamicSymbols: ElfSection?,
+        initialGotSymbol: Int,
+        jumpSlotType: Int,
+        globalDataType: Int,
+        relativeType: Int,
+        outputDynamic: Boolean,
+        positionIndependentDllPlt: Boolean,
+        outputExecutable: Boolean,
+        classifyGotPlt: (Int) -> Int,
+        classifyCodeRelocation: (Int) -> Int,
+        forceLocalPcRelative: (Int, ElfSymbol) -> Int? = { _, _ -> null },
+        createPltEntry: (Long, SymbolAttributes) -> Long,
+        reportError: (String) -> Unit = {},
+    ): Int {
+        var gotSymbol = initialGotSymbol
+        repeat(2) { pass ->
+            state.sections.drop(1).filterNotNull().forEach { relocationSection ->
+                if (relocationSection.type != SHT_REL && relocationSection.type != SHT_RELA) return@forEach
+                if (relocationSection.link !== symbolTable) return@forEach
+                relocationSection.relocations.forEach { relocation ->
+                    val originalType = relocation.type
+                    val category = classifyGotPlt(originalType)
+                    if (category == -1) { reportError("Unknown relocation type for got: $originalType"); return@forEach }
+                    if (category == NO_GOTPLT_ENTRY) return@forEach
+                    val symbol = symbolTable.symbols.getOrNull(relocation.symbolIndex) ?: return@forEach
+                    var forceJumpSlot = false
+                    if (category == AUTO_GOTPLT_ENTRY) {
+                        when (symbol.sectionIndex) {
+                            SHN_UNDEF -> {
+                                if (!positionIndependentDllPlt && outputDynamic) return@forEach
+                                if (dynamicSymbols != null) {
+                                    val dynIndex = getSymbolAttributes(state, relocation.symbolIndex, false)?.dynamicIndex ?: 0
+                                    val dynamicSymbol = dynamicSymbols.symbols.getOrNull(dynIndex)
+                                    if (dynIndex != 0 && dynamicSymbol != null &&
+                                        ((dynamicSymbol.info and 0x0f) == STT_FUNC ||
+                                            ((dynamicSymbol.info and 0x0f) == STT_NOTYPE && (symbol.info and 0x0f) == STT_FUNC))) {
+                                        forceJumpSlot = true
+                                    } else return@forEach
+                                } else return@forEach
+                            }
+                            SHN_ABS -> if (symbol.value == 0L || state.wordSize != 8) return@forEach
+                            else -> return@forEach
+                        }
+                    }
+                    val localPcType = forceLocalPcRelative(originalType, symbol)
+                    if (localPcType != null) {
+                        if (pass == 0) relocation.type = localPcType
+                        return@forEach
+                    }
+                    val relocationClass = classifyCodeRelocation(originalType)
+                    if (relocationClass == -1) { reportError("Unknown relocation type: $originalType"); return@forEach }
+                    val dynamicRelocationType = if (forceJumpSlot || relocationClass != 0) {
+                        if (pass != 0) return@forEach
+                        jumpSlotType
+                    } else {
+                        if (pass != 1) return@forEach
+                        globalDataType
+                    }
+                    if (state.namedSections[".got"] == null) gotSymbol = buildGot(state, symbolTable)
+                    if (category == BUILD_GOT_ONLY) return@forEach
+                    val attributes = putGotEntry(
+                        state, symbolTable, dynamicSymbols, relocation.symbolIndex, dynamicRelocationType,
+                        jumpSlotType, relativeType, createPltEntry,
+                    )
+                    if (dynamicRelocationType == jumpSlotType) {
+                        relocation.symbolIndex = attributes.pltSymbol
+                        relocation.type = originalType
+                    }
+                }
+            }
+        }
+        val plt = state.namedSections[".plt"]
+        val got = state.namedSections[".got"]
+        if (plt?.relocation != null && got != null) plt.relocation!!.sectionInfo = got.index
+        if (gotSymbol != 0) symbolTable.symbols.getOrNull(gotSymbol)?.size = got?.dataOffset?.toLong() ?: 0L
+        return gotSymbol
     }
 
     fun relocateSection(
