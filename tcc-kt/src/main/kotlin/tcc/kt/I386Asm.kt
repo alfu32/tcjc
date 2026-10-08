@@ -293,8 +293,14 @@ class I386Asm(
         if (name == "memory" || name == "cc" || name == "flags") return
         val names32 = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
         val names16 = listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
-        val register = names32.indexOf(name).takeIf { it >= 0 } ?: names16.indexOf(name)
-        require(register >= 0 && register < registers.size) { "invalid clobber register '$name'" }
+        val names64 = listOf("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi")
+        val numeric = Regex("^r([8-9]|1[0-5])(?:[bwd])?$").matchEntire(name)?.groupValues?.get(1)?.toIntOrNull()
+        val register = names32.indexOf(name).takeIf { it >= 0 }
+            ?: names16.indexOf(name).takeIf { it >= 0 }
+            ?: names64.indexOf(name).takeIf { it >= 0 }
+            ?: (if (x64Target) numeric else null)
+            ?: -1
+        require(register >= 0 && register < registers.size && (!x64Target || register < 16)) { "invalid clobber register '$name'" }
         registers[register] = true
     }
 
@@ -307,10 +313,16 @@ class I386Asm(
         loadHigh: (InlineOperand, Int) -> Unit = { _, _ -> },
         storeHigh: (InlineOperand, Int) -> Unit = { _, _ -> },
         materializeOutputAddress: (InlineOperand, Int) -> Unit = { _, _ -> },
+        peTarget: Boolean = false,
     ) {
         val used = clobbers.copyOf()
         operands.forEach { if (it.register >= 0 && it.register < used.size) used[it.register] = true }
-        val preserved = listOf(3, 6, 7).filter { it < used.size && used[it] }
+        val preservedRegisters = when {
+            x64Target && peTarget -> listOf(3, 6, 7, 12, 13, 14, 15)
+            x64Target -> listOf(3, 12, 13, 14, 15)
+            else -> listOf(3, 6, 7)
+        }
+        val preserved = preservedRegisters.filter { it < used.size && used[it] }
         if (!isOutput) {
             preserved.forEach(save)
             operands.forEachIndexed { index, operand ->
@@ -392,8 +404,9 @@ class I386Asm(
         operands: MutableList<ConstraintOperand>, outputCount: Int,
         clobbers: BooleanArray,
     ): Int {
-        val allocated = IntArray(8)
-        clobbers.indices.take(8).forEach { if (clobbers[it]) allocated[it] = 3 }
+        val registerCount = if (x64Target) 16 else 8
+        val allocated = IntArray(registerCount)
+        clobbers.indices.take(registerCount).forEach { if (clobbers[it]) allocated[it] = 3 }
         allocated[4] = 3 // esp
         allocated[5] = 3 // ebp
         val referenced = mutableSetOf<Int>()
@@ -426,18 +439,18 @@ class I386Asm(
                     'a' -> listOf(0); 'b' -> listOf(3); 'c' -> listOf(1); 'd' -> listOf(2)
                     'S' -> listOf(6); 'D' -> listOf(7)
                     'q' -> listOf(0, 3, 1, 2)
-                    'r', 'R', 'p' -> (0..7).toList()
+                    'r', 'R', 'p' -> (0 until registerCount).toList()
                     'e', 'i' -> if (operand.isConstant) listOf(-1) else emptyList()
                     'I', 'N', 'M' -> if (operand.isConstant) listOf(-1) else emptyList()
                     'm' -> when {
                         operand.isMemory -> listOf(-1)
-                        operand.isLocalPointer && (isOutput || choice == 'm') -> (0..7).filter { allocated[it] and 2 == 0 }
+                        operand.isLocalPointer && (isOutput || choice == 'm') -> (0 until registerCount).filter { allocated[it] and 2 == 0 }
                         else -> emptyList()
                     }
                     'g' -> when {
                         operand.isConstant || operand.isMemory -> listOf(-1)
-                        operand.isLocalPointer && isOutput -> (0..7).filter { allocated[it] and 2 == 0 }
-                        else -> (0..7).toList()
+                        operand.isLocalPointer && isOutput -> (0 until registerCount).filter { allocated[it] and 2 == 0 }
+                        else -> (0 until registerCount).toList()
                     }
                     '=', '&', '+' , '%' -> emptyList()
                     else -> emptyList()
@@ -467,7 +480,7 @@ class I386Asm(
             }
         }
         if (operands.any { it.isLocalPointer && it.register >= 0 })
-            return (0..7).firstOrNull { allocated[it] and 1 == 0 } ?: -1
+            return (0 until registerCount).firstOrNull { allocated[it] and 1 == 0 } ?: -1
         return -1
     }
 
@@ -553,7 +566,7 @@ class I386Asm(
     /** Accepts an optional-percent spelling of an i386 integer register variable. */
     fun parseRegisterVariable(identifier: String): Int? = try {
         val operand = parseOperand(if (identifier.startsWith('%')) identifier else "%$identifier")
-        if (operand.type and (OP_REG8 or OP_REG16 or OP_REG32) != 0) operand.register else null
+        if (operand.type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG) != 0) operand.register else null
     } catch (_: IllegalArgumentException) {
         null
     }
