@@ -497,6 +497,78 @@ class Riscv64Gen(
         emitImmediateUnsigned(opcode, function3, integerRegister(destination), integerRegister(source), encodedImmediate)
     }
 
+    fun floatingArithmetic(operation: Int, left: Int, right: Int, destination: Int, double: Boolean) {
+        require(operation in 0..3)
+        emitRegister(0x53, 7, floatingRegister(destination), floatingRegister(left), floatingRegister(right), (if (double) 1 else 0) or (operation shl 2))
+    }
+
+    fun floatingCompare(operation: Int, left: Int, right: Int, destination: Int, double: Boolean, invert: Boolean = false) {
+        require(operation in 0..2)
+        val rd = integerRegister(destination)
+        emitRegister(0x53, operation, rd, floatingRegister(left), floatingRegister(right), (if (double) 1 else 0) or 0x50)
+        if (invert) emitImmediate(0x13, 4, rd, rd, 1)
+    }
+
+    fun convertIntegerToFloat(source: Int, destination: Int, double: Boolean, unsigned: Boolean, wide: Boolean) {
+        val format = (0x68 or if (double) 1 else 0) shl 5
+        emitImmediateUnsigned(0x53, 7, floatingRegister(destination), integerRegister(source), format or (if (unsigned) 1 else 0) or (if (wide) 2 else 0))
+    }
+
+    fun convertFloatToInteger(source: Int, destination: Int, double: Boolean, unsigned: Boolean, wide: Boolean) {
+        val format = (0x60 or if (double) 1 else 0) shl 5
+        emitImmediateUnsigned(0x53, 1, integerRegister(destination), floatingRegister(source), format or (if (unsigned) 1 else 0) or (if (wide) 2 else 0))
+    }
+
+    fun convertFloatWidth(source: Int, destination: Int, sourceDouble: Boolean, destinationDouble: Boolean) {
+        if (sourceDouble == destinationDouble) return
+        val immediate = if (destinationDouble) (0x21 shl 5) else ((0x20 shl 5) or 1)
+        emitImmediateUnsigned(0x53, if (destinationDouble) 0 else 7, floatingRegister(destination), floatingRegister(source), immediate)
+    }
+
+    fun convertIntegerWidth(register: Int, fromType: Int, unsigned: Boolean = false) {
+        val rd = integerRegister(register)
+        if (fromType == VT_SHORT) {
+            emitImmediate(0x13, 1, rd, rd, 48)
+            if (!unsigned) emitImmediateUnsigned(0x13, 5, rd, rd, 0x430)
+            else emitImmediate(0x13, 5, rd, rd, 48)
+        } else if (fromType == VT_BYTE) {
+            if (unsigned) emitImmediate(0x13, 7, rd, rd, 0xff)
+            else {
+                emitImmediate(0x13, 1, rd, rd, 56)
+                emitImmediateUnsigned(0x13, 5, rd, rd, 0x438)
+            }
+        }
+    }
+
+    fun saveVlaStackPointer(offset: Int) {
+        val address = vlaAddress(offset)
+        emitStore(0x23, 3, address.register, 2, address.offset)
+    }
+
+    fun restoreVlaStackPointer(offset: Int) {
+        val address = vlaAddress(offset)
+        emitImmediate(0x03, 3, 2, address.register, address.offset)
+    }
+
+    private fun vlaAddress(offset: Int): AddressOffset {
+        if (lowOverflow(offset) == 0) return AddressOffset(8, offset)
+        emitInstruction(0x37 or (5 shl 7) or lowOverflow(offset))
+        emitRegister(0x33, 0, 5, 5, 8, 0)
+        return AddressOffset(5, sign11(offset))
+    }
+
+    fun allocateVla(sizeRegister: Int) {
+        val register = integerRegister(sizeRegister)
+        emitImmediate(0x13, 0, register, register, 15)
+        emitImmediate(0x13, 7, register, register, -16)
+        emitRegister(0x33, 0, 2, 2, register, 0x20)
+    }
+
+    fun clearInstructionCache() {
+        emitInstruction(0x0ff0000f)
+        emitInstruction(0x0000100f)
+    }
+
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
         var current = chain
