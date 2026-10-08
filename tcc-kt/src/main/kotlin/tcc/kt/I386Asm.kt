@@ -51,7 +51,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
 
     data class Instruction(
         val token: Int, val opcode: Int, val instructionType: Int,
-        val operandTypes: List<Int>,
+        val operandTypes: List<Int>, val mnemonic: String = "",
     )
 
     /** Selects the first instruction template whose arity and operand masks match. */
@@ -65,6 +65,9 @@ class I386Asm(private val emit: (Int) -> Unit) {
         }
     }
 
+    fun selectMnemonic(mnemonic: String, operands: List<Operand>): Instruction? =
+        selectInstruction(I386AsmInstructionTable.entries.filter { it.mnemonic == mnemonic }, 0, operands)
+
     private fun expandOperandType(type: Int): Int = when (type and 0x1f) {
         in 0..19 -> 1 shl (type and 0x1f)
         20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
@@ -74,7 +77,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
         24 -> OP_MMX or OP_SSE
         25, 26 -> OP_ADDR
         else -> type
-    } or (type and OP_EA)
+    } or (if (type and 0x80 != 0) OP_EA else 0)
 
     /** Maps the legal x86 scale constants to the SIB shift field. */
     fun registerShift(scale: Int): Int = when (scale) {
