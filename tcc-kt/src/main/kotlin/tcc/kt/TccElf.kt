@@ -162,6 +162,7 @@ object TccElf {
         val localVersions: MutableList<Int> = mutableListOf(),
         val symbolVersions: MutableList<Int> = mutableListOf(),
     )
+    data class VersionRecords(val definitions: ByteArray? = null, val requirements: ByteArray? = null)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -248,6 +249,61 @@ object TccElf {
         require(symbolIndex >= 0)
         while (registry.symbolVersions.size <= symbolIndex) registry.symbolVersions += -1
         if (registry.symbolVersions[symbolIndex] < 0) registry.symbolVersions[symbolIndex] = versionIndex
+    }
+
+    /** Reads ELF Verdef and Verneed chains and records their library/version associations. */
+    fun storeVersions(registry: VersionRegistry, records: VersionRecords, dynamicStrings: ByteArray) {
+        fun u16(bytes: ByteArray, offset: Int): Int =
+            (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl 8)
+        fun u32(bytes: ByteArray, offset: Int): Int =
+            (u16(bytes, offset) or (u16(bytes, offset + 2) shl 16))
+        fun stringAt(offset: Int): String {
+            if (offset !in dynamicStrings.indices) return ""
+            var end = offset
+            while (end < dynamicStrings.size && dynamicStrings[end] != 0.toByte()) end++
+            return dynamicStrings.copyOfRange(offset, end).toString(Charsets.UTF_8)
+        }
+        records.definitions?.let { bytes ->
+            var record = 0
+            var library: String? = null
+            while (record >= 0 && record + 20 <= bytes.size) {
+                val count = u16(bytes, record + 6)
+                val index = u16(bytes, record + 4)
+                val auxOffset = u32(bytes, record + 12)
+                if (count > 0 && auxOffset > 0 && record + auxOffset + 8 <= bytes.size) {
+                    val auxiliary = record + auxOffset
+                    val name = stringAt(u32(bytes, auxiliary))
+                    val baseLibrary = library
+                    if (baseLibrary == null) library = name
+                    else setVersionToVersion(registry, index, baseLibrary, name)
+                }
+                val next = u32(bytes, record + 16)
+                if (next == 0) break
+                if (next < 0 || record + next <= record) break
+                record += next
+            }
+        }
+        records.requirements?.let { bytes ->
+            var record = 0
+            while (record >= 0 && record + 16 <= bytes.size) {
+                val count = u16(bytes, record + 2)
+                val library = stringAt(u32(bytes, record + 4))
+                val auxOffset = u32(bytes, record + 8)
+                var auxiliary = record + auxOffset
+                repeat(count) {
+                    if (auxiliary < 0 || auxiliary + 16 > bytes.size) return@repeat
+                    val index = u16(bytes, auxiliary + 6)
+                    if (index and 0x8000 == 0) setVersionToVersion(registry, index, library, stringAt(u32(bytes, auxiliary + 8)))
+                    val nextAux = u32(bytes, auxiliary + 12)
+                    if (nextAux <= 0 || auxiliary + nextAux <= auxiliary) return@repeat
+                    auxiliary += nextAux
+                }
+                val next = u32(bytes, record + 12)
+                if (next == 0) break
+                if (next < 0 || record + next <= record) break
+                record += next
+            }
+        }
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
