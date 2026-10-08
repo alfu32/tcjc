@@ -237,6 +237,8 @@ object TccElf {
         val ehFrameHeader: ElfSection? = null,
         val bsdTarget: Boolean = false,
         val prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
+        val afterLayout: (ElfState, LayoutResult) -> Unit = { _, _ -> },
+        val afterReorder: (ElfState) -> Unit = {},
     )
     data class DynamicOutputSections(
         val symbols: ElfSection,
@@ -1854,7 +1856,9 @@ object TccElf {
         val layout = layoutSections(
             state, sorted, layoutRequest, request.interpreter, request.dynamic, request.note, request.ehFrameHeader,
         )
+        request.afterLayout(state, layout)
         reorderSections(state, sorted.order.toIntArray())
+        request.afterReorder(state)
         return serializeElf(state, request.fileType, request.machine, request.entry, layout, request.flags)
     }
 
