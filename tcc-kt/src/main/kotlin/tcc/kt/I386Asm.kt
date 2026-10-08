@@ -156,6 +156,58 @@ class I386Asm(private val emit: (Int) -> Unit) {
         return Operand(type, expression = Expression(value))
     }
 
+    /** Parses the common AT&T i386 operand spellings accepted by parse_operand. */
+    fun parseOperand(source: String, evaluate: (String) -> Expression = { Expression(it.toInt()) }): Operand {
+        var text = source.trim()
+        var indirect = false
+        if (text.startsWith('*')) { indirect = true; text = text.drop(1).trimStart() }
+        if (text.startsWith('%')) {
+            val name = text.drop(1).lowercase()
+            val byteRegs = listOf("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")
+            val wordRegs = listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+            val dwordRegs = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+            val st = Regex("st(?:\\(([0-7])\\))?").matchEntire(name)
+            val (type, register) = when {
+                name in byteRegs -> OP_REG8 to byteRegs.indexOf(name)
+                name in wordRegs -> OP_REG16 to wordRegs.indexOf(name)
+                name in dwordRegs -> OP_REG32 to dwordRegs.indexOf(name)
+                st != null -> OP_ST to (st.groupValues[1].ifEmpty { "0" }.toInt())
+                else -> throw IllegalArgumentException("unknown register %$name")
+            }
+            var fullType = type
+            if (name == "eax") fullType = fullType or OP_EAX
+            if (name == "cl") fullType = fullType or OP_CL
+            if (name == "dx") fullType = fullType or OP_DX
+            return Operand(fullType or if (indirect) OP_INDIR else 0, register)
+        }
+        if (text.startsWith('$')) {
+            val operand = parseExpression(text.drop(1), evaluate)
+            val value = operand.expression.value
+            if (operand.expression.symbol == null) {
+                var type = OP_IM32
+                if (value == value.toByte().toInt()) type = type or OP_IM8 or OP_IM8S
+                if (value == value.toShort().toInt()) type = type or OP_IM16
+                operand.type = type
+            } else operand.type = OP_IM32
+            if (indirect) operand.type = operand.type or OP_INDIR
+            return operand
+        }
+        val memory = Regex("^(.*?)\\(([^)]*)\\)$").matchEntire(text)
+        val displacement = memory?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: if (memory == null) text else "0"
+        val expression = parseExpression(displacement, evaluate).expression
+        if (memory == null) return Operand(OP_ADDR or if (indirect) OP_INDIR else 0, expression = expression)
+        val pieces = memory.groupValues[2].split(',').map { it.trim() }
+        val base = pieces.getOrNull(0)?.takeIf { it.isNotEmpty() }?.let { parseOperand(it, evaluate).register } ?: -1
+        val index = pieces.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { parseOperand(it, evaluate).register } ?: -1
+        val shift = pieces.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { registerShift(it.toInt()) } ?: 0
+        return Operand(OP_EA or if (indirect) OP_INDIR else 0, base, index, shift, expression)
+    }
+
+    private fun parseExpression(text: String, evaluate: (String) -> Expression): Operand {
+        val expression = evaluate(text.trim().ifEmpty { "0" })
+        return Operand(expression = expression)
+    }
+
     /** Emits an i386 ModRM operand and returns the current output offset. */
     fun modRm(regField: Int, operand: Operand, position: () -> Int): Int {
         val reg = regField and 7
