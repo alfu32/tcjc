@@ -204,7 +204,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
     data class InlineOperand(val register: Int, val readWrite: Boolean = false, val isMemory: Boolean = false, val isLongLong: Boolean = false)
 
     data class ConstraintOperand(
-        val alternatives: String, val isConstant: Boolean = false,
+        val alternatives: String, val id: String = "", val isConstant: Boolean = false,
         var isMemory: Boolean = false, val isLocalPointer: Boolean = false,
         var tiedTo: Int = -1, var register: Int = -1,
         var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
@@ -263,11 +263,16 @@ class I386Asm(private val emit: (Int) -> Unit) {
         clobbers.indices.take(8).forEach { allocated[it] = clobbers[it] }
         allocated[4] = true // esp
         allocated[5] = true // ebp
+        val referenced = mutableSetOf<Int>()
         val priorities = operands.mapIndexed { operandIndex, operand ->
             val constraint = skipConstraintModifiers(operand.alternatives)
-            val ref = constraint.toIntOrNull()
-            if (ref != null) {
+            val ref = when {
+                constraint.startsWith('[') && ']' in constraint -> operands.indexOfFirst { it.id == constraint.substringAfter('[').substringBefore(']') }
+                else -> Regex("^\\d+").find(constraint)?.value?.toIntOrNull() ?: -1
+            }
+            if (ref >= 0) {
                 require(ref < operandIndex && operandIndex >= outputCount) { "invalid tied operand reference" }
+                require(referenced.add(ref)) { "cannot reference twice the same operand" }
                 operand.tiedTo = ref
                 5
             } else if (operand.isLocalPointer) 1 else constraintPriority(constraint)
