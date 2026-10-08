@@ -46,6 +46,14 @@ class TccAsm(
         val isMemory: Boolean = false,
         val label: String? = null,
     )
+    data class AsmOperandSpec(val id: String, val constraint: String, val expression: String)
+    data class ExtendedAsmSpec(
+        val template: String,
+        val outputs: List<AsmOperandSpec>,
+        val inputs: List<AsmOperandSpec>,
+        val clobbers: List<String>,
+        val labels: List<String>,
+    )
     data class ConstraintReference(val operandIndex: Int, val nextOffset: Int)
     data class InlineAssemblyHooks(
         val saveRegisters: (Int) -> Unit = {},
@@ -192,6 +200,94 @@ class TccAsm(
     fun assembleGlobalInline(template: String, hooks: InlineAssemblyHooks): String {
         assemble(template, hooks.assembleInstruction, global = true, hashComments = false)
         return template
+    }
+
+    /** Parses the colon-separated GCC extended asm template and operand groups. */
+    fun parseExtendedAsm(source: String): ExtendedAsmSpec {
+        val groups = splitTopLevel(source, ':', 4)
+        val template = decodeString(unquote(groups.firstOrNull()?.trim() ?: error("asm template expected")))
+            .dropLast(1).toByteArray().toString(Charsets.ISO_8859_1)
+        val outputs = parseAsmOperandSpecs(groups.getOrNull(1).orEmpty())
+        val inputs = parseAsmOperandSpecs(groups.getOrNull(2).orEmpty())
+        val clobbers = parseStringList(groups.getOrNull(3).orEmpty())
+        val labels = groups.getOrNull(4).orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
+        return ExtendedAsmSpec(template, outputs, inputs, clobbers, labels)
+    }
+
+    private fun parseAsmOperandSpecs(source: String): List<AsmOperandSpec> {
+        val operands = mutableListOf<AsmOperandSpec>()
+        var index = 0
+        while (index < source.length) {
+            while (index < source.length && (source[index].isWhitespace() || source[index] == ',')) index++
+            if (index >= source.length) break
+            var id = ""
+            if (source[index] == '[') {
+                val close = source.indexOf(']', index + 1)
+                require(close >= 0) { "expected ] in asm operand" }
+                id = source.substring(index + 1, close).trim()
+                index = close + 1
+            }
+            while (index < source.length && source[index].isWhitespace()) index++
+            require(index < source.length && source[index] == '"') { "asm constraint string expected" }
+            val constraintEnd = quotedEnd(source, index)
+            val constraint = unquote(source.substring(index, constraintEnd))
+            index = constraintEnd
+            while (index < source.length && source[index].isWhitespace()) index++
+            require(index < source.length && source[index] == '(') { "expected ( after asm constraint" }
+            val expressionEnd = matchingParen(source, index)
+            operands += AsmOperandSpec(id, constraint, source.substring(index + 1, expressionEnd))
+            index = expressionEnd + 1
+            while (index < source.length && source[index].isWhitespace()) index++
+            require(index == source.length || source[index] == ',') { "expected comma between asm operands" }
+        }
+        return operands
+    }
+
+    private fun parseStringList(source: String): List<String> = splitOperands(source).filter(String::isNotBlank).map { unquote(it) }
+
+    private fun splitTopLevel(source: String, delimiter: Char, maxSplits: Int): List<String> {
+        val result = mutableListOf<String>()
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        var start = 0
+        source.forEachIndexed { index, char ->
+            if (escaped) escaped = false
+            else if (quoted && char == '\\') escaped = true
+            else if (char == '"') quoted = !quoted
+            else if (!quoted) when (char) {
+                '(' -> depth++
+                ')' -> depth--
+                delimiter -> if (depth == 0 && result.size < maxSplits) { result += source.substring(start, index).trim(); start = index + 1 }
+            }
+        }
+        result += source.substring(start).trim()
+        return result
+    }
+
+    private fun quotedEnd(source: String, start: Int): Int {
+        var escaped = false
+        for (index in start + 1 until source.length) {
+            if (escaped) escaped = false
+            else if (source[index] == '\\') escaped = true
+            else if (source[index] == '"') return index + 1
+        }
+        error("unterminated asm string")
+    }
+
+    private fun matchingParen(source: String, start: Int): Int {
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        for (index in start until source.length) {
+            val char = source[index]
+            if (escaped) escaped = false
+            else if (quoted && char == '\\') escaped = true
+            else if (char == '"') quoted = !quoted
+            else if (!quoted && char == '(') depth++
+            else if (!quoted && char == ')' && --depth == 0) return index
+        }
+        error("unterminated asm operand expression")
     }
 
     fun section(name: String): Section = sections.getOrPut(name) { Section(name, sections.size + 1) }
