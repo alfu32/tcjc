@@ -220,6 +220,7 @@ object TccElf {
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class ObjectMergeResult(val sections: List<SectionMergeInfo>, val symbolIndexes: IntArray)
     data class LoadedLibrary(val soname: String, val level: Int, val symbolIndexes: IntArray)
+    data class VersionOutput(val symbols: ElfSection, val needs: ElfSection?, val needCount: Int, val neededLibraries: List<String>)
     data class ElfOutputRequest(
         val fileType: Int,
         val machine: Int,
@@ -599,6 +600,84 @@ object TccElf {
                 record += next
             }
         }
+    }
+
+    fun buildVersionOutput(
+        state: ElfState,
+        registry: VersionRegistry,
+        outputExecutable: Boolean,
+    ): VersionOutput? {
+        if (registry.versions.isEmpty()) return null
+        val dynamicSymbols = state.dynamicOutputSymbols ?: return null
+        val inputSymbols = state.dynamicSymbolTable ?: return null
+        val outputStrings = dynamicSymbols.link ?: return null
+        val versionSymbols = newSection(state, ".gnu.version", 0x6fffffff, SHF_ALLOC)
+        versionSymbols.entrySize = 2
+        versionSymbols.link = dynamicSymbols
+        val symbolCount = dynamicSymbols.dataOffset / dynamicSymbols.entrySize
+        reserveSection(versionSymbols, symbolCount * 2)
+        val neededLibraries = linkedSetOf<String>()
+        var nextOutputIndex = 2
+        for (symbolIndex in 1 until minOf(symbolCount, dynamicSymbols.symbols.size)) {
+            val symbol = dynamicSymbols.symbols[symbolIndex]
+            val name = elfString(outputStrings, symbol.nameOffset)
+            val inputIndex = findElfSymbol(inputSymbols, name)
+            val versionIndex = registry.symbolVersions.getOrNull(inputIndex) ?: -1
+            val outputVersion = if (versionIndex >= 0 &&
+                (symbol.sectionIndex == SHN_UNDEF || outputExecutable)) {
+                val version = registry.versions.getOrNull(versionIndex)
+                if (version != null) {
+                    if (version.outputIndex == 0) version.outputIndex = nextOutputIndex++
+                    if (version.library != "ld-linux.so.2") neededLibraries += version.library
+                    version.outputIndex
+                } else 1
+            } else 1
+            write16(versionSymbols.data, symbolIndex * 2, outputVersion)
+        }
+        versionSymbols.outputSize = versionSymbols.dataOffset.toLong()
+        if (nextOutputIndex <= 2) return VersionOutput(versionSymbols, null, 0, emptyList())
+        val needs = newSection(state, ".gnu.version_r", 0x6ffffffe, SHF_ALLOC)
+        needs.link = outputStrings
+        val pending = registry.versions.indices.reversed().filter { registry.versions[it].outputIndex > 0 }.toMutableSet()
+        var entries = 0
+        var previousNeedOffset = -1
+        while (pending.isNotEmpty()) {
+            val index = pending.first()
+            pending.remove(index)
+            val version = registry.versions[index]
+            if (version.outputIndex < 1) continue
+            val needOffset = sectionAdd(needs, 16, 1)
+            if (previousNeedOffset >= 0) writeInt32(needs.data, previousNeedOffset + 12, needOffset - previousNeedOffset)
+            write16(needs.data, needOffset, 1)
+            writeInt32(needs.data, needOffset + 4, putElfString(outputStrings, version.library))
+            writeInt32(needs.data, needOffset + 8, 16)
+            var auxiliaryCount = 0
+            var current = index
+            var previousAuxOffset = -1
+            while (current >= 0) {
+                val item = registry.versions[current]
+                val previous = item.previousForLibrary
+                if (item.outputIndex > 0) {
+                    val auxOffset = sectionAdd(needs, 16, 1)
+                    if (previousAuxOffset >= 0) writeInt32(needs.data, previousAuxOffset + 12, auxOffset - previousAuxOffset)
+                    writeInt32(needs.data, auxOffset, elfHash(item.version))
+                    write16(needs.data, auxOffset + 6, item.outputIndex)
+                    writeInt32(needs.data, auxOffset + 8, putElfString(outputStrings, item.version))
+                    previousAuxOffset = auxOffset
+                    auxiliaryCount++
+                    item.outputIndex = -2
+                }
+                current = previous
+            }
+            if (previousAuxOffset >= 0) writeInt32(needs.data, previousAuxOffset + 12, 0)
+            write16(needs.data, needOffset + 2, auxiliaryCount)
+            entries++
+            previousNeedOffset = needOffset
+        }
+        if (previousNeedOffset >= 0) writeInt32(needs.data, previousNeedOffset + 12, 0)
+        needs.sectionInfo = entries
+        needs.outputSize = needs.dataOffset.toLong()
+        return VersionOutput(versionSymbols, needs, entries, neededLibraries.toList())
     }
 
     fun crtBeginFiles(platform: UnixPlatform, sharedLibrary: Boolean, staticLink: Boolean): List<String> = buildList {
@@ -2978,6 +3057,10 @@ object TccElf {
     }
     private fun append16(output: MutableList<Byte>, value: Int) {
         output += value.toByte(); output += (value ushr 8).toByte()
+    }
+    private fun write16(output: MutableList<Byte>, offset: Int, value: Int) {
+        output[offset] = value.toByte()
+        output[offset + 1] = (value ushr 8).toByte()
     }
     private fun appendInt32(output: MutableList<Byte>, value: Int) {
         repeat(4) { shift -> output += (value ushr (shift * 8)).toByte() }
