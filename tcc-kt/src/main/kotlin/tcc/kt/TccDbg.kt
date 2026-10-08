@@ -5,7 +5,7 @@ object TccDbg {
     const val DWARF_LINE_BASE = -5
     const val DWARF_LINE_RANGE = 14
     const val DWARF_OPCODE_BASE = 13
-    const val N_STR_HASH = 256
+    const val N_STR_HASH = 251
     const val N_FUN = 0x24
     const val N_SLINE = 0x44
     const val N_SO = 0x64
@@ -13,6 +13,8 @@ object TccDbg {
     const val N_EINCL = 0xa2
 
     data class DefaultType(val type: Int, val size: Int, val encoding: Int, val stabs: String)
+    data class AttributeForm(val attribute: Int, val form: Int)
+    data class Abbreviation(val code: Int, val tag: Int, val hasChildren: Boolean, val attributes: List<AttributeForm>)
     data class StabEntry(var stringOffset: Int, val type: Int, val other: Int, var description: Int, val value: Long)
     data class Relocation(val offset: Int, val type: String, val symbol: Int, val addend: Long = 0)
     data class DwarfSection(val name: String, var alignment: Int = 1, var entrySize: Int = 0, val bytes: MutableList<Byte> = mutableListOf(), var flags: Int = 0) {
@@ -172,6 +174,55 @@ object TccDbg {
         var hash = 5381
         value.toByteArray(Charsets.UTF_8).forEach { byte -> hash += (byte.toInt() and 0xff) + hash * 31 }
         return hash
+    }
+
+    val dwarfLineOpcodes = byteArrayOf(0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1)
+
+    /** Builds the DWARF abbreviation table in the exact numeric order expected by tccdbg.c. */
+    fun abbreviationTable(pointerSize: Int = 8): ByteArray {
+        val attrs: (Int, Int) -> AttributeForm = { attribute, form -> AttributeForm(attribute, form) }
+        val highPc = if (pointerSize == 4) 0x06 else 0x07
+        val lineString = 0x1f
+        val table = listOf(
+            Abbreviation(1, 0x11, true, listOf(attrs(0x25, 0x0e), attrs(0x13, 0x0b), attrs(0x03, lineString), attrs(0x1b, lineString), attrs(0x11, 0x01), attrs(0x12, highPc), attrs(0x10, 0x17))),
+            Abbreviation(2, 0x24, false, listOf(attrs(0x0b, 0x0f), attrs(0x3e, 0x0b), attrs(0x03, 0x0e))),
+            Abbreviation(3, 0x34, false, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x3f, 0x0c), attrs(0x02, 0x18))),
+            Abbreviation(4, 0x34, false, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x02, 0x18))),
+            Abbreviation(5, 0x34, false, listOf(attrs(0x03, 0x0e), attrs(0x49, 0x13), attrs(0x02, 0x18))),
+            Abbreviation(6, 0x05, false, listOf(attrs(0x03, 0x0e), attrs(0x49, 0x13), attrs(0x02, 0x18))),
+            Abbreviation(7, 0x0f, false, listOf(attrs(0x0b, 0x0b), attrs(0x49, 0x13))),
+            Abbreviation(8, 0x01, true, listOf(attrs(0x49, 0x13), attrs(0x01, 0x13))),
+            Abbreviation(9, 0x21, false, listOf(attrs(0x49, 0x13), attrs(0x2f, 0x0f))),
+            Abbreviation(10, 0x16, false, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13))),
+            Abbreviation(11, 0x28, false, listOf(attrs(0x03, 0x0e), attrs(0x1c, 0x0d))),
+            Abbreviation(12, 0x28, false, listOf(attrs(0x03, 0x0e), attrs(0x1c, 0x0f))),
+            Abbreviation(13, 0x04, true, listOf(attrs(0x03, 0x0e), attrs(0x3e, 0x0b), attrs(0x0b, 0x0b), attrs(0x49, 0x13), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x01, 0x13))),
+            Abbreviation(14, 0x0d, false, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x38, 0x0f))),
+            Abbreviation(15, 0x0d, false, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x0d, 0x0f), attrs(0x6b, 0x0f))),
+            Abbreviation(16, 0x13, true, listOf(attrs(0x03, 0x0e), attrs(0x0b, 0x0f), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x01, 0x13))),
+            Abbreviation(17, 0x13, false, listOf(attrs(0x03, 0x0e), attrs(0x0b, 0x0f), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f))),
+            Abbreviation(18, 0x17, true, listOf(attrs(0x03, 0x0e), attrs(0x0b, 0x0f), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x01, 0x13))),
+            Abbreviation(19, 0x17, false, listOf(attrs(0x03, 0x0e), attrs(0x0b, 0x0f), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f))),
+            Abbreviation(20, 0x2e, true, listOf(attrs(0x3f, 0x0c), attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x11, 0x01), attrs(0x12, highPc), attrs(0x01, 0x13), attrs(0x40, 0x18))),
+            Abbreviation(21, 0x2e, true, listOf(attrs(0x03, 0x0e), attrs(0x3a, 0x0f), attrs(0x3b, 0x0f), attrs(0x49, 0x13), attrs(0x11, 0x01), attrs(0x12, highPc), attrs(0x01, 0x13), attrs(0x40, 0x18))),
+            Abbreviation(22, 0x0b, true, listOf(attrs(0x11, 0x01), attrs(0x12, highPc))),
+            Abbreviation(23, 0x0b, false, listOf(attrs(0x11, 0x01), attrs(0x12, highPc))),
+            Abbreviation(24, 0x15, true, listOf(attrs(0x49, 0x13), attrs(0x01, 0x13))),
+            Abbreviation(25, 0x15, false, listOf(attrs(0x49, 0x13))),
+            Abbreviation(26, 0x05, false, listOf(attrs(0x49, 0x13))),
+        )
+        val bytes = mutableListOf<Byte>()
+        table.forEach { abbreviation ->
+            bytes += uleb128(abbreviation.code.toLong()).toList(); bytes += uleb128(abbreviation.tag.toLong()).toList()
+            bytes += if (abbreviation.hasChildren) 1 else 0
+            abbreviation.attributes.forEach { attribute ->
+                bytes += uleb128(attribute.attribute.toLong()).toList()
+                bytes += uleb128(attribute.form.toLong()).toList()
+            }
+            bytes += 0; bytes += 0
+        }
+        bytes += 0
+        return bytes.toByteArray()
     }
 
     fun registerDwarfFile(state: DwarfLineState, filename: String, dwarfVersion: Int): Int {
