@@ -118,7 +118,7 @@ class I386Gen(
                     o(opcode)
                     o(0x83 or opReg)
                     if (isGot) {
-                        genGotPcRel(3, symbol, address.value + (position - here - 1))
+                        genGotPcRel(3, symbol, address.value)
                     } else {
                         genAddrPc32(true, symbol, address.value + (position - here - 1))
                     }
