@@ -478,6 +478,25 @@ class Arm64Gen(
 
     fun generateJumpAddress(address: Int) { o(ARM64_B or ((address - position() shr 2) and 0x3ffffff)) }
 
+    /** Emits an unresolved branch word whose contents link to the previous chain head. */
+    fun emitForwardJump(chainHead: Int): Int {
+        val site = position()
+        if (!noCode()) o(chainHead)
+        return if (noCode()) chainHead else site
+    }
+
+    fun appendJumpChain(head: Int, tail: Int): Int {
+        if (head == 0) return tail
+        var last = head
+        while (true) {
+            val next = patchWord(last, 0)
+            if (next == 0) break
+            last = next
+        }
+        patchWord(last, tail)
+        return head
+    }
+
     private fun isAbiFloat(type: Type): Boolean = type == Type.FLOAT || type == Type.DOUBLE
 
     private fun homogeneousFloatAux(type: AbiType, fsize: IntArray, count: Int): Int {
@@ -874,7 +893,7 @@ class Arm64Gen(
     }
 
     /** Emits an integer, scalar float, or 128-bit long-double conditional branch prelude. */
-    fun conditionalJump(condition: String, type: Type, valueRegister: Int, branchTarget: Int): Int {
+    fun conditionalJump(condition: String, type: Type, valueRegister: Int, branchChainToken: Int): Int {
         val invert = condition in setOf("!=", "u!=", "ne")
         val r = valueRegister and 31
         when (type) {
@@ -896,11 +915,11 @@ class Arm64Gen(
                 o(0x34000040 or r or (if (invert) 1 shl 24 else 0) or (if (width64) Int.MIN_VALUE else 0))
             }
         }
-        return generateJump(branchTarget)
+        return emitForwardJump(branchChainToken)
     }
 
     fun markCompareValue(value: Value, operation: String): Value =
-        if (operation in setOf("u<", "u<=", "u>", "u>=", "<", "<=", ">", ">=")) value.copy(location = ValueLocation.COMPARE) else value
+        if (operation in setOf("u<", "u<=", "u>", "u>=", "<", "<=", ">", ">=", "==", "!=")) value.copy(location = ValueLocation.COMPARE) else value
 
     fun emitReturn(type: AbiType, valueRegister: Int = 0, addressRegister: Int = 0) {
         val plan = classifyReturn(type)
