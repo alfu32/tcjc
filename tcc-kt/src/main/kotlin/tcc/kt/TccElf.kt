@@ -1630,6 +1630,18 @@ object TccElf {
         return section
     }
 
+    fun addInitArrayDefines(state: ElfState, sectionName: String): Pair<Int, Int> {
+        val candidate = state.namedSections[sectionName]
+        val section = if (candidate != null && candidate.flags and SHF_ALLOC != 0) candidate
+            else state.namedSections[".text"] ?: return 0 to 0
+        val endOffset = if (section === candidate) section.dataOffset.toLong() else 0L
+        val stem = sectionName.removePrefix(".")
+        val table = state.symbolTable ?: return 0 to 0
+        val startIndex = setGlobalSymbol(state, table, "__${stem}_start", section, 0)
+        val endIndex = setGlobalSymbol(state, table, "__${stem}_end", section, endOffset)
+        return startIndex to endIndex
+    }
+
     fun addBoundsCheckEntry(state: ElfState, boundsName: String = ".bounds") {
         val bounds = state.namedSections[boundsName] ?: return
         sectionAdd(bounds, state.wordSize, 1)
