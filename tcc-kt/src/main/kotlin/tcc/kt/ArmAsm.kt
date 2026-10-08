@@ -897,7 +897,7 @@ class ArmAsm(
                             break
                         }
                     }
-                    'I', 'J', 'i' -> if (operand.constant) { assigned = true; break }
+                    'I', 'J', 'K', 'L', 'i' -> if (operand.constant) { assigned = true; break }
                     'M' -> if (operand.constant && !operand.symbolic) { assigned = true; break }
                     'm', 'g' -> {
                         if (operand.localPointer && (isOutput || choice == 'm')) {
@@ -929,7 +929,7 @@ class ArmAsm(
         constraint.forEach { code ->
             val rank = when (code) {
                 'l', 'r', 'p' -> 3
-                'M', 'I', 'J', 'i', 'm', 'g' -> 4
+                'M', 'I', 'J', 'K', 'L', 'i', 'm', 'g' -> 4
                 else -> throw IllegalArgumentException("unknown ARM constraint '$code'")
             }
             priority = maxOf(priority, rank)
