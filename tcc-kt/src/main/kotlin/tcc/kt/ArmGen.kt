@@ -200,6 +200,58 @@ object ArmGen {
     data class ParameterPlan(val parameterIndex: Int, val parameterClass: ParameterClass, val start: Int, val end: Int)
     data class RegisterAssignment(val plans: List<ParameterPlan>, val stackBytes: Int, val coreRegisterTodo: Int)
 
+    data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
+    data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
+
+    /** Plans ARM function entry instructions and incoming parameter addresses. */
+    fun functionPrologue(parameters: List<FunctionParameter>, structReturnInMemory: Boolean, variadic: Boolean, hardFloat: Boolean, eabi: Boolean): FunctionProloguePlan {
+        var coreCount = if (structReturnInMemory) 1 else 0
+        var vfpCount = 0
+        val vfp = AvailableVfpRegisters()
+        for (parameter in parameters) {
+            if (coreCount >= 4 && vfpCount >= 16) break
+            if (eabi && hardFloat && !variadic && (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE) || parameter.homogeneousFloatAggregate)) {
+                val first = assignVfpRegister(vfp, parameter.alignment, parameter.size)
+                if (first >= 0) vfpCount = maxOf(vfpCount, first + (parameter.size + 3) / 4)
+            } else if (coreCount < 4) coreCount += (parameter.size + 3) / 4
+        }
+        if (variadic) coreCount = 4
+        coreCount = minOf(coreCount, 4)
+        if (eabi) coreCount = (coreCount + 1) and -2
+        if (vfpCount > 0) vfpCount = minOf((minOf(vfpCount, 16) + 1) and -2, 16)
+        val words = mutableListOf(0xe1a0c00d.toInt())
+        if (coreCount != 0) words += 0xe92d0000.toInt() or ((1 shl coreCount) - 1)
+        if (vfpCount != 0) words += 0xed2d0a00.toInt() or vfpCount
+        words.addAll(listOf(0xe92d5800.toInt(), 0xe1a0b00d.toInt(), 0xe1a00000.toInt()))
+
+        var core = if (structReturnInMemory) 1 else 0
+        var stack = 0
+        val addresses = mutableListOf<Int>()
+        val argumentVfp = if (eabi && hardFloat) AvailableVfpRegisters() else null
+        for (parameter in parameters) {
+            val sizeWords = (parameter.size + 3) shr 2
+            val alignment = (parameter.alignment + 3) and -4
+            val floating = eabi && hardFloat && !variadic &&
+                (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE) || parameter.homogeneousFloatAggregate)
+            val fpReg = if (floating) assignVfpRegister(argumentVfp!!, alignment, sizeWords shl 2) else -1
+            val address: Int
+            if (fpReg >= 0) {
+                address = fpReg * 4
+            } else if (core < 4) {
+                if (eabi) core = (core + (alignment - 1) / 4) and -(alignment / 4)
+                address = (vfpCount + core) * 4
+                core += sizeWords
+                if (stack == 0 && core > 4) stack = core - 4
+            } else {
+                if (eabi) stack = (stack + (alignment - 1) / 4) and -(alignment / 4)
+                address = (coreCount + vfpCount + stack) * 4
+                stack += sizeWords
+            }
+            addresses += address + 12
+        }
+        return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory)
+    }
+
     /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
     fun assignParameterRegisters(parameters: List<Parameter>, hardFloat: Boolean): RegisterAssignment {
         var nextCore = 0
