@@ -360,6 +360,24 @@ object TccElf {
         }
         return 0
     }
+
+    fun addLinkerScriptFile(
+        filename: String,
+        sysroot: String,
+        addLibrary: (String) -> Int,
+        addDynamicLibrary: (String, Int) -> Int,
+        addDirectFile: (String, Boolean) -> Int,
+        isAbsolutePath: (String) -> Boolean = { it.startsWith('/') || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(it) },
+    ): Int {
+        if (filename.startsWith("-l") && filename.length > 2) return addLibrary(filename.drop(2))
+        if (sysroot.isNotEmpty() || !isAbsolutePath(filename)) {
+            val basename = filename.substringAfterLast('/').substringAfterLast('\\')
+            val lookup = addDynamicLibrary(basename, 0)
+            if (lookup != FILE_NOT_FOUND) return lookup
+        }
+        return addDirectFile(filename, true)
+    }
+
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -384,6 +402,7 @@ object TccElf {
     const val BINARY_TYPE_REL = 1
     const val BINARY_TYPE_DYN = 2
     const val BINARY_TYPE_ARCHIVE = 3
+    const val FILE_NOT_FOUND = -2
 
     fun getBigEndian(bytes: ByteArray, offset: Int, count: Int): Long {
         require(count in 0..8 && offset >= 0 && offset + count <= bytes.size)
