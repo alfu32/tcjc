@@ -415,6 +415,39 @@ object ArmGen {
         return encoding
     }
 
+    data class CoverageIncrement(val instructions: List<Int>, val relocationWordIndex: Int)
+
+    fun coverageIncrement(addressRegister: Int, valueRegister: Int): CoverageIncrement {
+        val address = integerRegister(addressRegister)
+        val value = integerRegister(valueRegister)
+        return CoverageIncrement(listOf(
+            0xe59f0000.toInt() or (address shl 12), 0xea000000.toInt(), -12,
+            0xe080000f.toInt() or (address shl 16) or (address shl 12),
+            0xe5900000.toInt() or (address shl 16) or (value shl 12),
+            0xe2900001.toInt() or (value shl 16) or (value shl 12),
+            0xe5800000.toInt() or (address shl 16) or (value shl 12),
+            0xe2800004.toInt() or (address shl 16) or (address shl 12),
+            0xe5900000.toInt() or (address shl 16) or (value shl 12),
+            0xe2a00000.toInt() or (value shl 16) or (value shl 12),
+            0xe5800000.toInt() or (address shl 16) or (value shl 12),
+        ), 2)
+    }
+
+    data class VlaAllocationPlan(val alignment: Int, val instructions: List<Int>, val boundsCheckEnabled: Boolean)
+
+    fun vlaAllocation(register: Int, alignment: Int, eabi: Boolean, boundsCheck: Boolean): VlaAllocationPlan {
+        var aligned = alignment
+        val minimum = if (eabi) 8 else 4
+        if (aligned < minimum) aligned = minimum
+        require(aligned and (aligned - 1) == 0) { "alignment is not a power of 2: $aligned" }
+        val armRegister = integerRegister(register)
+        val instructions = mutableListOf<Int>()
+        if (boundsCheck) instructions += 0xe2800001.toInt() or (armRegister shl 16) or (armRegister shl 12)
+        instructions += 0xe04d0000.toInt() or (armRegister shl 12) or armRegister
+        instructions += stuffConstant(0xe3c0d000.toInt() or (armRegister shl 16), aligned - 1)
+        return VlaAllocationPlan(aligned, instructions, boundsCheck)
+    }
+
     /** Applies ARM EABI structure and homogeneous-float aggregate return rules. */
     fun structureReturn(size: Int, hardFloat: Boolean, variadic: Boolean, isFloat: Boolean, homogeneousFloatAggregate: Boolean, eabi: Boolean): StructReturn {
         if (!eabi) return StructReturn(0)
