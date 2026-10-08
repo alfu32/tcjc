@@ -14,6 +14,10 @@ class Riscv64Asm(
         val constant: Long = 0, val symbol: String? = null, val register: Int = -1,
         val local: Boolean = false, val lvalue: Boolean = false, val floating: Boolean = false,
     )
+    data class AssemblyHooks(
+        val isExternalOrStatic: (String) -> Boolean = { false }, val isStaticSymbol: (String) -> Boolean = { false },
+        val relocateSymbol: (String, String) -> Unit = { _, _ -> },
+    )
 
     companion object {
         const val REGISTER_COUNT = 64
@@ -348,6 +352,138 @@ class Riscv64Asm(
         }
         val rs2 = if (mnemonic == "lr") Operand(OP_REG) else source ?: run { expect("atomic source register"); return false }
         return emitAtomic(0x2f or (width shl 12) or (function shl 27), rd, rs2, base, acquire, release)
+    }
+
+    /** String-backed instruction dispatcher corresponding to asm_opcode and its operand handlers. */
+    fun assembleInstruction(mnemonic: String, operandText: String = "", hooks: AssemblyHooks = AssemblyHooks()): Boolean {
+        val name = mnemonic.lowercase()
+        if (name in setOf("fence.i", "ecall", "ebreak", "nop", "wfi", "ret", "c.ebreak", "c.nop")) {
+            emitNullaryOpcode(name); return true
+        }
+        if (name == "fence") {
+            val parts = splitOperands(operandText)
+            if (parts.isEmpty()) return emitFence()
+            if (parts.size != 2) { expect("fence predecessor and successor"); return false }
+            val before = parseFenceOperand(parts[0]); val after = parseFenceOperand(parts[1])
+            if (before == null || after == null) { error("Expected valid fence predecessor and successor operands"); return false }
+            return emitFence(before, after)
+        }
+        if (name in setOf("j", "jal")) {
+            val parts = splitOperands(operandText)
+            val rd: Operand
+            val target: String
+            if (name == "j") { if (parts.size != 1) { expect("jump target"); return false }; rd = Operand(OP_REG); target = parts[0] }
+            else when (parts.size) {
+                1 -> { rd = Operand(OP_REG, register = 1); target = parts[0] }
+                2 -> { rd = parseOperand(parts[0]); target = parts[1] }
+                else -> { expect("jump target"); return false }
+            }
+            val offset = parseJumpOffset(target, hooks.isExternalOrStatic) { symbol, _ -> hooks.relocateSymbol(symbol, "JAL") }
+            return emitJ(0x6f, rd, offset)
+        }
+        if (name == "jalr") {
+            val parts = splitOperands(operandText)
+            if (parts.size == 1) return emitI(0x67, Operand(OP_REG, register = 1), parseOperand(parts[0]), Operand(OP_IM12S))
+            if (parts.size != 2) { expect("jalr operands"); return false }
+            val parsed = parseMemoryAccessOperands(operandText)
+            return emitI(0x67, parsed[0], parsed[1], parsed[2])
+        }
+        if (name in setOf("jr", "call", "tail", "rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth", "frflags", "frrm", "frcsr")) {
+            val operand = if (name == "call" || name == "tail") Operand(OP_IM32, expression = parseExpression(operandText)) else parseOperand(operandText)
+            return emitUnaryOpcode(name, operand) { symbol, _ -> hooks.relocateSymbol(symbol, "CALL") }
+        }
+        if (name in setOf("lb", "lh", "lw", "ld", "lbu", "lhu", "lwu", "fld", "sb", "sh", "sw", "sd", "fsd")) {
+            val ops = parseMemoryAccessOperands(operandText).mapIndexed { index, op ->
+                if (index == 1 && op.expression.symbol != null) op else op
+            }
+            return emitMemoryInstruction(name, ops, hooks.isStaticSymbol) { hooks.relocateSymbol(it, "PCREL_HI20") }
+        }
+        if (name.startsWith("amo") || name.startsWith("lr_") || name.startsWith("sc_")) {
+            val parts = splitOperands(operandText)
+            if (parts.size != 3 || !parts[2].startsWith('(') || !parts[2].endsWith(')')) { expect("atomic memory operands"); return false }
+            val rd = parseOperand(parts[0]); val source = if (name.startsWith("lr_")) null else parseOperand(parts[1])
+            val base = parseOperand(parts[2].substring(1, parts[2].length - 1))
+            return emitAtomicInstruction(name, rd, source, base)
+        }
+        if (name.startsWith("c.")) return assembleCompressed(name, operandText, hooks)
+        if (name in setOf("beq", "bne", "blt", "bge", "bltu", "bgeu", "bgt", "ble", "bgtu", "bleu", "beqz", "bnez", "blez", "bgez", "bltz", "bgtz")) {
+            val parts = splitOperands(operandText)
+            if (parts.size !in 2..3) { expect("branch operands"); return false }
+            val parsed = parts.dropLast(1).map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) } +
+                parseBranchOffset(parts.last(), hooks.isExternalOrStatic)
+            return emitBranchInstruction(name, parsed) { opcode, rs1, rs2, symbol ->
+                hooks.relocateSymbol(symbol, "CALL")
+                emitOpcode(opcode or encodeRs1(rs1) or encodeRs2(rs2) or (1 shl 8))
+                emitOpcode(0x17 or encodeRd(5))
+                emitOpcode(0x67 or encodeRs1(5))
+            }
+        }
+        val parts = splitOperands(operandText)
+        val parsed = parts.map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) }
+        if (name in setOf("lui", "auipc")) return emitBinaryInstruction(name, parsed.getOrElse(0) { Operand() }, parsed.getOrElse(1) { Operand() })
+        if (name in setOf("mv", "not", "neg", "negw", "sext.w", "seqz", "snez", "sltz", "sgtz", "la", "lla", "li",
+                "fabs.s", "fabs.d", "fneg.s", "fneg.d", "fmv.s", "fmv.d", "csrr", "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci", "fsrm", "fscsr"))
+            return emitPseudoBinary(name, parsed) { hooks.relocateSymbol(it, "GOT_HI20") }
+        if (name == "fmadd.s" || name == "fmadd.d" || name == "fmadd_s" || name == "fmadd_d") return emitFusedMultiplyAdd(name, parsed)
+        if (name.startsWith("f") && (name.startsWith("fcvt") || name.startsWith("fclass") || name.startsWith("fsqrt") ||
+                    name.startsWith("fadd") || name.startsWith("fsub") || name.startsWith("fmul") || name.startsWith("fdiv") ||
+                    name.startsWith("fsgnj") || name.startsWith("fmin") || name.startsWith("fmax") || name.startsWith("feq") || name.startsWith("flt") || name.startsWith("fle")))
+            return emitFloatingInstruction(name, parsed)
+        return emitTernaryInstruction(name, parsed)
+    }
+
+    private fun assembleCompressed(name: String, text: String, hooks: AssemblyHooks): Boolean {
+        val parts = splitOperands(text)
+        if (name in setOf("c.j", "c.jal")) {
+            val offset = parseJumpOffset(parts.singleOrNull().orEmpty(), hooks.isExternalOrStatic) { symbol, _ -> hooks.relocateSymbol(symbol, "RVC_JUMP") }
+            return emitCompressedCj(if (name == "c.j") 1 or (5 shl 13) else 1 or (1 shl 13), offset)
+        }
+        if (name == "c.jr" || name == "c.jalr") {
+            val reg = parseOperand(parts.singleOrNull().orEmpty())
+            return emitCompressedCr(2 or ((if (name == "c.jr") 8 else 9) shl 12), reg, Operand(OP_REG))
+        }
+        if (name in setOf("c.add", "c.mv", "c.addw", "c.and", "c.or", "c.sub", "c.subw", "c.xor")) {
+            val ops = parseOperands(text, 2)
+            val opcode = when (name) {
+                "c.add" -> 2 or (9 shl 12); "c.mv" -> 2 or (8 shl 12)
+                else -> 1 or (3 shl 10) or (4 shl 13) or when (name) {
+                    "c.addw" -> (1 shl 5) or (1 shl 12); "c.and" -> 3 shl 5; "c.or" -> 2 shl 5
+                    "c.sub" -> 0; "c.subw" -> 1 shl 12; else -> 1 shl 5
+                }
+            }
+            return if (name == "c.add" || name == "c.mv") emitCompressedCr(opcode, ops[0], ops[1]) else emitCompressedCa(opcode, ops[0], ops[1])
+        }
+        if (name in setOf("c.fld", "c.flw", "c.ld", "c.lw")) {
+            val ops = parseMemoryAccessOperands(text)
+            val opcode = when (name) { "c.fld" -> 1 shl 13; "c.flw" -> 3 shl 13; "c.ld" -> 3 shl 13; else -> 2 shl 13 }
+            return emitCompressedCl(name, opcode, ops[0], ops[1], ops[2])
+        }
+        if (name in setOf("c.fsd", "c.fsw", "c.sd", "c.sw")) {
+            val ops = parseMemoryAccessOperands(text)
+            val opcode = when (name) { "c.fsd" -> 5 shl 13; "c.fsw" -> 7 shl 13; "c.sd" -> 7 shl 13; else -> 6 shl 13 }
+            return emitCompressedCs(name, opcode, ops[0], ops[1], ops[2])
+        }
+        if (name in setOf("c.swsp", "c.sdsp", "c.fswsp", "c.fsdsp")) {
+            val ops = parseOperands(text, 2)
+            val opcode = when (name) { "c.swsp" -> 2 or (6 shl 13); "c.sdsp" -> 2 or (7 shl 13); "c.fswsp" -> 2 or (7 shl 13); else -> 2 or (5 shl 13) }
+            return emitCompressedCss(name, opcode, ops[0], ops[1])
+        }
+        if (name in setOf("c.beqz", "c.bnez", "c.andi", "c.srai", "c.srli")) {
+            val ops = parseOperands(text, 2)
+            val opcode = when (name) { "c.beqz" -> 1 or (6 shl 13); "c.bnez" -> 1 or (7 shl 13); "c.andi" -> 1 or (2 shl 10) or (4 shl 13); "c.srai" -> 1 or (1 shl 10) or (4 shl 13); else -> 1 or (4 shl 13) }
+            return emitCompressedCb(name, opcode, ops[0], ops[1])
+        }
+        if (name in setOf("c.addi16sp", "c.addi4spn", "c.addi", "c.addiw", "c.fldsp", "c.flwsp", "c.ldsp", "c.li", "c.lui", "c.lwsp", "c.slli")) {
+            val ops = parseOperands(text, 2)
+            val opcode = when (name) {
+                "c.addi16sp" -> 1 or (3 shl 13); "c.addi4spn" -> 0; "c.addi" -> 1
+                "c.addiw" -> 1 or (1 shl 13); "c.fldsp" -> 2 or (1 shl 13); "c.flwsp", "c.ldsp" -> 2 or (3 shl 13)
+                "c.li" -> 1 or (2 shl 13); "c.lui" -> 1 or (3 shl 13); "c.lwsp" -> 2 or (2 shl 13); else -> 2
+            }
+            return if (name == "c.addi4spn") emitCompressedCiw(opcode, ops[0], ops[1]) else emitCompressedCi(name, opcode, ops[0], ops[1])
+        }
+        expect("compressed instruction")
+        return false
     }
 
     fun emitFusedMultiplyAdd(name: String, operands: List<Operand>): Boolean {
