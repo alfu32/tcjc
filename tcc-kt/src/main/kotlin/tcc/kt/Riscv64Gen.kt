@@ -71,6 +71,8 @@ class Riscv64Gen(
     data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
     data class ParameterLocation(val stackOffset: Int, val byReference: Boolean, val registerClasses: IntArray, val fieldOffsets: IntArray)
     data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
+    data class CompareState(val comparison: Comparison, val leftRegister: Int, val rightRegister: Int)
+    data class StackValue(var register: Int, var constant: Long? = null, var comparison: CompareState? = null)
     data class FunctionFrame(
         val prologPosition: Int,
         var localOffset: Int = -16,
@@ -735,6 +737,51 @@ class Riscv64Gen(
     fun generateGoto(target: CallTarget) = callOrJump(target, false)
 
     fun generateVaStart(frame: FunctionFrame): Int = frame.variadicListOffset
+
+    /** Lowers a pair of integer stack values and preserves comparisons as deferred branch state. */
+    fun lowerIntegerStackOperation(
+        operation: IntegerOperation,
+        left: StackValue,
+        right: StackValue,
+        destination: Int,
+        longWidth: Boolean = false,
+    ): StackValue {
+        val compare = when (operation) {
+            IntegerOperation.LESS_THAN -> Comparison.LESS
+            IntegerOperation.LESS_THAN_UNSIGNED -> Comparison.LESS_UNSIGNED
+            else -> null
+        }
+        if (compare != null) return StackValue(destination, comparison = CompareState(compare, left.register, right.register))
+        val immediateForm = when (operation) {
+            IntegerOperation.ADD, IntegerOperation.SUBTRACT, IntegerOperation.SHIFT_LEFT,
+            IntegerOperation.SHIFT_RIGHT, IntegerOperation.SHIFT_ARITHMETIC,
+            IntegerOperation.AND, IntegerOperation.OR, IntegerOperation.XOR,
+            IntegerOperation.LESS_THAN, IntegerOperation.LESS_THAN_UNSIGNED -> true
+            else -> false
+        }
+        val literal = right.constant
+        if (literal != null && immediateForm && literal in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+            integerImmediate(operation, left.register, destination, literal.toInt(), !longWidth)
+        } else integerOperation(operation, left.register, right.register, destination, !longWidth)
+        return StackValue(destination)
+    }
+
+    fun lowerConditionalStackJump(value: StackValue, targetWord: Int): Int {
+        val comparison = value.comparison ?: CompareState(Comparison.NOT_EQUAL, value.register, 0)
+        val (function3, reverse) = when (comparison.comparison) {
+            Comparison.EQUAL -> 0 to false
+            Comparison.NOT_EQUAL -> 1 to false
+            Comparison.LESS -> 4 to false
+            Comparison.GREATER_EQUAL -> 5 to false
+            Comparison.LESS_EQUAL -> 5 to true
+            Comparison.GREATER -> 4 to true
+            Comparison.LESS_UNSIGNED -> 6 to false
+            Comparison.GREATER_EQUAL_UNSIGNED -> 7 to false
+            Comparison.LESS_EQUAL_UNSIGNED -> 7 to true
+            Comparison.GREATER_UNSIGNED -> 6 to true
+        }
+        return conditionalJump(function3, integerRegister(comparison.leftRegister), integerRegister(comparison.rightRegister), targetWord, reverse)
+    }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
