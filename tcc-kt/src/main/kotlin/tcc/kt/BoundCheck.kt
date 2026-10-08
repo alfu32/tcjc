@@ -189,4 +189,61 @@ object BoundCheck {
 
     private val frameRegions = mutableMapOf<Long, MutableList<Long>>()
 
+
+    data class Allocation internal constructor(
+        val address: Long,
+        val bytes: ByteArray,
+        val type: Int,
+        val alignment: Int
+    )
+
+    private val allocations = mutableMapOf<Long, Allocation>()
+    private var nextAddress = 0x10000L
+
+    @JvmStatic
+    fun malloc(size: Int): Allocation = lock.withLock {
+        allocate(size, 1)
+    }
+
+    @JvmStatic
+    fun calloc(count: Int, size: Int): Allocation {
+        require(count >= 0 && size >= 0)
+        return lock.withLock { allocate(Math.multiplyExact(count, size), 2) }
+    }
+
+    @JvmStatic
+    fun memalign(alignment: Int, size: Int): Allocation = lock.withLock {
+        require(alignment > 0 && alignment and (alignment - 1) == 0)
+        allocate(size, 4, alignment)
+    }
+
+    @JvmStatic
+    fun realloc(address: Long, size: Int): Allocation = lock.withLock {
+        val previous = allocations[address] ?: throw IllegalArgumentException("realloc of unknown address 0x${address.toString(16)}")
+        val replacement = allocate(size, 3)
+        previous.bytes.copyInto(replacement.bytes, 0, 0, minOf(previous.bytes.size, replacement.bytes.size))
+        allocations.remove(address)
+        regions.remove(address)
+        replacement
+    }
+
+    @JvmStatic
+    fun free(address: Long) = lock.withLock {
+        allocations.remove(address) ?: return
+        regions.remove(address)
+    }
+
+    @JvmStatic
+    fun allocation(address: Long): Allocation? = lock.withLock { allocations[address] }
+
+    private fun allocate(size: Int, kind: Int, alignment: Int = 1): Allocation {
+        require(size >= 0)
+        val alignedAddress = (nextAddress + alignment - 1L) and (alignment - 1L).inv()
+        val allocation = Allocation(alignedAddress, ByteArray(size), kind, alignment)
+        allocations[alignedAddress] = allocation
+        regions[alignedAddress] = Region(alignedAddress, size.toLong(), kind)
+        nextAddress = alignedAddress + maxOf(size, 1) + 16L
+        return allocation
+    }
+
 }
