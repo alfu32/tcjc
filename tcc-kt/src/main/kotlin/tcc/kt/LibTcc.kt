@@ -72,6 +72,10 @@ class LibTcc(
         val addLibraryPaths: (CompilerState) -> Unit = {}, val addCrtPaths: (CompilerState) -> Unit = {},
         val addCrtBegin: (CompilerState) -> Unit = {}, val addTargetSystemPaths: (CompilerState) -> Unit = {},
     )
+    data class StateDeleteHooks(
+        val deleteSections: (CompilerState) -> Unit = {}, val deleteRuntime: (CompilerState) -> Unit = {},
+        val deleteTargetState: (CompilerState) -> Unit = {}, val deleteLoadedLibrary: (DllReference) -> Unit = {},
+    )
     data class FileHooks(
         val open: (String) -> Int = { -1 }, val close: (Int) -> Unit = {},
         val compile: (CompilerState, Int, String, Int) -> Int = { _, _, _, _ -> 0 },
@@ -186,8 +190,12 @@ class LibTcc(
     fun createState(libraryPath: String, configureOptions: ((CompilerState) -> Unit)? = null): CompilerState =
         CompilerState(libraryPath = libraryPath).also { configureOptions?.invoke(it) }
 
-    fun deleteState(compilerState: CompilerState, release: (String) -> Unit = {}) {
+    fun deleteState(compilerState: CompilerState, release: (String) -> Unit = {}, hooks: StateDeleteHooks = StateDeleteHooks()) {
+        hooks.deleteSections(compilerState)
+        hooks.deleteRuntime(compilerState)
+        hooks.deleteTargetState(compilerState)
         compilerState.listOfOwnedPaths().forEach(release)
+        compilerState.loadedLibraries.forEach(hooks.deleteLoadedLibrary)
         compilerState.includePaths.clear(); compilerState.systemIncludePaths.clear()
         compilerState.libraryPaths.clear(); compilerState.crtPaths.clear()
         compilerState.inputFiles.clear(); compilerState.targetDependencies.clear()
