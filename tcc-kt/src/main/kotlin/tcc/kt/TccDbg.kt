@@ -761,6 +761,22 @@ object TccDbg {
         return emit(type)
     }
 
+    /** Lazily emits a predefined C base type when a type first references it. */
+    fun emitDwarfBaseType(index: Int, defaults: List<DefaultType>, context: DwarfTypeContext): Int {
+        context.baseTypes[index]?.let { return it }
+        require(index in defaults.indices)
+        val default = defaults[index]
+        val separator = default.stabs.indexOf(':').let { if (it < 0) default.stabs.length else it }
+        val name = default.stabs.substringBefore(':')
+        val offset = context.section.size
+        writeData1(context.section, 2) // DWARF_ABBREV_BASE_TYPE
+        writeUleb(context.section, default.size.toLong())
+        writeData1(context.section, default.encoding)
+        writeStringReference(context.strings, context.section, name, context.refs.strings, pointerSize = context.pointerSize)
+        context.baseTypes[index] = offset
+        return offset
+    }
+
     /** Serializes a collected lexical scope in the same order used by tcc_debug_finish. */
     fun finishDebugScope(
         state: DebugSections,
