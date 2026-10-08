@@ -16,6 +16,8 @@
 a.out
 tcc_g
 tcc
+!tcc-kt/src/main/kotlin/tcc/
+!tcc-kt/src/main/kotlin/tcc/**
 tcc_c
 tcc_p
 *-tcc
@@ -68,3 +70,6 @@ tests/vla_test
 tests/hello
 tests/tests2/fred.txt
 libtcc.dylib
+.kode
+.kode.json
+tcc-kt/.gradle/

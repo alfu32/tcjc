@@ -1,12 +1,9 @@
 # tcc-kt
 
-Kotlin migration of Tiny C Compiler. All Kotlin files use the `tcc.kt` package.
+A Kotlin migration of Tiny C Compiler. All translated Kotlin files use the `tcc.kt` package.
 
-## Port progress
+The file-by-file migration status and exhaustive translation inventory are in [PORTING.md](PORTING.md). C examples and C test case programs remain in the original repository; `tests/tcctest.c`, the compiler testing harness, is being translated.
 
-- `tcc.c`: translated the CLI helper routines into `TccDriver.kt` (`print_dirs`, `print_search_dirs`, `set_environment`, `default_outputfile`, and `getclock_ms`). The `main` driver and its library/tool dependencies are still to be ported.
-- C regression tests remain in the original `tests/` tree and have not been converted.
-
-The original C sources remain in the repository as the reference during migration. `COPYING` contains the upstream license.
+The Kotlin sources currently cover the command-line driver, runtime support, coverage data, configuration probing, and executable backtrace support. Compiler and architecture files remain tracked in the dashboard. Original C files remain in the repository as the migration reference. The upstream license is included in `COPYING`.
 
 Build with `gradle build`.
