@@ -375,4 +375,31 @@ object BoundCheck {
         true
     }
 
+
+    /** Removes DLL static data entries from the region tree, mirroring __bound_exit_dll. */
+    @JvmStatic
+    fun exitDll(staticRegions: LongArray) = lock.withLock {
+        var i = 0
+        while (i + 1 < staticRegions.size && staticRegions[i] != 0L) {
+            regions.remove(staticRegions[i])
+            i += 2
+        }
+    }
+
+    data class SignalAction(val handler: ((Int, Long) -> Unit)?, val mask: Set<Int> = emptySet(), val flags: Int = 0)
+    private val signalActions = mutableMapOf<Int, SignalAction>()
+
+    @JvmStatic
+    fun sigaction(signum: Int, action: SignalAction?): SignalAction? = lock.withLock {
+        val previous = signalActions[signum]
+        if (action == null) signalActions.remove(signum) else signalActions[signum] = action
+        previous
+    }
+
+    @JvmStatic
+    fun dispatchSigaction(signum: Int, info: Long = 0L) {
+        val action = lock.withLock { signalActions[signum] }
+        action?.handler?.invoke(signum, info)
+    }
+
 }
