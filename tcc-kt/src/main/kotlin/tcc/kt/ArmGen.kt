@@ -653,6 +653,7 @@ object ArmGen {
         val helper: String? = null, val resultRegister: Int = TREG_R0,
         val multiply: Boolean = false, val unsigned: Boolean = false,
     )
+    data class IntegerEmission(val words: List<Int>, val destinationRegister: Int?, val comparison: Condition? = null)
 
     /** Selects the ARM instruction or runtime helper used by gen_opi. */
     fun integerOperationPlan(operation: String, eabi: Boolean): IntegerOperationPlan = when (operation) {
@@ -677,6 +678,46 @@ object ArmGen {
             else IntegerOperationPlan(helper = "__umodsi3", unsigned = true)
         "umull" -> IntegerOperationPlan(multiply = true, unsigned = true)
         else -> IntegerOperationPlan(dataProcessingOpcode = 0x15)
+    }
+
+    /** Encodes gen_opi's ARM data-processing and multiply instruction paths. */
+    fun integerDataProcessing(operation: String, leftRegister: Int, rightRegister: Int, destinationRegister: Int,
+        leftImmediate: Int? = null, rightImmediate: Int? = null): IntegerEmission {
+        val comparison = when (operation) {
+            "ult" -> Condition.ULT; "uge" -> Condition.UGE; "eq" -> Condition.EQ; "ne" -> Condition.NE
+            "ule" -> Condition.ULE; "ugt" -> Condition.UGT; "negative" -> Condition.NEGATIVE
+            "nonnegative" -> Condition.NON_NEGATIVE; "lt" -> Condition.LT; "ge" -> Condition.GE
+            "le" -> Condition.LE; "gt" -> Condition.GT; else -> null
+        }
+        var opcode = when (operation) {
+            "+" -> 8; "addc1" -> 9; "-" -> 4; "subc1" -> 5; "addc2" -> 10; "subc2" -> 12
+            "&" -> 0; "^" -> 2; "|" -> 0x18; "cmp" -> 0x15
+            else -> if (comparison != null) 0x15 else throw IllegalArgumentException("gen_opi $operation unimplemented")
+        }
+        var lhs = integerRegister(leftRegister)
+        var rhs = integerRegister(rightRegister)
+        var immediate = rightImmediate
+        if (leftImmediate != null && operation in setOf("-", "subc1", "subc2")) {
+            val swap = lhs; lhs = rhs; rhs = swap
+            immediate = leftImmediate
+            opcode = opcode or 2
+        }
+        val base = 0xe0000000.toInt() or (opcode shl 20)
+        if (immediate != null) {
+            val encoded = stuffConstant(base or 0x02000000 or (lhs shl 16), immediate)
+            if (encoded != 0) {
+                if (comparison != null || operation == "cmp") return IntegerEmission(listOf(encoded), null, comparison)
+                return IntegerEmission(listOf(encoded or (integerRegister(destinationRegister) shl 12)), destinationRegister)
+            }
+        }
+        if (comparison != null || operation == "cmp") return IntegerEmission(listOf(base or (lhs shl 16) or rhs), null, comparison)
+        return IntegerEmission(listOf(base or (lhs shl 16) or (integerRegister(destinationRegister) shl 12) or rhs), destinationRegister)
+    }
+
+    fun integerMultiply(left: Int, right: Int): Int {
+        val rd = integerRegister(left)
+        val rm = integerRegister(right)
+        return 0xe0000090.toInt() or (rd shl 16) or (rd shl 8) or rm
     }
 
     fun floatsInCoreRegisters(helperSymbol: String?, vfp: Boolean): Boolean {
