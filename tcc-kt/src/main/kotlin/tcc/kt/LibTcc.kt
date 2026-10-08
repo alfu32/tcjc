@@ -161,6 +161,7 @@ class LibTcc(
     private var currentMemoryBytes = 0L
     private var maximumMemoryBytes = 0L
     private var liveStateCount = 0
+    private var customReallocator: ((Allocation?, Int) -> ByteArray?)? = null
     private val allocations = linkedMapOf<Long, Allocation>()
     var sourceFile: BufferedSource? = null
         private set
@@ -729,7 +730,8 @@ class LibTcc(
 
     fun allocate(size: Int, sourceFile: String? = null, sourceLine: Int = 0): Allocation {
         require(size >= 0)
-        val allocation = Allocation(nextAllocationId++, ByteArray(size), sourceFile, sourceLine)
+        val bytes = customReallocator?.invoke(null, size)?.copyOf(size) ?: ByteArray(size)
+        val allocation = Allocation(nextAllocationId++, bytes, sourceFile, sourceLine)
         allocations[allocation.id] = allocation
         currentMemoryBytes += size
         maximumMemoryBytes = maxOf(maximumMemoryBytes, currentMemoryBytes)
@@ -738,8 +740,9 @@ class LibTcc(
 
     fun resize(allocation: Allocation?, size: Int, sourceFile: String? = null, sourceLine: Int = 0): Allocation? {
         if (allocation == null) return if (size == 0) null else allocate(size, sourceFile, sourceLine)
+        require(size >= 0)
         if (size == 0) { free(allocation); return null }
-        val replacement = allocation.bytes.copyOf(size)
+        val replacement = customReallocator?.invoke(allocation, size)?.copyOf(size) ?: allocation.bytes.copyOf(size)
         currentMemoryBytes += size - allocation.bytes.size
         allocation.bytes = replacement
         maximumMemoryBytes = maxOf(maximumMemoryBytes, currentMemoryBytes)
@@ -747,8 +750,15 @@ class LibTcc(
     }
 
     fun free(allocation: Allocation?) {
-        if (allocation != null && allocations.remove(allocation.id) != null) currentMemoryBytes -= allocation.bytes.size
+        if (allocation != null && allocations.remove(allocation.id) != null) {
+            customReallocator?.invoke(allocation, 0)
+            currentMemoryBytes -= allocation.bytes.size
+        }
     }
+
+    fun setReallocator(reallocator: ((Allocation?, Int) -> ByteArray?)?) { customReallocator = reallocator }
+    fun allocateZeroed(size: Int, sourceFile: String? = null, sourceLine: Int = 0): Allocation =
+        allocate(size, sourceFile, sourceLine).also { it.bytes.fill(0) }
 
     fun duplicate(value: String, sourceFile: String? = null, sourceLine: Int = 0): Allocation =
         allocate(value.toByteArray().size + 1, sourceFile, sourceLine).also { value.toByteArray().copyInto(it.bytes) }
