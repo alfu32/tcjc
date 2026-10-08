@@ -401,22 +401,22 @@ class Riscv64Asm(
     }
 
     /** Parses `X, imm(Y)` into destination, base register, and offset operands. */
-    fun parseMemoryAccessOperands(source: String): List<Operand> {
+    fun parseMemoryAccessOperands(source: String, parse: (String) -> Operand = { parseOperand(it) }): List<Operand> {
         val parts = splitOperands(source)
         if (parts.size != 2) { expect("memory access operands"); return listOf(Operand(), Operand(), Operand()) }
-        val destination = parseOperand(parts[0])
+        val destination = parse(parts[0])
         val address = parts[1].trim()
         val open = address.indexOf('(')
         if (address.startsWith('(') && address.endsWith(')')) {
-            val base = parseOperand(address.substring(1, address.length - 1))
+            val base = parse(address.substring(1, address.length - 1))
             return listOf(destination, base, Operand(OP_IM12S))
         }
         if (open >= 0 && address.endsWith(')')) {
-            val immediate = parseOperand(address.substring(0, open).ifBlank { "0" })
-            val base = parseOperand(address.substring(open + 1, address.length - 1))
+            val immediate = parse(address.substring(0, open).ifBlank { "0" })
+            val base = parse(address.substring(open + 1, address.length - 1))
             return listOf(destination, base, immediate)
         }
-        val base = parseOperand(address)
+        val base = parse(address)
         return listOf(destination, base, Operand(OP_IM12S))
     }
 
@@ -522,6 +522,11 @@ class Riscv64Asm(
     }
 
     /** String-backed instruction dispatcher corresponding to asm_opcode and its operand handlers. */
+    private fun parseAssemblyOperand(source: String, hooks: AssemblyHooks): Operand =
+        parseOperand(source, ::parseCsrVariable,
+            relocateSymbol = { symbol, _ -> hooks.relocateSymbol(symbol, if (hooks.isStaticSymbol(symbol)) "PCREL_HI20" else "GOT_HI20") },
+            isExternalOrStatic = hooks.isExternalOrStatic)
+
     fun assembleInstruction(mnemonic: String, operandText: String = "", hooks: AssemblyHooks = AssemblyHooks()): Boolean {
         val name = mnemonic.lowercase()
         if (name in setOf("fence.i", "ecall", "ebreak", "nop", "wfi", "ret", "c.ebreak", "c.nop")) {
@@ -542,7 +547,7 @@ class Riscv64Asm(
             if (name == "j") { if (parts.size != 1) { expect("jump target"); return false }; rd = Operand(OP_REG); target = parts[0] }
             else when (parts.size) {
                 1 -> { rd = Operand(OP_REG, register = 1); target = parts[0] }
-                2 -> { rd = parseOperand(parts[0]); target = parts[1] }
+                2 -> { rd = parseAssemblyOperand(parts[0], hooks); target = parts[1] }
                 else -> { expect("jump target"); return false }
             }
             val offset = parseJumpOffset(target, hooks.isExternalOrStatic) { symbol, _ -> hooks.relocateSymbol(symbol, "JAL") }
@@ -550,53 +555,51 @@ class Riscv64Asm(
         }
         if (name == "jalr") {
             val parts = splitOperands(operandText)
-            if (parts.size == 1) return emitI(0x67, Operand(OP_REG, register = 1), parseOperand(parts[0]), Operand(OP_IM12S))
+            if (parts.size == 1) return emitI(0x67, Operand(OP_REG, register = 1), parseAssemblyOperand(parts[0], hooks), Operand(OP_IM12S))
             if (parts.size != 2) { expect("jalr operands"); return false }
-            val parsed = parseMemoryAccessOperands(operandText)
+            val parsed = parseMemoryAccessOperands(operandText) { parseAssemblyOperand(it, hooks) }
             return emitI(0x67, parsed[0], parsed[1], parsed[2])
         }
         if (name in setOf("jr", "call", "tail", "jump", "rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth", "frflags", "frrm", "frcsr")) {
-            val operand = if (name == "call" || name == "tail") Operand(OP_IM32, expression = parseExpression(operandText)) else parseOperand(operandText)
+            val operand = if (name == "call" || name == "tail" || name == "jump") Operand(OP_IM32, expression = parseExpression(operandText)) else parseAssemblyOperand(operandText, hooks)
             return emitUnaryOpcode(name, operand) { symbol, _ -> hooks.relocateSymbol(symbol, "CALL") }
         }
         if (name in setOf("lb", "lh", "lw", "ld", "lbu", "lhu", "lwu", "fld", "sb", "sh", "sw", "sd", "fsd")) {
-            val ops = parseMemoryAccessOperands(operandText).mapIndexed { index, op ->
-                if (index == 1 && op.expression.symbol != null) op else op
-            }
+            val ops = parseMemoryAccessOperands(operandText) { parseAssemblyOperand(it, hooks) }
             return emitMemoryInstruction(name, ops, hooks.isStaticSymbol) { hooks.relocateSymbol(it, "PCREL_HI20") }
         }
         if (name.startsWith("amo") || name.startsWith("lr_") || name.startsWith("sc_")) {
             val parts = splitOperands(operandText)
             if (parts.size != 3 || !parts[2].startsWith('(') || !parts[2].endsWith(')')) { expect("atomic memory operands"); return false }
-            val rd = parseOperand(parts[0]); val source = if (name.startsWith("lr_")) null else parseOperand(parts[1])
-            val base = parseOperand(parts[2].substring(1, parts[2].length - 1))
+            val rd = parseAssemblyOperand(parts[0], hooks); val source = if (name.startsWith("lr_")) null else parseAssemblyOperand(parts[1], hooks)
+            val base = parseAssemblyOperand(parts[2].substring(1, parts[2].length - 1), hooks)
             return emitAtomicInstruction(name, rd, source, base)
         }
         if (name.startsWith("c.")) return assembleCompressed(name, operandText, hooks)
         if (name.startsWith("fcvt") || name.startsWith("fclass")) {
             val parts = splitOperands(operandText)
             if (parts.size !in 2..3) { expect("floating conversion operands"); return false }
-            val ops = parts.take(2).map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) }
+            val ops = parts.take(2).map { parseAssemblyOperand(it, hooks) }
             return emitFloatingInstruction(name, ops, parseRoundingMode(parts.getOrNull(2)))
         }
         if (name in setOf("beq", "bne", "blt", "bge", "bltu", "bgeu", "bgt", "ble", "bgtu", "bleu", "beqz", "bnez", "blez", "bgez", "bltz", "bgtz")) {
             val parts = splitOperands(operandText)
             if (parts.size !in 2..3) { expect("branch operands"); return false }
-            val parsed = parts.dropLast(1).map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) } +
+            val parsed = parts.dropLast(1).map { parseAssemblyOperand(it, hooks) } +
                 parseBranchOffset(parts.last(), hooks.isExternalOrStatic)
             return emitBranchInstruction(name, parsed) { opcode, rs1, rs2, symbol ->
-                hooks.relocateSymbol(symbol, "CALL")
                 emitOpcode(opcode or encodeRs1(rs1) or encodeRs2(rs2) or (1 shl 8))
+                hooks.relocateSymbol(symbol, "CALL")
                 emitOpcode(0x17 or encodeRd(5))
                 emitOpcode(0x67 or encodeRs1(5))
             }
         }
         val parts = splitOperands(operandText)
-        val parsed = parts.map { parseOperand(it, ::parseCsrVariable, isExternalOrStatic = hooks.isExternalOrStatic) }
+        val parsed = parts.map { parseAssemblyOperand(it, hooks) }
         if (name in setOf("lui", "auipc")) return emitBinaryInstruction(name, parsed.getOrElse(0) { Operand() }, parsed.getOrElse(1) { Operand() })
         if (name in setOf("mv", "not", "neg", "negw", "sext.w", "seqz", "snez", "sltz", "sgtz", "la", "lla", "li",
                 "fabs.s", "fabs.d", "fneg.s", "fneg.d", "fmv.s", "fmv.d", "csrr", "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci", "fsrm", "fscsr"))
-            return emitPseudoBinary(name, parsed) { symbol -> hooks.relocateSymbol(symbol, if (hooks.isStaticSymbol(symbol)) "PCREL_HI20" else "GOT_HI20") }
+            return emitPseudoBinary(name, parsed)
         if (name == "fmadd.s" || name == "fmadd.d" || name == "fmadd_s" || name == "fmadd_d") return emitFusedMultiplyAdd(name, parsed)
         if (name.startsWith("f") && (name.startsWith("fcvt") || name.startsWith("fclass") || name.startsWith("fsqrt") ||
                     name.startsWith("fadd") || name.startsWith("fsub") || name.startsWith("fmul") || name.startsWith("fdiv") ||
@@ -627,27 +630,30 @@ class Riscv64Asm(
             return if (name == "c.add" || name == "c.mv") emitCompressedCr(opcode, ops[0], ops[1]) else emitCompressedCa(opcode, ops[0], ops[1])
         }
         if (name in setOf("c.fld", "c.flw", "c.ld", "c.lw")) {
-            val ops = parseMemoryAccessOperands(text)
+            val ops = parseMemoryAccessOperands(text) { parseAssemblyOperand(it, hooks) }
             val opcode = when (name) { "c.fld" -> 1 shl 13; "c.flw" -> 3 shl 13; "c.ld" -> 3 shl 13; else -> 2 shl 13 }
             return emitCompressedCl(name, opcode, ops[0], ops[1], ops[2])
         }
         if (name in setOf("c.fsd", "c.fsw", "c.sd", "c.sw")) {
-            val ops = parseMemoryAccessOperands(text)
+            val ops = parseMemoryAccessOperands(text) { parseAssemblyOperand(it, hooks) }
             val opcode = when (name) { "c.fsd" -> 5 shl 13; "c.fsw" -> 7 shl 13; "c.sd" -> 7 shl 13; else -> 6 shl 13 }
             return emitCompressedCs(name, opcode, ops[0], ops[1], ops[2])
         }
         if (name in setOf("c.swsp", "c.sdsp", "c.fswsp", "c.fsdsp")) {
-            val ops = parseOperands(text, 2)
+            val ops = splitOperands(text).map { parseAssemblyOperand(it, hooks) }
             val opcode = when (name) { "c.swsp" -> 2 or (6 shl 13); "c.sdsp" -> 2 or (7 shl 13); "c.fswsp" -> 2 or (7 shl 13); else -> 2 or (5 shl 13) }
             return emitCompressedCss(name, opcode, ops[0], ops[1])
         }
         if (name in setOf("c.beqz", "c.bnez", "c.andi", "c.srai", "c.srli")) {
-            val ops = parseOperands(text, 2)
+            val parts = splitOperands(text)
+            if (parts.size != 2) { expect("two compressed branch operands"); return false }
+            val ops = if (name == "c.beqz" || name == "c.bnez") listOf(parseAssemblyOperand(parts[0], hooks), parseBranchOffset(parts[1], hooks.isExternalOrStatic))
+                else parts.map { parseAssemblyOperand(it, hooks) }
             val opcode = when (name) { "c.beqz" -> 1 or (6 shl 13); "c.bnez" -> 1 or (7 shl 13); "c.andi" -> 1 or (2 shl 10) or (4 shl 13); "c.srai" -> 1 or (1 shl 10) or (4 shl 13); else -> 1 or (4 shl 13) }
             return emitCompressedCb(name, opcode, ops[0], ops[1])
         }
         if (name in setOf("c.addi16sp", "c.addi4spn", "c.addi", "c.addiw", "c.fldsp", "c.flwsp", "c.ldsp", "c.li", "c.lui", "c.lwsp", "c.slli")) {
-            val ops = parseOperands(text, 2)
+            val ops = splitOperands(text).map { parseAssemblyOperand(it, hooks) }
             val opcode = when (name) {
                 "c.addi16sp" -> 1 or (3 shl 13); "c.addi4spn" -> 0; "c.addi" -> 1
                 "c.addiw" -> 1 or (1 shl 13); "c.fldsp" -> 2 or (1 shl 13); "c.flwsp", "c.ldsp" -> 2 or (3 shl 13)
@@ -1021,7 +1027,7 @@ class Riscv64Asm(
         var base = parsedBase
         var offset = parsedOffset
         val symbol = base.expression.symbol
-        if (symbol != null && isStaticSymbol(symbol)) {
+        if (base.type == OP_IM32 && symbol != null && isStaticSymbol(symbol)) {
             relocateAddress(symbol)
             base = destination
             offset = Operand(OP_IM12S)
