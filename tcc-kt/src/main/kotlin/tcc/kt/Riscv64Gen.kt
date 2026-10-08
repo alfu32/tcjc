@@ -641,6 +641,13 @@ class Riscv64Gen(
         return frame
     }
 
+    fun saveHiddenStructureReturnPointer(frame: FunctionFrame) {
+        frame.localOffset -= PTR_SIZE
+        val pointerHome = Value(value = frame.localOffset.toLong(), kind = ValueKind.LOCAL, isLValue = true,
+            baseType = VT_PTR, typeSize = PTR_SIZE)
+        store(REG_IRET, pointerHome)
+    }
+
     /** Saves the variadic integer argument registers in the frame, as gfunc_prolog does. */
     fun saveVariadicRegisters(frame: FunctionFrame, firstRegister: Int) {
         var register = firstRegister
