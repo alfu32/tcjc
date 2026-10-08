@@ -236,9 +236,9 @@ object ArmGen {
                 (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE) || parameter.homogeneousFloatAggregate)
             val fpReg = if (floating) assignVfpRegister(argumentVfp!!, alignment, sizeWords shl 2) else -1
             val address: Int
-            if (fpReg >= 0) {
+            if (floating && fpReg >= 0) {
                 address = fpReg * 4
-            } else if (core < 4) {
+            } else if (!floating && core < 4) {
                 if (eabi) core = (core + (alignment - 1) / 4) and -(alignment / 4)
                 address = (vfpCount + core) * 4
                 core += sizeWords
