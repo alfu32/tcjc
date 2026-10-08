@@ -37,7 +37,7 @@ class LibTcc(
         val linkerArguments: MutableList<String> = mutableListOf(), var outputFormatName: String? = null,
         var optionPthread: Boolean = false, var doBench: Boolean = false, var optionR: Boolean = false,
         var charIsUnsigned: Boolean = false, var leadingUnderscore: Boolean = false,
-        var dollarsInIdentifiers: Boolean = false, var testCoverage: Boolean = false,
+        var dollarsInIdentifiers: Boolean = true, var testCoverage: Boolean = false,
         var reverseFuncargs: Boolean = false, var gnu89Inline: Boolean = false,
         var msBitfields: Boolean = false, var noSse: Boolean = false,
         var warnAll: Boolean = false, var warnWriteStrings: Boolean = false,
