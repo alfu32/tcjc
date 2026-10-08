@@ -583,6 +583,20 @@ object TccElf {
         return result
     }
 
+    fun resolveInputSectionLinks(input: InputElf, mappings: List<SectionMergeInfo>) {
+        input.sections.forEachIndexed { index, source ->
+            val mapping = mappings.getOrNull(index) ?: return@forEachIndexed
+            val output = mapping.section ?: return@forEachIndexed
+            if (!mapping.newSection) return@forEachIndexed
+            if (source.link > 0) output.link = mappings.getOrNull(source.link)?.section
+            if (source.type == SHT_REL || source.type == SHT_RELA) {
+                val target = mappings.getOrNull(source.info)?.section ?: return@forEachIndexed
+                output.sectionInfo = target.index
+                target.relocation = output
+            }
+        }
+    }
+
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
         state.namedSections[".text"] = newSection(state, ".text", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR)
         state.namedSections[".data"] = newSection(state, ".data", SHT_PROGBITS, SHF_ALLOC or SHF_WRITE)
