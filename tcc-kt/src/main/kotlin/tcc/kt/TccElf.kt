@@ -183,6 +183,7 @@ object TccElf {
         val machoTarget: Boolean = false,
     )
     data class RuntimeAction(val kind: String, val name: String = "")
+    data class GeneratedCompileState(var debugEnabled: Boolean, var coverageEnabled: Boolean)
     data class InputSectionHeader(
         val name: String,
         val type: Int,
@@ -601,6 +602,23 @@ object TccElf {
             add(RuntimeAction("library", "c"))
         }
         if (!options.machoTarget && !options.memoryOutput) add(RuntimeAction("crt-end"))
+    }
+
+    fun compileStringWithoutDebug(
+        state: GeneratedCompileState,
+        source: String,
+        compile: (String) -> Unit,
+    ) {
+        val savedDebug = state.debugEnabled
+        val savedCoverage = state.coverageEnabled
+        state.debugEnabled = false
+        state.coverageEnabled = false
+        try {
+            compile(source)
+        } finally {
+            state.debugEnabled = savedDebug
+            state.coverageEnabled = savedCoverage
+        }
     }
 
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
