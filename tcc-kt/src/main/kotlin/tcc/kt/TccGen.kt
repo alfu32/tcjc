@@ -22,6 +22,7 @@ object TccGen {
     const val VT_INT = 3
     const val VT_LLONG = 4
     const val VT_PTR = 5
+    const val VT_QLONG = 13
     const val VT_FLOAT = 8
     const val VT_DOUBLE = 9
     const val VT_LDOUBLE = 10
@@ -629,7 +630,90 @@ object TccGen {
 
     const val CODE_OFF_BIT = 0x20000000
     const val RC_INT = 1
+    const val RC_FLOAT = 2
+    const val RC_ST0 = 4
+    const val RC_IRET = 8
+    const val RC_FRET = 16
+    const val RC_IRE2 = 32
+    const val RC_FRE2 = 64
     const val VALUE_STACK_SIZE = 1024
+
+    data class TypeTarget(
+        val pointerSize: Int,
+        val integerReturnRegister: Int,
+        val floatingReturnRegister: Int,
+        val x86_64: Boolean = false,
+        val riscv64: Boolean = false,
+        val x87StackReturnRegister: Int = -1,
+        val integerSecondReturnRegister: Int? = null,
+        val floatingSecondReturnRegister: Int? = null,
+        val registerClasses: IntArray = intArrayOf(),
+        val integerClass: Int = RC_INT,
+        val floatingClass: Int = RC_FLOAT,
+        val stackFloatClass: Int = RC_ST0,
+        val integerReturnClass: Int = RC_IRET,
+        val floatingReturnClass: Int = RC_FRET,
+        val integerSecondReturnClass: Int = RC_IRE2,
+        val floatingSecondReturnClass: Int = RC_FRE2,
+    )
+
+    fun isFloat(type: Int): Boolean = when (type and VT_BTYPE) {
+        VT_FLOAT, VT_DOUBLE, VT_LDOUBLE, VT_QFLOAT -> true
+        else -> false
+    }
+
+    fun isIntegerBaseType(baseType: Int): Boolean = baseType in setOf(VT_BYTE, VT_BOOL, VT_SHORT, VT_INT, VT_LLONG)
+
+    fun baseTypeSize(baseType: Int, target: TypeTarget): Int = when (baseType) {
+        VT_BYTE, VT_BOOL -> 1
+        VT_SHORT -> 2
+        VT_INT -> 4
+        VT_LLONG -> 8
+        VT_PTR -> target.pointerSize
+        else -> 0
+    }
+
+    fun returnRegister(type: Int, target: TypeTarget): Int {
+        if (!isFloat(type)) return target.integerReturnRegister
+        val baseType = type and VT_BTYPE
+        if (target.x86_64 && baseType == VT_LDOUBLE) return target.x87StackReturnRegister
+        if (target.riscv64 && baseType == VT_LDOUBLE) return target.integerReturnRegister
+        return target.floatingReturnRegister
+    }
+
+    fun secondReturnRegister(type: Int, target: TypeTarget): Int {
+        return when (type and VT_BTYPE) {
+            VT_LLONG -> if (target.pointerSize == 4) target.integerSecondReturnRegister ?: VT_CONST else VT_CONST
+            VT_QLONG -> if (target.x86_64) target.integerSecondReturnRegister ?: VT_CONST else VT_CONST
+            VT_QFLOAT -> if (target.x86_64) target.floatingSecondReturnRegister ?: VT_CONST else VT_CONST
+            VT_LDOUBLE -> if (target.riscv64) target.integerSecondReturnRegister ?: VT_CONST else VT_CONST
+            else -> VT_CONST
+        }
+    }
+
+    fun putReturnRegisters(value: Value, type: Int, target: TypeTarget) {
+        value.register = returnRegister(type, target)
+        value.secondRegister = secondReturnRegister(type, target)
+    }
+
+    fun returnRegisterClass(type: Int, target: TypeTarget): Int = target.registerClasses
+        .getOrElse(returnRegister(type, target)) { 0 } and (target.floatingClass or target.integerClass).inv()
+
+    fun registerClassForType(type: Int, target: TypeTarget): Int {
+        if (!isFloat(type)) return target.integerClass
+        val baseType = type and VT_BTYPE
+        if (target.x86_64 && baseType == VT_LDOUBLE) return target.stackFloatClass
+        if (target.x86_64 && baseType == VT_QFLOAT) return target.floatingReturnClass
+        if (target.riscv64 && baseType == VT_LDOUBLE) return target.integerClass
+        return target.floatingClass
+    }
+
+    fun secondRegisterClass(type: Int, registerClass: Int, target: TypeTarget): Int {
+        if (secondReturnRegister(type, target) == VT_CONST) return 0
+        if (registerClass == target.integerReturnClass && target.integerSecondReturnRegister != null) return target.integerSecondReturnClass
+        if (registerClass == target.floatingReturnClass && target.floatingSecondReturnRegister != null) return target.floatingSecondReturnClass
+        return if (registerClass and target.floatingClass != 0) target.floatingClass else target.integerClass
+    }
 
     const val VT_CONST = 0x0040
     const val VT_SYM = 0x0200
