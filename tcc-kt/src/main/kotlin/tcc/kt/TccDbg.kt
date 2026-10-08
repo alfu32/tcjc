@@ -493,6 +493,8 @@ object TccDbg {
         refs: DwarfSymbolRefs,
         textStart: Long = 0,
         minimumInstructionLength: Int = 1,
+        longDoubleSize: Int = 16,
+        charUnsignedByDefault: Boolean = false,
     ): DebugUnit {
         val sections = createSections(dwarfVersion, backtrace)
         val line = if (dwarfVersion > 0) createDwarfLineState(filename, compilationDirectory, dwarfVersion) else DwarfLineState()
@@ -506,7 +508,7 @@ object TccDbg {
             val directoryName = if (compilationDirectory.endsWith('/')) compilationDirectory else "$compilationDirectory/"
             putStabsReloc(sections, directoryName, N_SO, 0, 0, textStart, refs.text)
             putStabsReloc(sections, filename, N_SO, 0, 0, textStart, refs.text)
-            defaultTypes(pointerSize, charUnsignedByDefault = false).forEach { putStabs(sections, it.stabs, N_LSYM, 0, 0, 0) }
+            defaultTypes(pointerSize, longDoubleSize, charUnsignedByDefault).forEach { putStabs(sections, it.stabs, N_LSYM, 0, 0, 0) }
             putStabs(sections, filename, N_BINCL, 0, 0, 0)
         }
         return DebugUnit(session, unit, startEhFrame(unwindTables, target))
