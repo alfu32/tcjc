@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 32
+- **DONE:** 33
 - **DOING:** 1
-- **TODO:** 21
-- **Currently doing:** `i386-gen.c` → `src/main/kotlin/tcc/kt/I386Gen.kt`
+- **TODO:** 20
+- **Currently doing:** `i386-asm.c` → `src/main/kotlin/tcc/kt/I386Asm.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -23,8 +23,8 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `c67-gen.c` | TODO |
 | `c67-link.c` | DONE |
 | `conftest.c` | DONE |
-| `i386-asm.c` | TODO |
-| `i386-gen.c` | DOING |
+| `i386-asm.c` | DOING |
+| `i386-gen.c` | DONE |
 | `i386-link.c` | DONE |
 | `il-gen.c` | TODO |
 | `legacy-c/conftest.c` | DONE |
