@@ -10,6 +10,13 @@ class C67Gen(
     private val writeWord: (Int, Int) -> Unit = { _, _ -> },
     private val position: () -> Int = { 0 },
 ) {
+    enum class ValueLocation { CONSTANT, LOCAL, INDIRECT_LOCAL, COMPARE, JUMP, JUMP_INDIRECT, REGISTER }
+    enum class ValueType { BYTE, SHORT, INT, LONG_LONG, POINTER, FUNCTION, STRUCT, FLOAT, DOUBLE, LONG_DOUBLE, BOOL }
+    data class Value(
+        val location: ValueLocation, val type: ValueType = ValueType.INT, val constant: Int = 0,
+        val register: Int = -1, val symbol: Int? = null, val lvalue: Boolean = false,
+        val unsigned: Boolean = false,
+    )
     companion object {
         const val NB_REGS = 24
         const val RC_INT = 0x0001
@@ -41,9 +48,145 @@ class C67Gen(
     }
 
     var numberOfCurrentFunctionArguments: Int = 0
+    var invertTest: Boolean = false
+    var compareRegister: Int = 0
     val translateStackToRegister: IntArray = IntArray(NO_CALL_ARGS_PASSED_ON_STACK)
     val parameterLocationsOnStack: IntArray = IntArray(NO_CALL_ARGS_PASSED_ON_STACK)
     var totalBytesPushedOnStack: Int = 0
+
+    private fun memorySize(type: ValueType): Int = when (type) {
+        ValueType.BYTE, ValueType.BOOL -> 1
+        ValueType.SHORT -> 2
+        ValueType.DOUBLE, ValueType.LONG_LONG -> 8
+        ValueType.LONG_DOUBLE -> throw IllegalArgumentException("long double not supported by C67")
+        else -> 4
+    }
+
+    private fun loadPointerValue(size: Int, unsigned: Boolean, base: Int, destination: Int) {
+        when (size) {
+            1 -> if (unsigned) loadUnsignedBytePointer(base, destination) else loadBytePointer(base, destination)
+            2 -> if (unsigned) loadUnsignedHalfPointer(base, destination) else loadHalfPointer(base, destination)
+            4 -> loadWordPointer(base, destination)
+            8 -> loadDoubleWordPointer(base, destination)
+        }
+        nop(4)
+    }
+
+    private fun loadStackValue(size: Int, unsigned: Boolean, destination: Int, offset: Int) {
+        val index = (offset / size) + 8 / size
+        moveLow(C67_A0, index)
+        moveHigh(C67_A0, index)
+        when (size) {
+            1 -> if (unsigned) loadUnsignedByteStackA0(destination) else loadByteStackA0(destination)
+            2 -> if (unsigned) loadUnsignedHalfStackA0(destination) else loadHalfStackA0(destination)
+            4 -> loadWordStackA0(destination)
+            8 -> loadDoubleWordStackA0(destination)
+        }
+        nop(4)
+    }
+
+    private fun translatedFormalOffset(offset: Int): Int {
+        if (offset <= 0) return offset
+        var stackPosition = 8
+        for (index in 0 until NO_CALL_ARGS_PASSED_ON_STACK) {
+            if (offset == stackPosition) return parameterLocationsOnStack[index] - 8
+            stackPosition += translateStackToRegister[index]
+        }
+        return offset
+    }
+
+    fun loadValue(destination: Int, value: Value, patchJumpChain: (Int) -> Unit = {}) {
+        var location = value.location
+        var register = value.register
+        var offset = value.constant
+        val size = memorySize(value.type)
+        val unsigned = value.unsigned
+        if (value.lvalue) {
+            if (location == ValueLocation.INDIRECT_LOCAL) {
+                loadValue(destination, value.copy(location = ValueLocation.LOCAL, lvalue = true))
+                location = ValueLocation.REGISTER
+                register = destination
+            } else if (value.type == ValueType.LONG_DOUBLE) throw IllegalArgumentException("long double not supported")
+            if (location == ValueLocation.LOCAL) offset = translatedFormalOffset(offset)
+            if (location == ValueLocation.REGISTER) {
+                loadPointerValue(size, unsigned, register, destination)
+                return
+            }
+            if (value.symbol != null) {
+                relocate(value.symbol, position(), "R_C60LO16")
+                relocate(value.symbol, position() + 4, "R_C60HI16")
+                moveLow(C67_A0, offset); moveHigh(C67_A0, offset)
+                loadPointerValue(size, unsigned, C67_A0, destination)
+                return
+            }
+            loadStackValue(size, unsigned, destination, offset)
+            return
+        }
+        when (location) {
+            ValueLocation.CONSTANT -> {
+                if (value.symbol != null) {
+                    relocate(value.symbol, position(), "R_C60LO16")
+                    relocate(value.symbol, position() + 4, "R_C60HI16")
+                }
+                moveLow(destination, offset); moveHigh(destination, offset)
+            }
+            ValueLocation.LOCAL -> { moveLow(destination, offset + 8); moveHigh(destination, offset + 8); add(C67_FP, destination, destination) }
+            ValueLocation.COMPARE -> move(compareRegister, destination)
+            ValueLocation.JUMP, ValueLocation.JUMP_INDIRECT -> {
+                val jumpValue = if (location == ValueLocation.JUMP_INDIRECT) 1 else 0
+                branchDisplacement(4); moveLow(destination, jumpValue); nop(4); patchJumpChain(offset); moveLow(destination, jumpValue xor 1)
+            }
+            ValueLocation.REGISTER -> if (register != destination) {
+                move(register, destination)
+                if (value.type == ValueType.DOUBLE) move(register + 1, destination + 1)
+            }
+            else -> throw IllegalArgumentException("unsupported C67 value location: $location")
+        }
+    }
+
+    fun storeValue(source: Int, value: Value) {
+        require(value.type != ValueType.LONG_DOUBLE) { "long double not supported" }
+        val size = memorySize(value.type)
+        val location = value.location
+        val offset = value.constant
+        val base = value.register
+        when {
+            location == ValueLocation.CONSTANT -> {
+                if (value.symbol != null) {
+                    relocate(value.symbol, position(), "R_C60LO16")
+                    relocate(value.symbol, position() + 4, "R_C60HI16")
+                }
+                moveLow(C67_A0, offset); moveHigh(C67_A0, offset)
+                storePointerValue(size, source, C67_A0)
+            }
+            location == ValueLocation.LOCAL -> {
+                val adjusted = translatedFormalOffset(offset)
+                val element = if (size == 8) 4 else size
+                val index = (adjusted / element) + 8 / element
+                moveLow(C67_A0, index); moveHigh(C67_A0, index)
+                storeStackValue(size, source)
+            }
+            else -> storePointerValue(size, source, base)
+        }
+    }
+
+    private fun storePointerValue(size: Int, source: Int, base: Int) {
+        when (size) {
+            1 -> storeBytePointer(source, base)
+            2 -> storeHalfPointer(source, base)
+            4, 8 -> storeWordPointer(source, base)
+        }
+        if (size == 8) storeWordPreIncrement(source + 1, base, 1)
+    }
+
+    private fun storeStackValue(size: Int, source: Int) {
+        when (size) {
+            1 -> storeByteStackA0(source)
+            2 -> storeHalfStackA0(source)
+            4, 8 -> storeWordStackA0(source)
+        }
+        if (size == 8) { addConstant(1, C67_A0); storeWordStackA0(source + 1) }
+    }
 
     fun emit(word: Int) { if (!noCode()) outputWord(word) }
 
