@@ -85,6 +85,14 @@ object TccDbg {
         val baseTypes: MutableMap<Int, Int> = mutableMapOf(),
         val typeOffsets: MutableMap<Long, Int> = mutableMapOf(),
     )
+    data class CoverageState(
+        val section: DwarfSection = DwarfSection(".tcov", flags = 3),
+        var lastFileName: String? = null,
+        var lastFunctionName: String? = null,
+        var line: Int = 0,
+        var instruction: Int = 0,
+        var counterOffset: Int = 0,
+    )
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -754,6 +762,91 @@ object TccDbg {
 
     fun markDebugPrologueEnd(state: DwarfLineState) { lineOperation(state, 10) }
     fun markDebugEpilogueBegin(state: DwarfLineState) { lineOperation(state, 11) }
+
+    fun emitTypedef(state: DebugSections, name: String, type: DebugType, context: StabsTypeContext, dwarf: DwarfTypeContext? = null): Int {
+        if (!state.dwarfEnabled) {
+            val description = "$name:t${stabsType(type, context)}"
+            putStabs(state, description, 0x80, 0, 0, 0)
+            return context.nextId
+        }
+        val typeOffset = dwarf?.let { emitDwarfType(type, it) } ?: return -1
+        val info = state.sections.getValue(".debug_info")
+        writeData1(info, 10); writeStringReference(state, info, name, dwarf.refs.strings, pointerSize = dwarf.pointerSize)
+        writeUleb(info, dwarf.file.toLong()); writeUleb(info, dwarf.line.toLong())
+        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", dwarf.refs.info)
+        writeData4(info, typeOffset - dwarf.unitStart)
+        return typeOffset
+    }
+
+    fun beginCoverageBlock(
+        state: CoverageState,
+        enabled: Boolean,
+        sourceFile: String,
+        function: String,
+        sourceLine: Int,
+        instruction: Int,
+        incrementCounter: (counterOffset: Int) -> Unit,
+    ): Int {
+        if (!enabled) return state.section.size
+        if (state.lastFileName != sourceFile) {
+            if (state.lastFunctionName != null) state.section.append(0)
+            if (state.lastFileName != null) state.section.append(0)
+            state.lastFileName = sourceFile
+            appendCString(state.section, sourceFile)
+        }
+        if (state.lastFunctionName != function) {
+            if (state.lastFunctionName != null) state.section.append(0)
+            state.lastFunctionName = function
+            appendCString(state.section, function)
+            while (state.section.size % 8 != 0) state.section.append(0)
+            writeData8(state.section, sourceLine.toLong())
+        }
+        val previousOffset = state.counterOffset
+        if (instruction == state.instruction && sourceLine == state.line) {
+            state.counterOffset = previousOffset
+        } else {
+            while (state.section.size % 8 != 0) state.section.append(0)
+            state.counterOffset = state.section.size
+            state.line = sourceLine
+            writeData8(state.section, (sourceLine.toLong() shl 8) or 0xff)
+            writeData8(state.section, 0)
+            incrementCounter(state.counterOffset)
+            state.instruction = instruction
+        }
+        return state.counterOffset
+    }
+
+    fun endCoverageBlock(state: CoverageState, sourceLine: Int, finalLine: Int = 0) {
+        if (state.counterOffset == 0) return
+        val slot = state.counterOffset
+        val old = readData8(state.section, slot)
+        val endLine = if (finalLine != 0) finalLine else sourceLine
+        patch64(state.section, slot, (old and 0xfffffffffL) or (endLine.toLong() shl 36))
+        state.counterOffset = 0
+    }
+
+    fun checkCoverageLine(state: CoverageState, sourceLine: Int, startBlock: Boolean, endBlock: () -> Unit, beginBlock: () -> Unit) {
+        if (state.line == sourceLine) return
+        if (state.line + 1 != sourceLine) {
+            endBlock()
+            if (startBlock) beginBlock()
+        } else state.line = sourceLine
+    }
+
+    fun finishCoverageFile(state: CoverageState) {
+        if (state.lastFunctionName != null) state.section.append(0)
+        if (state.lastFileName != null) state.section.append(0)
+    }
+
+    private fun appendCString(section: DwarfSection, value: String) {
+        section.append(value.toByteArray(Charsets.UTF_8)); section.append(0)
+    }
+
+    private fun readData8(section: DwarfSection, offset: Int): Long {
+        var value = 0L
+        repeat(8) { i -> value = value or ((section.bytes[offset + i].toLong() and 0xff) shl (i * 8)) }
+        return value
+    }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
