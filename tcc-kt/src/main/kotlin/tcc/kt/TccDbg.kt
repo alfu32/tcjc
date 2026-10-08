@@ -778,6 +778,40 @@ object TccDbg {
         return typeOffset
     }
 
+    fun emitExternalVariable(
+        state: DebugSections,
+        name: String,
+        type: DebugType,
+        typeContext: StabsTypeContext,
+        dwarf: DwarfTypeContext? = null,
+        global: Boolean,
+        staticData: Boolean,
+        sectionName: String? = null,
+        symbolIndex: Int = 0,
+        value: Long = 0,
+    ): Int {
+        if (!state.dwarfEnabled) {
+            val letter = when { global -> 'G'; staticData -> 'S'; else -> 'V' }
+            putStabs(state, "$name:$letter${stabsType(type, typeContext)}", if (global) 0x20 else 0x26, 0, 0, value)
+            return typeContext.nextId
+        }
+        val context = dwarf ?: return -1
+        val typeOffset = emitDwarfType(type, context)
+        val info = state.sections.getValue(".debug_info")
+        writeData1(info, if (global) 3 else 4)
+        writeStringReference(state, info, name, context.refs.strings, pointerSize = context.pointerSize)
+        writeUleb(info, context.file.toLong()); writeUleb(info, context.line.toLong())
+        state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", context.refs.info)
+        writeData4(info, typeOffset - context.unitStart)
+        if (global) writeData1(info, 1)
+        writeData1(info, context.pointerSize + 1); writeData1(info, 0x03)
+        if (staticData && sectionName != null) {
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", symbolIndex)
+        }
+        if (context.pointerSize == 4) writeData4(info, value.toInt()) else writeData8(info, value)
+        return typeOffset
+    }
+
     fun beginCoverageBlock(
         state: CoverageState,
         enabled: Boolean,
