@@ -584,6 +584,91 @@ object TccElf {
         return oldToNew
     }
 
+    fun gnuHash(name: String): Int {
+        var hash = 5381
+        name.toByteArray(Charsets.UTF_8).forEach { byte -> hash = hash * 33 + (byte.toInt() and 0xff) }
+        return hash
+    }
+
+    fun createGnuHash(state: ElfState, dynamicSymbols: ElfSection): ElfSection {
+        val definitions = dynamicSymbols.symbols.count { it.sectionIndex != SHN_UNDEF }
+        val symbolCount = dynamicSymbols.symbols.size
+        val buckets = definitions / 4 + 1
+        val symbolOffset = symbolCount - definitions
+        val shift = if (state.wordSize == 8) 6 else 5
+        var bloomSize = 1
+        while (definitions >= bloomSize * (1 shl (shift - 3))) bloomSize *= 2
+        val section = newSection(state, ".gnu.hash", 0x6ffffff6, SHF_ALLOC)
+        section.link = dynamicSymbols.hash?.link
+        val totalBytes = 16 + state.wordSize * bloomSize + buckets * 4 + definitions * 4
+        sectionAdd(section, totalBytes, 1)
+        writeInt32(section.data, 0, buckets)
+        writeInt32(section.data, 4, symbolOffset)
+        writeInt32(section.data, 8, bloomSize)
+        writeInt32(section.data, 12, shift)
+        return section
+    }
+
+    /** Reorders defined dynamic symbols into GNU hash bucket order and fills bloom, bucket, and chain data. */
+    fun updateGnuHash(state: ElfState, gnuHash: ElfSection, dynamicSymbols: ElfSection): IntArray {
+        val bucketCount = readInt32(gnuHash.data, 0)
+        val symbolOffset = readInt32(gnuHash.data, 4)
+        val bloomSize = readInt32(gnuHash.data, 8)
+        val bloomShift = readInt32(gnuHash.data, 12)
+        val oldSymbols = dynamicSymbols.symbols.toList()
+        val strings = requireNotNull(dynamicSymbols.link)
+        val oldToNew = IntArray(oldSymbols.size)
+        val ordered = mutableListOf<ElfSymbol>()
+        oldSymbols.forEachIndexed { index, symbol ->
+            if (symbol.sectionIndex == SHN_UNDEF) {
+                oldToNew[index] = ordered.size
+                ordered += symbol
+            }
+        }
+        val defined = oldSymbols.indices.filter { oldSymbols[it].sectionIndex != SHN_UNDEF }
+        val hashes = defined.associateWith { gnuHash(elfString(strings, oldSymbols[it].nameOffset)) }
+        val bloomStart = 16
+        val bucketsStart = bloomStart + bloomSize * state.wordSize
+        val chainsStart = bucketsStart + bucketCount * 4
+        for (bucket in 0 until bucketCount) {
+            val members = defined.filter { hashes.getValue(it) % bucketCount == bucket }
+            if (members.isEmpty()) continue
+            writeInt32(gnuHash.data, bucketsStart + bucket * 4, ordered.size)
+            members.forEachIndexed { memberIndex, oldIndex ->
+                val hash = hashes.getValue(oldIndex)
+                oldToNew[oldIndex] = ordered.size
+                ordered += oldSymbols[oldIndex]
+                val chainIndex = ordered.lastIndex - symbolOffset
+                var chainValue = hash and -2
+                if (memberIndex == members.lastIndex) chainValue = chainValue or 1
+                writeInt32(gnuHash.data, chainsStart + chainIndex * 4, chainValue)
+                val bits = state.wordSize * 8
+                val bloomIndex = (hash / bits) % bloomSize
+                val firstBit = hash % bits
+                val secondBit = (hash ushr bloomShift) % bits
+                val wordOffset = bloomStart + bloomIndex * state.wordSize
+                val bloom = if (state.wordSize == 8) readInt64(gnuHash.data, wordOffset) else readInt32(gnuHash.data, wordOffset).toLong()
+                val mask = (1L shl firstBit) or (1L shl secondBit)
+                if (state.wordSize == 8) writeInt64(gnuHash.data, wordOffset, bloom or mask)
+                else writeInt32(gnuHash.data, wordOffset, (bloom or mask).toInt())
+            }
+        }
+        dynamicSymbols.symbols.clear(); dynamicSymbols.symbols.addAll(ordered)
+        updateRelocationSymbolIndices(state, dynamicSymbols, oldToNew, 0)
+        rebuildHash(dynamicSymbols)
+        return oldToNew
+    }
+
+    fun updateRelocationSymbolIndices(state: ElfState, table: ElfSection, oldToNew: IntArray, firstSymbol: Int) {
+        state.sections.drop(1).filterNotNull().forEach { relocationSection ->
+            if ((relocationSection.type != SHT_REL && relocationSection.type != SHT_RELA) || relocationSection.link !== table) return@forEach
+            relocationSection.relocations.forEach { relocation ->
+                val local = relocation.symbolIndex - firstSymbol
+                if (local in oldToNew.indices) relocation.symbolIndex = oldToNew[local]
+            }
+        }
+    }
+
     fun freeSection(section: ElfSection) {
         section.data.clear()
         section.dataOffset = 0
@@ -653,5 +738,13 @@ object TccElf {
     }
     private fun addInt32(output: MutableList<Byte>, offset: Int, value: Int) {
         writeInt32(output, offset, readInt32(output, offset) + value)
+    }
+    private fun readInt64(input: List<Byte>, offset: Int): Long {
+        var value = 0L
+        repeat(8) { shift -> value = value or ((input[offset + shift].toLong() and 0xff) shl (shift * 8)) }
+        return value
+    }
+    private fun writeInt64(output: MutableList<Byte>, offset: Int, value: Long) {
+        repeat(8) { shift -> output[offset + shift] = (value ushr (shift * 8)).toByte() }
     }
 }
