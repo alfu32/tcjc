@@ -275,22 +275,21 @@ object TccElf {
         existing.other = (existing.other and 3.inv()) or mergedVisibility
         when {
             sectionIndex == SHN_UNDEF -> Unit
-            binding == STB_GLOBAL && oldBinding == STB_WEAK -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            binding == STB_GLOBAL && oldBinding == STB_WEAK -> patchSymbol(existing, value, size, binding, type, sectionIndex)
             binding == STB_WEAK && oldBinding == STB_GLOBAL -> Unit
             binding == STB_WEAK && oldBinding == STB_WEAK -> Unit
             visibility == STV_HIDDEN || visibility == STV_INTERNAL -> Unit
             table.flags and SHF_DYNSYM != 0 -> Unit
-            !isBss(state, sectionIndex) && isBss(state, existing.sectionIndex) -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            !isBss(state, sectionIndex) && isBss(state, existing.sectionIndex) -> patchSymbol(existing, value, size, binding, type, sectionIndex)
             isBss(state, sectionIndex) -> Unit
-            existing.other and ST_ASM_SET != 0 -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            existing.other and ST_ASM_SET != 0 -> patchSymbol(existing, value, size, binding, type, sectionIndex)
             else -> reportDuplicate("link symbol '$name' defined twice")
         }
         return index
     }
 
-    private fun patchSymbol(symbol: ElfSymbol, value: Long, size: Long, binding: Int, type: Int, other: Int, sectionIndex: Int) {
+    private fun patchSymbol(symbol: ElfSymbol, value: Long, size: Long, binding: Int, type: Int, sectionIndex: Int) {
         symbol.info = (binding shl 4) or type
-        symbol.other = other
         symbol.sectionIndex = sectionIndex
         symbol.value = value
         symbol.size = size
