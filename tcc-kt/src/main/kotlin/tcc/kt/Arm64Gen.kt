@@ -802,4 +802,63 @@ class Arm64Gen(
     fun convertFloatPrecision(destination: Int, source: Int, fromFloat: Boolean) {
         o((if (fromFloat) 0x1e22c000 else 0x1e624000) or (destination and 31) or ((source and 31) shl 5))
     }
+
+    fun incrementCoverageCounter(symbol: Symbol, addressRegister: Int = 16, valueRegister: Int = 17) {
+        loadSymbolAddress(addressRegister, symbol)
+        o(ARM64_LDR_X or ((addressRegister and 31) shl 5) or (valueRegister and 31))
+        o(0x91000400.toInt() or ((valueRegister and 31) shl 5) or (valueRegister and 31))
+        o(0xf9000000.toInt() or ((addressRegister and 31) shl 5) or (valueRegister and 31))
+    }
+
+    fun gotoIndirect(targetRegister: Int) { emitBranchOrCall(true, indirectTargetRegister = targetRegister) }
+
+    /** Emits the AArch64 cache maintenance loops for a writable code range [start,end). */
+    fun clearInstructionCache(start: Int, end: Int, dataSizeRegister: Int = 2, instructionSizeRegister: Int = 3, cursorRegister: Int = 4) {
+        val begin = start and 31; val finish = end and 31; val dsz = dataSizeRegister and 31
+        val isz = instructionSizeRegister and 31; val p = cursorRegister and 31
+        o(0xd53b0020.toInt() or isz)
+        o(0x52800080 or p)
+        o(0x53104c00 or dsz or (isz shl 5))
+        o(0x1ac02000 or dsz or (p shl 5) or (dsz shl 16))
+        o(0x12000c00 or isz or (isz shl 5))
+        o(0x1ac02000 or isz or (p shl 5) or (isz shl 16))
+        o(0x51000400 or p or (dsz shl 5))
+        o(0x8a240004.toInt() or p or (begin shl 5) or (p shl 16))
+        var branch = position(); o(ARM64_B)
+        var loop = position()
+        o(0xd50b7b20.toInt() or p)
+        o(0x8b000000.toInt() or p or (p shl 5) or (dsz shl 16))
+        patchWord(branch, ARM64_B or (((position() - branch) shr 2) and 0x3ffffff))
+        o(0xeb00001f.toInt() or (p shl 5) or (finish shl 16))
+        o(0x54ffffa3 or (((loop - position()) shl 3) and 0xffffe0))
+        o(0xd5033b9f.toInt())
+        o(0x51000400 or p or (isz shl 5))
+        o(0x8a240004.toInt() or p or (begin shl 5) or (p shl 16))
+        branch = position(); o(ARM64_B)
+        loop = position()
+        o(0xd50b7520.toInt() or p)
+        o(0x8b000000.toInt() or p or (p shl 5) or (isz shl 16))
+        patchWord(branch, ARM64_B or (((position() - branch) shr 2) and 0x3ffffff))
+        o(0xeb00001f.toInt() or (p shl 5) or (finish shl 16))
+        o(0x54ffffa3 or (((loop - position()) shl 3) and 0xffffe0))
+        o(0xd5033b9f.toInt())
+        o(0xd5033fdf.toInt())
+    }
+
+    fun saveVlaStackPointer(localOffset: ULong, register: Int = 16) {
+        o(0x910003e0.toInt() or (register and 31))
+        storeInteger(3, register, 29, localOffset)
+    }
+
+    fun restoreVlaStackPointer(localOffset: ULong) {
+        loadInteger(false, 3, 30, 29, localOffset)
+        o(0x9100001f.toInt() or (30 shl 5))
+    }
+
+    fun allocateVla(sizeRegister: Int, boundsCheck: Boolean = false) {
+        val r = sizeRegister and 31
+        o((if (boundsCheck) 0x91004000L else 0x91003c00L).toInt() or r or (r shl 5))
+        o(0x927cec00.toInt() or r or (r shl 5))
+        o(0xcb2063ff.toInt() or (r shl 16))
+    }
 }
