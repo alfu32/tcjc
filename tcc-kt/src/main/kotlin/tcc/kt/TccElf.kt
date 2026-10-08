@@ -597,6 +597,49 @@ object TccElf {
         }
     }
 
+    fun mergeObjectSymbols(
+        state: ElfState,
+        inputSymbols: List<InputSymbol>,
+        mappings: List<SectionMergeInfo>,
+        outputObject: Boolean,
+        peTarget: Boolean = false,
+        reportDuplicate: (String) -> Unit = {},
+    ): IntArray {
+        val table = state.symbolTable ?: return IntArray(0)
+        if (inputSymbols.isEmpty()) return IntArray(0)
+        val oldToNew = IntArray(inputSymbols.size)
+        for (index in 1 until inputSymbols.size) {
+            val symbol = inputSymbols[index]
+            var value = symbol.value
+            var sectionIndex = symbol.sectionIndex
+            if (sectionIndex != SHN_UNDEF && sectionIndex < 0xff00) {
+                val mapping = mappings.getOrNull(sectionIndex) ?: continue
+                if (mapping.linkOnce) {
+                    if (symbolBind(symbol.info) != STB_LOCAL) {
+                        val existingIndex = findElfSymbol(table, symbol.name)
+                        if (existingIndex != 0) oldToNew[index] = existingIndex
+                    }
+                    continue
+                }
+                val outputSection = mapping.section ?: continue
+                sectionIndex = outputSection.index
+                value += mapping.offset
+            }
+            var info = symbol.info
+            if (sectionIndex == SHN_UNDEF) {
+                var binding = symbolBind(info)
+                val type = info and 0x0f
+                if (binding == STB_LOCAL) binding = STB_GLOBAL
+                val adjustedType = if (!peTarget && outputObject && binding == STB_GLOBAL && type != STT_TLS) STT_NOTYPE else type
+                info = (binding shl 4) or adjustedType
+            }
+            oldToNew[index] = setElfSymbol(
+                state, table, value, symbol.size, info, symbol.other, sectionIndex, symbol.name, reportDuplicate,
+            )
+        }
+        return oldToNew
+    }
+
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
         state.namedSections[".text"] = newSection(state, ".text", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR)
         state.namedSections[".data"] = newSection(state, ".data", SHT_PROGBITS, SHF_ALLOC or SHF_WRITE)
