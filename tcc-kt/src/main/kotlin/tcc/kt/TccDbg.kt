@@ -35,6 +35,26 @@ object TccDbg {
         val lineStrings: StringPool = StringPool(),
     )
     data class DwarfFile(val name: String, val directoryIndex: Int)
+    data class DebugSymbol(
+        val name: String,
+        val stabType: Int,
+        val value: Long,
+        val section: String? = null,
+        val symbolIndex: Int = 0,
+        val typeOffset: Int = 0,
+        val file: Int = 0,
+        val line: Int = 0,
+    )
+    data class DebugScope(
+        val start: Int,
+        val lastTypeIndex: Int,
+        val lastForwardTypeIndex: Int,
+        var end: Int = 0,
+        val symbols: MutableList<DebugSymbol> = mutableListOf(),
+        val children: MutableList<DebugScope> = mutableListOf(),
+    )
+    data class DebugTypeEntry(val identity: Long, val offset: Int)
+    data class ForwardTypeEntry(val identity: Long, val pendingOffsets: MutableList<Int> = mutableListOf())
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -463,6 +483,40 @@ object TccDbg {
         putStabs(state, null, N_SLINE, 0, sourceLine, value)
         return true
     }
+
+    /** Opens a lexical debug scope while retaining the type-table checkpoints to restore at close. */
+    fun openDebugScope(scopes: MutableList<DebugScope>, start: Int, typeCount: Int, forwardTypeCount: Int): DebugScope {
+        return DebugScope(start, typeCount, forwardTypeCount).also { scope ->
+            scopes.lastOrNull()?.children?.add(scope)
+            scopes += scope
+        }
+    }
+
+    /** Closes the active lexical scope and returns its saved type-table checkpoints. */
+    fun closeDebugScope(scopes: MutableList<DebugScope>, end: Int): DebugScope? {
+        if (scopes.isEmpty()) return null
+        return scopes.removeAt(scopes.lastIndex).also { it.end = end }
+    }
+
+    fun findDebugType(entries: List<DebugTypeEntry>, identity: Long): Int =
+        entries.firstOrNull { it.identity == identity }?.offset ?: -1
+
+    fun rememberDebugType(entries: MutableList<DebugTypeEntry>, identity: Long, offset: Int): Int {
+        entries += DebugTypeEntry(identity, offset)
+        return offset
+    }
+
+    fun rememberForwardType(entries: MutableList<ForwardTypeEntry>, identity: Long): ForwardTypeEntry =
+        entries.firstOrNull { it.identity == identity } ?: ForwardTypeEntry(identity).also(entries::add)
+
+    fun resolveForwardType(entries: MutableList<ForwardTypeEntry>, identity: Long, offset: Int, patch32: (Int, Int) -> Unit): Boolean {
+        val pending = entries.firstOrNull { it.identity == identity } ?: return false
+        pending.pendingOffsets.forEach { patch32(it, offset) }
+        entries.remove(pending)
+        return true
+    }
+
+    fun addScopeSymbol(scope: DebugScope, symbol: DebugSymbol) { scope.symbols += symbol }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
