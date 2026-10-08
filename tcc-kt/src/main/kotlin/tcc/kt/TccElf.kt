@@ -689,6 +689,41 @@ object TccElf {
         return contextOffset
     }
 
+    fun addCoverageFile(
+        symbolTable: ElfSection,
+        section: ElfSection?,
+        filename: String,
+        workingDirectory: String,
+        leadingUnderscore: Boolean,
+        compileState: GeneratedCompileState,
+        compileGeneratedSource: (String) -> Unit,
+        removeOldCoverageFile: (String) -> Unit = {},
+        windowsTarget: Boolean = false,
+    ): String? {
+        if (section == null) return null
+        sectionAdd(section, 1, 1)
+        reserveSection(section, maxOf(section.data.size, 4))
+        writeInt32(section.data, 0, section.dataOffset)
+        val coveragePath = (if (filename.startsWith('/')) filename else "$workingDirectory/$filename") + ".tcov"
+        val pathBytes = (if (windowsTarget) coveragePath.replace('/', '\\') else coveragePath).toByteArray(Charsets.UTF_8)
+        val pathOffset = section.dataOffset
+        pathBytes.forEachIndexed { index, byte ->
+            val at = pathOffset + index
+            if (at < section.data.size) section.data[at] = byte else section.data += byte
+        }
+        val terminator = pathOffset + pathBytes.size
+        if (terminator < section.data.size) section.data[terminator] = 0 else section.data += 0
+        section.dataOffset = terminator + 1
+        section.outputSize = section.dataOffset.toLong()
+        val storedPath = if (windowsTarget) coveragePath.replace('/', '\\') else coveragePath
+        removeOldCoverageFile(storedPath)
+        val source = "extern char *__tcov_data[];extern void __store_test_coverage();" +
+            "__attribute__((destructor)) static void __tcov_exit(){__store_test_coverage(__tcov_data);}"
+        compileStringWithoutDebug(compileState, source, compileGeneratedSource)
+        setLocalSymbol(symbolTable, if (leadingUnderscore) "___tcov_data" else "__tcov_data", section, 0)
+        return storedPath
+    }
+
     /** Reads until the requested byte count is reached or the stream reaches EOF. */
     fun fullRead(input: InputStream, count: Int): ByteArray {
         require(count >= 0)
