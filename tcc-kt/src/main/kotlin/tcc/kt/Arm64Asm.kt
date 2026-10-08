@@ -104,7 +104,7 @@ class Arm64Asm(
             addressMode = mode, tokenName = inside[0].trim(), value = value)
     }
 
-    fun emitInstruction(word: Int) { if (!noCode()) output(word) }
+    fun emitInstruction(word: Int): Int { if (!noCode()) output(word); return word }
     fun emitWord(value: Long) = emitInstruction(value.toInt())
 
     fun emitMovWithBase(rd: Int, immediate: Int, shift: Int, is64Bit: Boolean, base: Int): Int =
@@ -215,6 +215,127 @@ class Arm64Asm(
             ((encoded and 63) shl 10) or ((rn and 31) shl 5) or (rd and 31)
         emitInstruction(instruction)
         return instruction
+    }
+
+    fun constraintPriority(constraint: String, warning: (String) -> Unit = {}): Int {
+        var priority = 0
+        var i = 0
+        while (i < constraint.length) {
+            val c = constraint[i++]
+            val rank = when (c) {
+                '=', '+', '&' -> continue
+                'r' -> 1
+                'w', 'f', 'x', 'y' -> 3
+                'm', 'Q' -> 4
+                'i', 'S' -> 5
+                'U' -> if (constraint.startsWith("mp", i)) { i += 2; 4 } else { warning("unknown constraint 'U'"); 0 }
+                'I', 'J', 'K', 'L', 'M', 'N', 'Z' -> 6
+                'n' -> 7
+                'g' -> 8
+                else -> { warning("unknown constraint '$c'"); 0 }
+            }
+            priority = maxOf(priority, rank)
+        }
+        return priority
+    }
+
+    fun skipConstraintModifiers(constraint: String): String = constraint.dropWhile { it in "=&+%" }
+    fun validAddImmediate(value: Long): Boolean = value in 0..4095
+    fun validLogicalImmediate(value: Long, bits: Int): Boolean {
+        val normalized = if (bits == 32) {
+            val word = value.toInt().toLong() and 0xffffffffL
+            word or (word shl 32)
+        } else value
+        return encodeBitmaskImmediate(normalized) >= 0
+    }
+    fun validMoveWideImmediate(value: Long): Boolean {
+        val unsigned = value.toULong()
+        return unsigned <= 0xffffuL ||
+            unsigned >= 0xffff0000uL && (unsigned and 0xffffuL) == 0uL ||
+            unsigned >= 0xffff00000000uL && (unsigned and 0xffffffffuL) == 0uL ||
+            (unsigned and 0xffffffff00000000uL) == 0uL
+    }
+    fun validMoveWideShift(shift: Int, is64Bit: Boolean): Boolean =
+        shift >= 0 && shift and 15 == 0 && shift <= if (is64Bit) 48 else 16
+
+    enum class MemoryValueLocation { CONSTANT, LOCAL, INDIRECT_LOCAL, REGISTER }
+    data class MemoryValue(
+        val location: MemoryValueLocation, val lvalue: Boolean = false, val bounded: Boolean = false,
+        val nonConstant: Boolean = false, val offset: Long = 0, val register: Int = -1,
+    )
+
+    fun memoryIsBaseOnly(value: MemoryValue): Boolean = when (value.location) {
+        MemoryValueLocation.CONSTANT, MemoryValueLocation.LOCAL -> false
+        MemoryValueLocation.INDIRECT_LOCAL -> true
+        MemoryValueLocation.REGISTER -> value.lvalue
+    }
+
+    fun memoryIsPairSuitable(value: MemoryValue): Boolean = memoryIsBaseOnly(value) ||
+        value.location == MemoryValueLocation.LOCAL && value.offset and 7L == 0L && value.offset in -512L..504L
+
+    fun integerRegisterIsAllocatable(register: Int, peTarget: Boolean): Boolean =
+        register in 0..if (peTarget) 17 else 30
+
+    fun memoryNeedsAddressRegister(value: MemoryValue): Boolean = value.lvalue &&
+        value.location in setOf(MemoryValueLocation.LOCAL, MemoryValueLocation.INDIRECT_LOCAL, MemoryValueLocation.CONSTANT)
+
+    fun prepareMemoryOperand(value: MemoryValue, allocated: ByteArray, peTarget: Boolean): Int? {
+        if (!memoryNeedsAddressRegister(value)) return -1
+        for (register in 0 until minOf(31, allocated.size)) {
+            if (integerRegisterIsAllocatable(register, peTarget) && allocated[register].toInt() and 2 == 0) {
+                allocated[register] = (allocated[register].toInt() or 2).toByte()
+                return register
+            }
+        }
+        return null
+    }
+
+    fun memoryBaseToLoad(value: MemoryValue): MemoryValue = when (value.location) {
+        MemoryValueLocation.INDIRECT_LOCAL -> value.copy(location = MemoryValueLocation.LOCAL, lvalue = true)
+        MemoryValueLocation.CONSTANT, MemoryValueLocation.LOCAL -> value.copy(lvalue = false)
+        else -> throw IllegalArgumentException("unsupported ARM64 memory operand base")
+    }
+
+    fun isStackPointer(operand: Operand): Boolean = operand.tokenName.equals("sp", ignoreCase = true)
+    fun parseSystemRegister(name: String): Int = when (name.lowercase()) { "fpcr" -> 0; "fpsr" -> 1; else -> -1 }
+    fun emitMrs(rt: Int, systemRegister: Int): Int {
+        val base = when (systemRegister) { 0 -> 0xd53b4400.toInt(); 1 -> 0xd53b4420.toInt(); else -> { error("unsupported system register"); return 0 } }
+        return emitInstruction(base or (rt and 31))
+    }
+    fun emitMsr(rt: Int, systemRegister: Int): Int {
+        val base = when (systemRegister) { 0 -> 0xd51b4400.toInt(); 1 -> 0xd51b4420.toInt(); else -> { error("unsupported system register"); return 0 } }
+        return emitInstruction(base or (rt and 31))
+    }
+    fun emitNop() = emitInstruction(0xd503201f.toInt())
+
+    fun emitShift(rd: Int, rn: Int, operand: Int, shiftType: Int, immediate: Boolean, is64Bit: Boolean): Int {
+        val width = if (is64Bit) 64 else 32
+        var instruction: Int
+        if (immediate) {
+            if (operand !in 0 until width) { error("shift immediate out of range"); return 0 }
+            instruction = when (shiftType) {
+                0 -> (if (is64Bit) 0xd3400000.toInt() else 0x53000000) or (((width - operand) and (width - 1)) shl 16) or ((width - operand - 1) shl 10)
+                1 -> (if (is64Bit) 0xd3400000.toInt() else 0x53000000) or (operand shl 16) or ((width - 1) shl 10)
+                2 -> (if (is64Bit) 0x93400000.toInt() else 0x13400000) or (operand shl 16) or ((width - 1) shl 10)
+                3 -> (if (is64Bit) 0x93c00000.toInt() else 0x13800000) or ((rn and 31) shl 16) or (operand shl 10) or ((rn and 31) shl 5) or (rd and 31)
+                else -> { error("unknown shift type"); return 0 }
+            }
+            if (shiftType == 3) return emitInstruction(instruction)
+        } else {
+            instruction = when (shiftType) {
+                0 -> 0x1ac02000; 1 -> 0x1ac02400; 2 -> 0x1ac02800; 3 -> 0x1ac02c00
+                else -> { error("unknown shift type"); return 0 }
+            }
+            if (is64Bit) instruction = instruction or 0x80000000.toInt()
+            instruction = instruction or ((operand and 31) shl 16)
+        }
+        instruction = instruction or ((rn and 31) shl 5) or (rd and 31)
+        return emitInstruction(instruction)
+    }
+
+    fun emitBarrier(type: Int, option: Int): Int {
+        val base = when (type) { 0 -> 0xd50330df.toInt(); 1 -> 0xd503309f.toInt(); 2 -> 0xd50330bf.toInt(); else -> { error("unknown barrier type"); return 0 } }
+        return emitInstruction(base or ((option and 15) shl 8))
     }
 
     fun emitBranch(offset: Int, link: Boolean = false) = emitInstruction((if (link) 0x94000000.toInt() else 0x14000000) or ((offset shr 2) and 0x03ffffff))
