@@ -818,6 +818,9 @@ class Riscv64Gen(
         return StackValue(destination)
     }
 
+    fun lowerIntegerComparison(comparison: Comparison, left: StackValue, right: StackValue, destination: Int): StackValue =
+        StackValue(destination, comparison = CompareState(comparison, left.register, right.register))
+
     fun lowerConditionalStackJump(value: StackValue, targetWord: Int): Int {
         val comparison = value.comparison ?: CompareState(Comparison.NOT_EQUAL, value.register, 0)
         val (function3, reverse) = when (comparison.comparison) {
