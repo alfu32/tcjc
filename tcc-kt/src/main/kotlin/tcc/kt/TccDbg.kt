@@ -937,6 +937,7 @@ object TccDbg {
 
     enum class EhTarget { I386, X86_64, ARM, ARM64, RISCV64 }
     data class EhFrameState(val section: DwarfSection, val startOffset: Int, val target: EhTarget)
+    data class EhFrameHeaderEntry(val pcOffset: Long, val fdeOffset: Long)
     data class DwarfSymbolRefs(
         val info: Int, val abbrev: Int, val line: Int, val strings: Int,
         val lineStrings: Int, val text: Int,
@@ -987,6 +988,54 @@ object TccDbg {
         patch32(section, start, section.size - start - 4)
         return EhFrameState(section, start, target)
     }
+
+    /** Builds the sorted .eh_frame_hdr search table from the FDE address pairs. */
+    fun createEhFrameHeader(
+        frameAddress: Long,
+        headerAddress: Long,
+        frameBytes: ByteArray,
+        entries: List<EhFrameHeaderEntry>,
+    ): DwarfSection {
+        val header = DwarfSection(".eh_frame_hdr", flags = 2)
+        writeData1(header, 1) // version
+        writeData1(header, 0x1b) // signed data4, PC relative
+        writeData1(header, 0x03) // unsigned data4 count
+        writeData1(header, 0x3b) // signed data4, data relative table
+        writeData4(header, (frameAddress - headerAddress - header.size).toInt())
+        val sorted = entries.sortedBy { it.pcOffset }
+        writeData4(header, sorted.size)
+        sorted.forEach { entry ->
+            writeData4(header, entry.pcOffset.toInt())
+            writeData4(header, entry.fdeOffset.toInt())
+        }
+        return header
+    }
+
+    fun scanEhFrameHeaderEntries(frameAddress: Long, headerAddress: Long, frame: ByteArray): List<EhFrameHeaderEntry> {
+        val entries = mutableListOf<EhFrameHeaderEntry>()
+        var offset = 0
+        while (offset + 8 <= frame.size) {
+            val length = readInt32(frame, offset)
+            if (length == 0 || length < 8 || offset + length + 4 > frame.size) {
+                offset += 4
+                continue
+            }
+            val ciePointer = readInt32(frame, offset + 4)
+            if (ciePointer != 0) {
+                val fdeAddress = frameAddress + offset
+                val pcField = offset + 8
+                val pc = readInt32(frame, pcField).toLong() + (fdeAddress - headerAddress) + 8
+                val fde = fdeAddress - headerAddress
+                entries += EhFrameHeaderEntry(pc, fde)
+            }
+            offset += length + 4
+        }
+        return entries.sortedBy { it.pcOffset }
+    }
+
+    private fun readInt32(bytes: ByteArray, offset: Int): Int =
+        (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+            ((bytes[offset + 2].toInt() and 0xff) shl 16) or ((bytes[offset + 3].toInt() and 0xff) shl 24)
 
     /** Emits one target's FDE state machine and patches the record length. */
     fun emitEhFrameFde(
