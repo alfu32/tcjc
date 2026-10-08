@@ -410,6 +410,34 @@ object TccElf {
         }
     }
 
+    fun setGlobalSymbol(table: ElfSection, name: String?, section: ElfSection?, offset: Long): Int {
+        val sectionIndex = when {
+            section != null -> section.index
+            offset != 0L || name == null -> SHN_ABS
+            else -> SHN_UNDEF
+        }
+        val value = if (section != null && offset == -1L) section.dataOffset.toLong() else offset
+        val binding = if (name == null) STB_LOCAL else STB_GLOBAL
+        return setElfSymbol(ElfState(), table, value, 0, (binding shl 4) or STT_NOTYPE, 0, sectionIndex, name ?: "")
+    }
+
+    fun addSymbol(
+        state: ElfState,
+        name: String,
+        value: Long,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        addPeImport: (String, Long) -> Unit = { _, _ -> },
+    ): Int {
+        if (peTarget) {
+            addPeImport(name, value)
+            return 0
+        }
+        val decorated = if (leadingUnderscore) "_$name" else name
+        val table = state.symbolTable ?: return 0
+        return setGlobalSymbol(table, decorated, null, value)
+    }
+
     fun putElfRelocation(
         state: ElfState,
         symbolTable: ElfSection,
