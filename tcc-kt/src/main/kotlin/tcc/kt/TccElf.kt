@@ -109,6 +109,35 @@ object TccElf {
         val relro: Boolean,
         val notes: Boolean,
     )
+    data class ElfProgramHeader(
+        var type: Int = 0,
+        var flags: Int = 4,
+        var offset: Long = 0,
+        var virtualAddress: Long = 0,
+        var physicalAddress: Long = 0,
+        var fileSize: Long = 0,
+        var memorySize: Long = 0,
+        var alignment: Long = 1,
+    )
+    data class LayoutRequest(
+        val elfOutput: Boolean = true,
+        val dynamicOutput: Boolean = false,
+        val startAddress: Long = 0x08048000,
+        val hasTextAddress: Boolean = false,
+        val textAddress: Long = 0,
+        val pageSize: Long = 4096,
+        val sectionAlignment: Long = 0,
+        val elfHeaderSize: Int = 52,
+        val programHeaderSize: Int = 32,
+        val sectionHeaderSize: Int = 40,
+    )
+    data class LayoutResult(
+        val headers: List<ElfProgramHeader>,
+        val programHeaderCount: Int,
+        val sectionHeaderOffset: Long,
+        val tlsStart: Long,
+        val tlsEnd: Long,
+    )
     const val NO_GOTPLT_ENTRY = 0
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
@@ -374,6 +403,132 @@ object TccElf {
             classes[index] = programFlags
         }
         return SectionSortResult(listOf(0) + order, classes, sectionCount, loadSegments, hasTls, hasRelro, hasNotes)
+    }
+
+    fun layoutSections(
+        state: ElfState,
+        sorted: SectionSortResult,
+        request: LayoutRequest,
+        interpreter: ElfSection? = null,
+        dynamic: ElfSection? = null,
+        note: ElfSection? = null,
+        ehFrameHeader: ElfSection? = null,
+    ): LayoutResult {
+        var phCount = sorted.loadSegmentCount
+        val phFill = if (interpreter != null) 2 else 0
+        phCount += phFill
+        val dynamicHeader = if (dynamic != null) phCount++ else 0
+        val noteHeader = if (sorted.notes) phCount++ else 0
+        val tlsHeader = if (sorted.tls) phCount++ else 0
+        val ehHeader = if (ehFrameHeader != null) phCount++ else 0
+        val relroHeader = if (sorted.relro) phCount++ else 0
+        val headers = MutableList(phCount) { ElfProgramHeader() }
+        var fileOffset = 0L
+        if (request.elfOutput) {
+            fileOffset = (request.elfHeaderSize + phCount * request.programHeaderSize + 3L) and -4L
+            fileOffset += sorted.sectionCount * request.sectionHeaderSize
+        }
+        val segmentAlignment = if (request.sectionAlignment != 0L) request.sectionAlignment else request.pageSize
+        var address = if (request.dynamicOutput) 0L else request.startAddress
+        if (request.hasTextAddress) address = request.textAddress
+        val baseAddress = address
+        address += fileOffset
+        var loadIndex = 0
+        var activeLoad: ElfProgramHeader? = null
+        var tlsStart = 0L
+        var tlsEnd = 0L
+        sorted.order.drop(1).forEach { sectionIndex ->
+            val section = requireNotNull(state.sections[sectionIndex])
+            val flags = sorted.classes[sectionIndex]
+            var alignmentMask = (section.alignment.coerceAtLeast(1) - 1).toLong()
+            if (flags == 0) {
+                fileOffset = (fileOffset + alignmentMask) and alignmentMask.inv()
+                section.offset = fileOffset
+                if (section.type != SHT_NOBITS) fileOffset += section.outputSize
+                return@forEach
+            }
+            if (flags and (1 shl 4) != 0 && loadIndex != 0) {
+                if (request.elfOutput) {
+                    if (address and (segmentAlignment - 1) != 0L) address += segmentAlignment
+                } else alignmentMask = segmentAlignment - 1
+            }
+            val oldAddress = address
+            address = (address + alignmentMask) and alignmentMask.inv()
+            fileOffset += address - oldAddress
+            section.offset = fileOffset
+            section.address = address
+            address += section.outputSize
+            if (section.type != SHT_NOBITS) fileOffset += section.outputSize
+            if (flags and (1 shl 4) != 0) {
+                val header = headers[phFill + loadIndex]
+                header.type = 1 // PT_LOAD
+                header.flags = 4 or if (section.flags and SHF_WRITE != 0) 2 else 0
+                header.flags = header.flags or if (flags and SHF_EXECINSTR != 0) 1 else 0
+                header.offset = section.offset
+                header.virtualAddress = section.address
+                header.physicalAddress = section.address
+                header.fileSize = section.outputSize
+                header.memorySize = section.outputSize
+                header.alignment = segmentAlignment
+                if (loadIndex == 0) {
+                    header.offset = 0
+                    header.virtualAddress = baseAddress
+                    header.physicalAddress = baseAddress
+                }
+                activeLoad = header
+                loadIndex++
+            }
+            activeLoad?.let { header ->
+                header.fileSize = fileOffset - header.offset
+                header.memorySize = address - header.virtualAddress
+            }
+            if (flags and (1 shl 5) != 0) updateProgramHeader(headers[relroHeader], 0x6474e552, section, address, fileOffset)
+            if (flags and SHF_TLS != 0) {
+                val header = headers[tlsHeader]
+                updateProgramHeader(header, 7, section, address, fileOffset)
+                if (tlsStart == 0L) tlsStart = header.virtualAddress
+                if (section.type == SHT_NOBITS) address -= section.outputSize
+                tlsEnd = tlsStart + header.memorySize + ((-header.memorySize) and (header.alignment - 1))
+            }
+            if (section.type == 7) updateProgramHeader(headers[noteHeader], 4, section, address, fileOffset)
+        }
+        if (dynamic != null) fillProgramHeader(headers[dynamicHeader], 2, dynamic)
+        if (ehFrameHeader != null) fillProgramHeader(headers[ehHeader], 0x6474e550, ehFrameHeader)
+        if (note != null && !sorted.notes) updateProgramHeader(headers[noteHeader], 4, note, address, fileOffset)
+        if (interpreter != null) {
+            val header = headers[1]
+            fillProgramHeader(header, 3, interpreter)
+            header.offset = interpreter.offset
+        }
+        if (phFill != 0) {
+            val header = headers[0]
+            header.type = 6 // PT_PHDR
+            header.offset = request.elfHeaderSize.toLong()
+            header.virtualAddress = baseAddress + header.offset
+            header.physicalAddress = header.virtualAddress
+            header.fileSize = (phCount * request.programHeaderSize).toLong()
+            header.memorySize = header.fileSize
+            header.alignment = 4
+        }
+        return LayoutResult(headers, phCount, (request.elfHeaderSize + phCount * request.programHeaderSize + 3L) and -4L, tlsStart, tlsEnd)
+    }
+
+    private fun fillProgramHeader(header: ElfProgramHeader, type: Int, section: ElfSection) {
+        header.type = type
+        header.flags = 4 or if (section.flags and SHF_WRITE != 0) 2 else 0
+        header.offset = section.offset
+        header.virtualAddress = section.address
+        header.physicalAddress = section.address
+        header.fileSize = section.outputSize
+        header.memorySize = section.outputSize
+        header.alignment = section.alignment.toLong()
+    }
+
+    private fun updateProgramHeader(header: ElfProgramHeader, type: Int, section: ElfSection, address: Long, fileOffset: Long) {
+        if (header.type == 0) fillProgramHeader(header, type, section)
+        header.fileSize = fileOffset - header.offset
+        header.memorySize = address - header.virtualAddress
+        if (type == 0x6474e552) header.alignment = 1
     }
 
     fun initializeSymbolTable(symbols: ElfSection) {
