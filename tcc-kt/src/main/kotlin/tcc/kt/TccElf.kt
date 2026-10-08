@@ -236,6 +236,12 @@ object TccElf {
         val bsdTarget: Boolean = false,
         val prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
     )
+    data class DynamicOutputSections(
+        val symbols: ElfSection,
+        val strings: ElfSection,
+        val dynamic: ElfSection,
+        val interpreter: ElfSection?,
+    )
     data class LinkerScriptToken(val type: Int, val text: String)
 
     class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
@@ -1192,6 +1198,22 @@ object TccElf {
             state.namedSections[".bounds"] = newSection(state, ".bounds", SHT_PROGBITS, SHF_ALLOC)
             state.namedSections[".lbounds"] = newSection(state, ".lbounds", SHT_PROGBITS, SHF_ALLOC)
         }
+    }
+
+    fun initializeDynamicOutput(state: ElfState, interpreterPath: String? = null): DynamicOutputSections {
+        val pair = newSymbolTable(state, ".dynsym", SHT_DYNSYM, SHF_ALLOC, ".dynstr", ".hash", SHF_ALLOC)
+        pair.symbols.sectionInfo = 1
+        state.dynamicOutputSymbols = pair.symbols
+        val dynamic = newSection(state, ".dynamic", SHT_DYNAMIC, SHF_ALLOC or SHF_WRITE)
+        dynamic.link = pair.strings
+        dynamic.entrySize = state.wordSize * 2
+        val interpreter = interpreterPath?.let { path ->
+            newSection(state, ".interp", SHT_PROGBITS, SHF_ALLOC).also { section ->
+                section.alignment = 1
+                appendSection(section, (path + "\u0000").toByteArray(Charsets.UTF_8))
+            }
+        }
+        return DynamicOutputSections(pair.symbols, pair.strings, dynamic, interpreter)
     }
 
     /** Saves section offsets and suspends the main symbol hash during one input file. */
