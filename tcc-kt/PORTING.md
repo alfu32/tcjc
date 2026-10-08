@@ -1,11 +1,11 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 27
+- **DONE:** 28
 - **DOING:** 1
-- **TODO:** 26
-- **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
-- **C tests retained:** all C test programs and test cases under `tests/` except the `tcctest.c` harness
+- **TODO:** 25
+- **Currently doing:** `arm64-link.c` → `src/main/kotlin/tcc/kt/Arm64Link.kt`
+- **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
 Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translation in progress; **DONE** = Kotlin translation completed. C examples and test case sources intentionally remain C.
@@ -57,7 +57,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `tccpp.c` | TODO |
 | `tccrun.c` | DONE |
 | `tcctools.c` | TODO |
-| `tests/tcctest.c` | DOING |
+| `tests/tcctest.c` | DONE |
 | `win32/lib/crt1.c` | DONE |
 | `win32/lib/crt1w.c` | DONE |
 | `win32/lib/crtinit.c` | DONE |
