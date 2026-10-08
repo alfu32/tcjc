@@ -89,6 +89,7 @@ object TccElf {
         val fileSectionMarks: MutableList<Pair<ElfSection, Int>> = mutableListOf(),
         var fileSymbolMark: Int = 0,
         var fileStringMark: Int = 0,
+        val totalOutput: MutableList<Long> = MutableList(4) { 0L },
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
@@ -127,6 +128,59 @@ object TccElf {
         state.fileStringMark = requireNotNull(symbols.link).dataOffset
         symbols.relocation = symbols.hash
         symbols.hash = null
+    }
+
+    /** Merges symbols emitted for one source file and remaps its relocation indices. */
+    fun endInputFile(
+        state: ElfState,
+        outputObject: Boolean,
+        peTarget: Boolean = false,
+        reportDuplicate: (String) -> Unit = {},
+    ): IntArray {
+        val table = state.symbolTable ?: return IntArray(0)
+        val strings = requireNotNull(table.link)
+        val firstSymbol = state.fileSymbolMark
+        val newSymbols = table.symbols.drop(firstSymbol).toList()
+        val newCount = newSymbols.size
+        truncate(table, firstSymbol * table.entrySize)
+        truncate(strings, state.fileStringMark)
+        while (table.symbols.size > firstSymbol) table.symbols.removeAt(table.symbols.lastIndex)
+        table.hash = table.relocation
+        table.relocation = null
+        val translation = IntArray(newCount)
+        newSymbols.forEachIndexed { i, symbol ->
+            var info = symbol.info
+            if (symbol.sectionIndex == SHN_UNDEF) {
+                var binding = symbolBind(info)
+                val type = info and 0x0f
+                if (binding == STB_LOCAL) binding = STB_GLOBAL
+                var adjustedType = type
+                if (!peTarget && outputObject && binding == STB_GLOBAL && type != STT_TLS) adjustedType = STT_NOTYPE
+                info = (binding shl 4) or adjustedType
+            }
+            val name = elfString(strings, symbol.nameOffset)
+            translation[i] = setElfSymbol(state, table, symbol.value, symbol.size, info, symbol.other, symbol.sectionIndex, name, reportDuplicate)
+        }
+        state.sections.drop(1).filterNotNull().forEach { relocationSection ->
+            if (relocationSection.type != SHT_REL && relocationSection.type != SHT_RELA) return@forEach
+            if (relocationSection.link !== table) return@forEach
+            relocationSection.relocations.forEach { relocation ->
+                val localIndex = relocation.symbolIndex - firstSymbol
+                if (localIndex >= 0 && localIndex < translation.size) relocation.symbolIndex = translation[localIndex]
+            }
+        }
+        for (i in 0 until minOf(4, state.sections.size - 1)) {
+            val section = state.sections[i + 1] ?: continue
+            state.totalOutput[i] += section.dataOffset - section.offset.toInt()
+        }
+        state.fileSectionMarks.clear()
+        return translation
+    }
+
+    private fun truncate(section: ElfSection, offset: Int) {
+        require(offset in 0..section.dataOffset)
+        if (section.type != SHT_NOBITS) while (section.data.size > offset) section.data.removeAt(section.data.lastIndex)
+        section.dataOffset = offset
     }
 
     fun newSection(state: ElfState, name: String, type: Int, flags: Int): ElfSection {
