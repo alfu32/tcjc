@@ -723,4 +723,41 @@ class ArmAsm(
         emitCoprocessorOpcode(conditionCode(token, firstConditionToken), 10, opcode,
             armRegister.register, system, 0x10, 0, false)
     }
+
+    /** Encodes VFP load/store multiple, push, and pop register ranges. */
+    fun emitVfpBlockTransfer(
+        group: String, token: Int, firstConditionToken: Int,
+        base: Operand, firstRegister: Operand, lastRegister: Operand,
+        writeback: Boolean = false,
+    ) {
+        val double = firstRegister.kind == Kind.VREG64 && lastRegister.kind == Kind.VREG64
+        val single = firstRegister.kind == Kind.VREG32 && lastRegister.kind == Kind.VREG32
+        if (!double && !single) { expect("VFP register range"); return }
+        if (lastRegister.register < firstRegister.register) { error("VFP registers must be specified in ascending order"); return }
+        val cp = if (double) 11 else 10
+        var first = firstRegister.register
+        var count = lastRegister.register - first + 1
+        var extraBit = 0
+        if (double) count *= 2 else { extraBit = first and 1; first = first ushr 1 }
+        val offsetMagnitude = count shl 2
+        val register = if (group == "vpush" || group == "vpop") Operand(Kind.REG32, register = 13) else base
+        val store: Boolean
+        val pre: Boolean
+        val down: Boolean
+        when (group) {
+            "vstm", "vstmia" -> { store = true; pre = false; down = false }
+            "vldm", "vldmia", "vpop" -> { store = false; pre = false; down = false }
+            "vldmdb" -> { store = false; pre = true; down = true }
+            "vpush", "vstmdb" -> { store = true; pre = true; down = true }
+            else -> { expect("VFP block transfer instruction"); return }
+        }
+        if (register.kind != Kind.REG32 || register.register == 15) { expect("valid base register"); return }
+        if (group !in setOf("vpush", "vpop") && !writeback && group !in setOf("vstm", "vstmia", "vldm", "vldmia")) {
+            error("writeback is required for this VFP block transfer"); return
+        }
+        val offset = Operand(if (down) Kind.IMM8N else Kind.IMM8, value = Expression(if (down) -offsetMagnitude else offsetMagnitude))
+        emitCoprocessorDataTransfer(conditionCode(token, firstConditionToken), cp, first,
+            register, offset, preincrement = pre, writeback = writeback || group == "vpush" || group == "vpop",
+            longTransfer = extraBit != 0, load = !store)
+    }
 }
