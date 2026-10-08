@@ -29,6 +29,7 @@ object TccElf {
     const val STT_OBJECT = 1
     const val STT_FUNC = 2
     const val STT_TLS = 6
+    const val STT_GNU_IFUNC = 10
     const val STV_DEFAULT = 0
     const val STV_INTERNAL = 1
     const val STV_HIDDEN = 2
@@ -84,6 +85,7 @@ object TccElf {
         val sections: MutableList<ElfSection?> = mutableListOf(null),
         val privateSections: MutableList<ElfSection> = mutableListOf(),
         var dynamicSymbolTable: ElfSection? = null,
+        var dynamicOutputSymbols: ElfSection? = null,
         var symbolTable: ElfSection? = null,
         val namedSections: MutableMap<String, ElfSection> = mutableMapOf(),
         val symbolTables: MutableMap<String, SymbolTablePair> = mutableMapOf(),
@@ -800,6 +802,84 @@ object TccElf {
         }
     }
 
+    fun bindExecutableDynamicSymbols(
+        state: ElfState,
+        isPie: Boolean,
+        copyRelocationType: Int,
+        unresolved: (String) -> Unit = {},
+    ) {
+        if (isPie) return
+        val symbols = state.symbolTable ?: return
+        val external = state.dynamicSymbolTable ?: return
+        val outputDynamic = state.dynamicOutputSymbols ?: return
+        val bss = state.namedSections[".bss"] ?: return
+        symbols.symbols.drop(1).forEachIndexed { indexInDrop, symbol ->
+            if (symbol.sectionIndex != SHN_UNDEF && symbol.sectionIndex != SHN_COMMON && symbol.sectionIndex != bss.index) return@forEachIndexed
+            val name = elfString(requireNotNull(symbols.link), symbol.nameOffset)
+            val externalIndex = findElfSymbol(external, name)
+            val dynamic = external.symbols.getOrNull(externalIndex)
+            if (externalIndex != 0 && dynamic != null && dynamic.sectionIndex != SHN_UNDEF) {
+                val type = dynamic.info and 0x0f
+                val mainIndex = indexInDrop + 1
+                if (type == STT_FUNC || type == STT_GNU_IFUNC) {
+                    val dynIndex = putElfSymbol(outputDynamic, 0, dynamic.size, (STB_GLOBAL shl 4) or STT_FUNC, 0, SHN_UNDEF, name)
+                    getSymbolAttributes(state, mainIndex, true)?.dynamicIndex = dynIndex
+                } else if (type == STT_OBJECT) {
+                    val offset = if (symbol.sectionIndex == bss.index) symbol.value.toInt() else {
+                        val aligned = (bss.dataOffset + 15) and -16
+                        bss.dataOffset = aligned + dynamic.size.toInt()
+                        bss.allocatedSize = maxOf(bss.allocatedSize, bss.dataOffset)
+                        aligned
+                    }
+                    symbol.value = offset.toLong(); symbol.size = dynamic.size; symbol.sectionIndex = bss.index
+                    val dynIndex = putElfSymbol(outputDynamic, offset.toLong(), dynamic.size, dynamic.info, 0, bss.index, name)
+                    getSymbolAttributes(state, mainIndex, true)?.dynamicIndex = dynIndex
+                    if (symbolBind(dynamic.info) == STB_WEAK) {
+                        external.symbols.drop(1).firstOrNull { it.value == dynamic.value && symbolBind(it.info) == STB_GLOBAL }?.let { alias ->
+                            putElfSymbol(outputDynamic, offset.toLong(), alias.size, alias.info, 0, bss.index,
+                                elfString(requireNotNull(external.link), alias.nameOffset))
+                        }
+                    }
+                    putElfRelocation(state, outputDynamic, bss, offset.toLong(), copyRelocationType, dynIndex)
+                }
+            } else if (symbol.sectionIndex == SHN_UNDEF && symbolBind(symbol.info) != STB_WEAK && name != "_fp_hw") {
+                unresolved("unresolved reference to '$name'")
+            }
+        }
+        setLinkerSymbol(state, "_end", bss, 2, unresolved)
+    }
+
+    fun bindLibraryDynamicSymbols(state: ElfState, exportAll: Boolean, unresolved: (String) -> Unit = {}) {
+        val symbols = state.symbolTable ?: return
+        val external = state.dynamicSymbolTable ?: return
+        val outputDynamic = state.dynamicOutputSymbols ?: return
+        symbols.symbols.drop(1).forEach { symbol ->
+            val name = elfString(requireNotNull(symbols.link), symbol.nameOffset)
+            val externalIndex = findElfSymbol(external, name)
+            if (symbol.sectionIndex != SHN_UNDEF) {
+                if (symbolBind(symbol.info) != STB_LOCAL && (externalIndex != 0 || exportAll)) {
+                    setElfSymbol(state, outputDynamic, symbol.value, symbol.size, symbol.info, 0, symbol.sectionIndex, name)
+                }
+            } else if (externalIndex != 0) {
+                val dependency = external.symbols[externalIndex]
+                if (dependency.sectionIndex == SHN_UNDEF && symbolBind(dependency.info) != STB_WEAK) {
+                    unresolved("unresolved dynamic reference to '$name'")
+                }
+            }
+        }
+    }
+
+    fun exportGlobalSymbols(state: ElfState) {
+        val symbols = state.symbolTable ?: return
+        val outputDynamic = state.dynamicOutputSymbols ?: return
+        symbols.symbols.forEachIndexed { index, symbol ->
+            if (symbolBind(symbol.info) == STB_LOCAL) return@forEachIndexed
+            val name = elfString(requireNotNull(symbols.link), symbol.nameOffset)
+            val dynamicIndex = setElfSymbol(state, outputDynamic, symbol.value, symbol.size, symbol.info, 0, symbol.sectionIndex, name)
+            getSymbolAttributes(state, index, true)?.dynamicIndex = dynamicIndex
+        }
+    }
+
     fun relocateSection(
         state: ElfState,
         target: ElfSection,
@@ -991,6 +1071,7 @@ object TccElf {
         state.symbolAttributes.clear()
         state.fileSectionMarks.clear()
         state.dynamicSymbolTable = null
+        state.dynamicOutputSymbols = null
         state.symbolTable = null
         state.fileSymbolMark = 0
         state.fileStringMark = 0
