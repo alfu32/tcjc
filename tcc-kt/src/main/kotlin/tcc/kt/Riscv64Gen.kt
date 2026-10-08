@@ -21,6 +21,16 @@ class Riscv64Gen(
         const val LDOUBLE_SIZE = 16
         const val LDOUBLE_ALIGN = 16
         const val MAX_ALIGN = 16
+        const val VT_BYTE = 1
+        const val VT_SHORT = 2
+        const val VT_INT = 3
+        const val VT_LLONG = 4
+        const val VT_PTR = 5
+        const val VT_FUNC = 6
+        const val VT_STRUCT = 7
+        const val VT_FLOAT = 8
+        const val VT_DOUBLE = 9
+        const val VT_LDOUBLE = 10
         const val RC_R0 = 1 shl 2
         const val RC_F0 = 1 shl 10
         val TARGET_MACHINE_DEFS = listOf("__riscv", "__riscv_xlen 64", "__riscv_flen 64", "__riscv_div", "__riscv_mul", "__riscv_fdiv", "__riscv_fsqrt", "__riscv_float_abi_double")
@@ -159,6 +169,119 @@ class Riscv64Gen(
         emitImmediate(0x13, 1, register, register, 12)
         emitImmediate(0x13, 0, register, register, sign11((low shl 12 shr 12) shr 8))
         emitImmediate(0x13, 1, register, register, 8)
+    }
+
+    fun load(register: Int, value: Value) {
+        val destination = if (isIntegerRegister(register)) integerRegister(register) else floatingRegister(register)
+        var offset = value.value.toInt()
+        val floating = !isIntegerRegister(register)
+        if (value.isLValue) {
+            var size = value.typeSize
+            if (value.baseType == VT_PTR || value.baseType == VT_FUNC) size = PTR_SIZE
+            val unsigned = value.isUnsigned && value.baseType != VT_FLOAT && value.baseType != VT_DOUBLE
+            var function3 = when (size) { 1 -> 0; 2 -> 1; 4 -> 2; else -> 3 }
+            if (size < 4 && unsigned) function3 = function3 or 4
+            var base: Int
+            when {
+                value.kind == ValueKind.LOCAL || value.symbol != null -> {
+                    val resolved = loadSymbolOffset(register, value, false, offset)
+                    base = resolved.register; offset = resolved.offset
+                }
+                value.kind == ValueKind.REGISTER -> { base = integerRegister(value.register); offset = 0 }
+                value.kind == ValueKind.LOCAL_LVALUE -> {
+                    val resolved = loadSymbolOffset(register, value, false, offset)
+                    emitImmediate(0x03, 3, destination, resolved.register, resolved.offset)
+                    base = destination; offset = 0
+                }
+                value.kind == ValueKind.CONSTANT -> {
+                    val upper = (value.value shr 32).toInt()
+                    if (upper != 0) { loadLargeConstant(destination, offset, upper); offset = sign7(offset) }
+                    else { emitInstruction(0x37 or (destination shl 7) or lowOverflow(offset)); offset = sign11(offset) }
+                    base = destination
+                }
+                else -> { error("unimp: load(non-local lval)"); return }
+            }
+            emitImmediate(if (floating) 0x07 else 0x03, function3, destination, base, offset)
+            return
+        }
+
+        if (value.kind == ValueKind.CONSTANT) {
+            if ((value.baseType == VT_FLOAT || value.baseType == VT_DOUBLE) && value.baseType != VT_LDOUBLE) {
+                val isDouble = value.baseType == VT_DOUBLE
+                if (value.value == 0L) {
+                    emitInstruction(0x53 or (destination shl 7) or ((0x78 or if (isDouble) 1 else 0) shl 25))
+                    return
+                }
+                if (isDouble) loadLargeConstant(6, value.value.toInt(), (value.value shr 32).toInt())
+                else {
+                    if (lowOverflow(offset) != 0) emitInstruction(0x37 or (6 shl 7) or lowOverflow(offset))
+                    emitImmediate(0x1b, 0, 6, if (lowOverflow(offset) != 0) 6 else 0, sign11(offset))
+                }
+                emitInstruction(0x53 or (destination shl 7) or (6 shl 15) or ((0x78 or if (isDouble) 1 else 0) shl 25))
+                return
+            }
+            require(isIntegerRegister(register) || value.baseType == VT_LDOUBLE)
+            var base = 0
+            var useWord = 8
+            var zeroExtend = false
+            if (value.symbol != null) {
+                val resolved = loadSymbolOffset(register, value, false, offset)
+                base = resolved.register; offset = resolved.offset; useWord = 0
+            }
+            if (useWord != 0 && offset.toLong() != value.value) {
+                val upper = (value.value shr 32).toInt()
+                if (upper != 0) { loadLargeConstant(destination, offset, upper); offset = sign7(offset); base = destination; useWord = 0 }
+                else if (value.isLongLong) zeroExtend = true
+            }
+            if (lowOverflow(offset) != 0) { emitInstruction(0x37 or (destination shl 7) or lowOverflow(offset)); base = destination }
+            if (offset != 0 || destination != base || useWord != 0 || value.symbol != null)
+                emitImmediate(0x13 or useWord, 0, destination, base, sign11(offset))
+            if (zeroExtend) { emitImmediate(0x13, 1, destination, destination, 32); emitImmediate(0x13, 5, destination, destination, 32) }
+            return
+        }
+        if (value.kind == ValueKind.LOCAL) {
+            val address = loadSymbolOffset(register, value, false, offset)
+            require(isIntegerRegister(register))
+            emitImmediate(0x13, 0, destination, address.register, address.offset)
+            return
+        }
+        if (value.kind == ValueKind.REGISTER) {
+            val source = if (isFloatingRegister(value.register)) floatingRegister(value.register) else integerRegister(value.register)
+            if (floating && isFloatingRegister(value.register)) {
+                emitRegister(0x53, 0, destination, source, source, if (value.baseType == VT_DOUBLE) 0x11 else 0x10)
+            } else if (!floating && isIntegerRegister(value.register)) emitImmediate(0x13, 0, destination, source, 0)
+            else {
+                val size = value.typeSize
+                require(size == 4 || size == 8)
+                var function7 = if (isIntegerRegister(register)) 0x70 else 0x78
+                if (size == 8) function7 = function7 or 1
+                emitInstruction(0x53 or (destination shl 7) or (source shl 15) or (function7 shl 25))
+            }
+            return
+        }
+        error("unimp: load(non-const)")
+    }
+
+    fun store(register: Int, value: Value) {
+        val source = if (isIntegerRegister(register)) integerRegister(register) else floatingRegister(register)
+        var offset = value.value.toInt()
+        val size = when (value.baseType) { VT_LDOUBLE -> 8; else -> value.typeSize }
+        if (value.baseType == VT_STRUCT || size > 8) { error("unimp: large sized store"); return }
+        if (!value.isLValue) { error("store expects lvalue"); return }
+        if (value.isFloating && !isFloatingRegister(register) && value.baseType != VT_LDOUBLE) { error("float store requires floating register"); return }
+        val base = when {
+            value.kind == ValueKind.LOCAL || value.symbol != null -> loadSymbolOffset(register, value, true, offset).also { offset = it.offset }.register
+            value.kind == ValueKind.REGISTER -> integerRegister(value.register).also { offset = 0 }
+            value.kind == ValueKind.CONSTANT -> {
+                val upper = (value.value shr 32).toInt()
+                if (upper != 0) { loadLargeConstant(8, offset, upper); offset = sign7(offset) }
+                else { emitInstruction(0x37 or (8 shl 7) or lowOverflow(offset)); offset = sign11(offset) }
+                8
+            }
+            else -> { error("implement store of non-local lvalue"); return }
+        }
+        val function3 = when (size) { 1 -> 0; 2 -> 1; 4 -> 2; else -> 3 }
+        emitStore(if (isFloatingRegister(register)) 0x27 else 0x23, function3, base, source, offset)
     }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
