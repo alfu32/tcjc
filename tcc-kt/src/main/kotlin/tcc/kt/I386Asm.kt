@@ -146,11 +146,26 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         }
         val group = groupForMnemonic(instruction, mnemonic)
         val finalOpcode = opcodeForMnemonic(instruction, mnemonic, opcode)
+        if ((finalOpcode and 0xff) in setOf(0x9a, 0xea) && operands.size == 2) {
+            emit(finalOpcode)
+            emitExpression(operands[1].expression, false)
+            val selector = operands[0].expression
+            require(selector.symbol == null) { "cannot relocate a far segment selector" }
+            emit(selector.value)
+            emit(selector.value ushr 8)
+            return true
+        }
+        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == 25) {
+            emit(finalOpcode)
+            displacement32(operands[0].expression, currentPosition(), sameSectionAddress)
+            return true
+        }
         if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == 26) {
             branch(finalOpcode, operands[0].expression, currentPosition(), sameSectionAddress)
             return true
         }
-        emitInstruction(instruction, operands, finalOpcode, groupOverride = group, emitExpression = emitExpression)
+        val multiplyGroup = if (mnemonic.startsWith("imul") && operands.size == 2 && operands[0].type and (OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32) != 0 && (finalOpcode and 0xff) in setOf(0x69, 0x6b)) operands[1].register else null
+        emitInstruction(instruction, operands, finalOpcode, groupOverride = multiplyGroup ?: group, emitExpression = emitExpression)
         return true
     }
 
