@@ -65,6 +65,17 @@ object TccDbg {
     }
     data class DebugMember(val name: String, val type: DebugType, val bitOffset: Int, val bitSize: Int = 0)
     data class StabsTypeContext(var nextId: Int = 0, val aggregateIds: MutableMap<Long, Int> = mutableMapOf(), val definedAggregates: MutableSet<Long> = mutableSetOf())
+    data class DwarfTypeContext(
+        val section: DwarfSection,
+        val strings: DebugSections,
+        val refs: DwarfSymbolRefs,
+        val unitStart: Int,
+        val pointerSize: Int,
+        val file: Int,
+        val line: Int,
+        val baseTypes: MutableMap<Int, Int> = mutableMapOf(),
+        val typeOffsets: MutableMap<Long, Int> = mutableMapOf(),
+    )
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -557,6 +568,77 @@ object TccDbg {
             }
         }
         return render(type)
+    }
+
+    /** Emits DWARF type DIEs using the abbreviation numbers from tccdbg.c. */
+    fun emitDwarfType(type: DebugType, context: DwarfTypeContext): Int {
+        fun ref(offset: Int) = offset - context.unitStart
+        fun name(value: String) = writeStringReference(context.strings, context.section, value, context.refs.strings, pointerSize = context.pointerSize)
+        fun emit(current: DebugType): Int = when (current) {
+            is DebugType.Base -> context.baseTypes[current.code] ?: error("missing DWARF base type ${current.code}")
+            is DebugType.Pointer -> {
+                val target = emit(current.target)
+                val offset = context.section.size
+                writeData1(context.section, 7); writeData1(context.section, context.pointerSize)
+                writeData4(context.section, ref(target)); offset
+            }
+            is DebugType.ArrayType -> {
+                val element = emit(current.element)
+                val offset = context.section.size
+                writeData1(context.section, 8); writeData4(context.section, ref(element))
+                val sibling = context.section.size; writeData4(context.section, 0)
+                writeData1(context.section, 9); writeData4(context.section, ref(element)); writeUleb(context.section, current.upperBound.toLong())
+                writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)); offset
+            }
+            is DebugType.Aggregate -> {
+                context.typeOffsets[current.identity]?.let { return it }
+                val offset = context.section.size
+                context.typeOffsets[current.identity] = offset
+                val hasMembers = current.members.isNotEmpty()
+                writeData1(context.section, if (current.isUnion) if (hasMembers) 18 else 19 else if (hasMembers) 16 else 17)
+                name(current.name); writeUleb(context.section, current.byteSize.toLong())
+                writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
+                val sibling = if (hasMembers) context.section.size.also { writeData4(context.section, 0) } else -1
+                current.members.forEach { member ->
+                    val memberType = emit(member.type)
+                    writeData1(context.section, if (member.bitSize > 0) 15 else 14); name(member.name)
+                    writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
+                    val typeOffset = context.section.size; writeData4(context.section, ref(memberType))
+                    if (member.bitSize > 0) { writeUleb(context.section, member.bitSize.toLong()); writeUleb(context.section, member.bitOffset.toLong()) }
+                    context.strings.relocations.getOrPut(context.section.name) { mutableListOf() }
+                        .add(Relocation(typeOffset, "R_DATA_32DW", context.refs.info))
+                }
+                if (hasMembers) { writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)) }
+                offset
+            }
+            is DebugType.Enumeration -> {
+                context.typeOffsets[current.identity]?.let { return it }
+                val offset = context.section.size; context.typeOffsets[current.identity] = offset
+                writeData1(context.section, 13); name(current.name); writeData1(context.section, if (current.unsigned) 7 else 5); writeData1(context.section, 4)
+                writeData4(context.section, 0); writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
+                val sibling = context.section.size; writeData4(context.section, 0)
+                current.values.forEach { (enumName, value) ->
+                    writeData1(context.section, if (current.unsigned) 12 else 11); name(enumName)
+                    if (current.unsigned) writeUleb(context.section, value) else writeSleb(context.section, value)
+                }
+                writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)); offset
+            }
+            is DebugType.Function -> {
+                val result = emit(current.result); val offset = context.section.size
+                writeData1(context.section, if (current.parameters.isEmpty()) 25 else 24)
+                writeData4(context.section, ref(result))
+                if (current.parameters.isNotEmpty()) {
+                    val sibling = context.section.size; writeData4(context.section, 0)
+                    current.parameters.forEach { parameter ->
+                        val parameterType = emit(parameter)
+                        writeData1(context.section, 26); writeData4(context.section, ref(parameterType))
+                    }
+                    writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size))
+                }
+                offset
+            }
+        }
+        return emit(type)
     }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
