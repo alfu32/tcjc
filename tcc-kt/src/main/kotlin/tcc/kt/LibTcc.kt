@@ -32,7 +32,20 @@ class LibTcc(
         var sectionAlignment: ULong = 0uL, var symbolic: Boolean = false, var exportDynamic: Boolean = false,
         var enableNewDtags: Boolean = false, var noDelete: Boolean = false, var linkerArgumentIndex: Int = 0,
         val linkerArguments: MutableList<String> = mutableListOf(), var outputFormatName: String? = null,
+        var optionPthread: Boolean = false, var doBench: Boolean = false, var optionR: Boolean = false,
+        var charIsUnsigned: Boolean = false, var leadingUnderscore: Boolean = false,
+        var dollarsInIdentifiers: Boolean = false, var testCoverage: Boolean = false,
+        var reverseFuncargs: Boolean = false, var gnu89Inline: Boolean = false,
+        var msBitfields: Boolean = false, var noSse: Boolean = false,
+        var warnAll: Boolean = false, var warnWriteStrings: Boolean = false,
+        var warnUnsupported: Boolean = false, var warnNoneMode: Boolean = false,
+        var optimize: Int = 0, var debugLevel: Int = 0, var preprocessOnly: Boolean = false,
+        var generateDependencies: Boolean = false, var justDependencies: Boolean = false,
+        var includeSystemDependencies: Boolean = false, var generatePhonyDependencies: Boolean = false,
+        var dependencyOutputFile: String? = null, var runCommand: String? = null,
     )
+    data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
+    data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
     data class LinkOptionMatch(val result: Int, val optionArgument: String?, val pendingSeparateArgument: Boolean = false)
     data class DllReference(val name: String, var level: Int = 0, var found: Boolean = false, var index: Int = 0, var handle: Any? = null)
     data class CompileHooks(
@@ -84,6 +97,37 @@ class LibTcc(
         const val TYPE_WHOLE_ARCHIVE = 32
         const val FILE_NOT_FOUND = -2
         const val FILE_NOT_RECOGNIZED = -3
+        const val OPTION_HELP = -1
+        const val OPTION_HELP2 = -2
+        const val OPTION_PRINT_DIRS = -3
+        const val OPTION_AR = -4
+        const val OPTION_IMPDEF = -5
+        const val OPTION_V = -6
+        const val OPTION_ARGS_ERROR = -1
+        const val WARN_ERR = 2
+        const val WARN_NOE = 4
+
+        val TCC_OPTIONS = listOf(
+            TccOption("h", "help"), TccOption("-help", "help"), TccOption("?", "help"), TccOption("hh", "help2"),
+            TccOption("v", "verbose", true, true), TccOption("-version", "verbose"),
+            TccOption("I", "includePath", true), TccOption("D", "define", true), TccOption("U", "undefine", true),
+            TccOption("P", "P", true, true), TccOption("L", "libraryPath", true), TccOption("B", "libPath", true),
+            TccOption("l", "library", true), TccOption("bench", "bench"), TccOption("g", "debug", true, true),
+            TccOption("c", "object"), TccOption("d", "d", true, true), TccOption("static", "static"),
+            TccOption("std", "std", true, true), TccOption("shared", "shared"), TccOption("soname", "soname", true),
+            TccOption("o", "output", true), TccOption("pthread", "pthread"), TccOption("run", "run", true, true),
+            TccOption("rdynamic", "rdynamic"), TccOption("r", "relocatable"), TccOption("Wl,", "linker", true, true),
+            TccOption("Wp,", "preprocessor", true, true), TccOption("W", "warning", true, true),
+            TccOption("O", "optimize", true, true), TccOption("m", "machine", true, true), TccOption("f", "feature", true, true),
+            TccOption("isystem", "systemInclude", true), TccOption("include", "include", true),
+            TccOption("nostdinc", "nostdinc"), TccOption("nostdlib", "nostdlib"),
+            TccOption("print-search-dirs", "printDirs"), TccOption("w", "warnNone"), TccOption("E", "preprocess"),
+            TccOption("M", "M"), TccOption("MM", "MM"), TccOption("MD", "MD", true, true), TccOption("MMD", "MMD", true, true),
+            TccOption("MF", "MF", true), TccOption("MP", "MP"), TccOption("x", "language", true), TccOption("ar", "ar"),
+            TccOption("arch", "ignoredArg", true), TccOption("C", "ignored"), TccOption("-param", "ignoredArg", true),
+            TccOption("pedantic", "ignored"), TccOption("pie", "ignored"), TccOption("no-pie", "ignored"),
+            TccOption("pipe", "ignored"), TccOption("s", "ignored"), TccOption("traditional", "ignored"),
+        )
     }
 
     var state: CompilerState? = null
@@ -329,6 +373,148 @@ class LibTcc(
             compilerState.linkerArgumentIndex++
         }
         return 0
+    }
+
+    /** Option-table matcher and common command line actions from tcc_parse_args. */
+    fun parseArguments(compilerState: CompilerState, arguments: List<String>, readListFile: (String) -> String? = { null },
+        setLinker: (String) -> Int = { 0 }, pointerBits: Int = 64, nativeRun: Boolean = true): ParsedArguments {
+        val argv = arguments.toMutableList()
+        var index = if (argv.isNotEmpty()) 1 else 0
+        var empty = true
+        fun fail(message: String): ParsedArguments {
+            reportError(compilerState, ERROR_NO_ABORT, message)
+            return ParsedArguments(-1, argv.drop(index), argv.toList())
+        }
+        while (index < argv.size) {
+            val raw = argv[index]
+            if (raw.startsWith('@') && raw.length > 1) {
+                val content = readListFile(raw.substring(1)) ?: return fail("listfile '${raw.substring(1)}' not found")
+                argv.removeAt(index)
+                argv.addAll(index, splitArguments(content, '\u0000'))
+                continue
+            }
+            index++
+            if (!raw.startsWith('-') || raw == "-") {
+                compilerState.inputFiles += raw
+                empty = false
+                if (compilerState.runCommand != null) break
+                continue
+            }
+            if (raw == "--") break
+            var selected: TccOption? = null
+            var optionArgument = ""
+            for (option in TCC_OPTIONS) {
+                val tail = raw.substring(1)
+                if (!tail.startsWith(option.name)) continue
+                val rest = tail.substring(option.name.length)
+                if (!option.hasArgument && rest.isNotEmpty()) continue
+                selected = option
+                optionArgument = rest
+                if (option.hasArgument && rest.isEmpty() && !option.noSeparateArgument) {
+                    if (index >= argv.size) return fail("argument to '$raw' is missing")
+                    optionArgument = argv[index++]
+                }
+                break
+            }
+            if (selected == null) return fail("invalid option -- '$raw'")
+            when (selected.index) {
+                "help" -> return ParsedArguments(OPTION_HELP, argv.drop(index - 1), argv.toList())
+                "help2" -> return ParsedArguments(OPTION_HELP2, argv.drop(index - 1), argv.toList())
+                "printDirs" -> return ParsedArguments(OPTION_PRINT_DIRS, argv.drop(index - 1), argv.toList())
+                "includePath" -> addIncludePath(compilerState, optionArgument)
+                "systemInclude" -> addSystemIncludePath(compilerState, optionArgument)
+                "libraryPath" -> addLibraryPath(compilerState, optionArgument)
+                "libPath" -> setLibraryPath(compilerState, optionArgument)
+                "define" -> defineSymbol(compilerState, optionArgument)
+                "undefine" -> undefineSymbol(compilerState, optionArgument)
+                "library" -> { compilerState.inputFiles += optionArgument; compilerState.linkerArguments += "-l$optionArgument" }
+                "output" -> compilerState.outputFile = optionArgument
+                "soname" -> compilerState.soname = optionArgument
+                "object" -> compilerState.outputType = OUTPUT_OBJECT
+                "shared" -> compilerState.outputType = 5
+                "relocatable" -> { compilerState.optionR = true; compilerState.outputType = OUTPUT_OBJECT }
+                "preprocess" -> compilerState.outputType = OUTPUT_PREPROCESS
+                "nostdinc" -> compilerState.noStandardIncludes = true
+                "nostdlib" -> compilerState.noStandardLibrary = true
+                "static" -> compilerState.staticLink = true
+                "pthread" -> compilerState.optionPthread = true
+                "bench" -> compilerState.doBench = true
+                "verbose" -> compilerState.verbose += if (selected.name == "v") optionArgument.length.coerceAtLeast(1) else 1
+                "warnNone" -> compilerState.warnNoneMode = true
+                "feature" -> if (!setFeatureFlag(compilerState, optionArgument)) return fail("unsupported option '$raw'")
+                "warning" -> if (optionArgument.isNotEmpty() && !setWarningFlag(compilerState, optionArgument)) return fail("unsupported option '$raw'")
+                "machine" -> {
+                    val requested = optionArgument.toIntOrNull()
+                    if (requested == 32 || requested == 64) {
+                        if (requested != pointerBits) return ParsedArguments(requested, argv.drop(index), argv.toList())
+                    } else if (optionArgument != "ms-bitfields" && optionArgument != "sse") return fail("unsupported option '$raw'")
+                }
+                "optimize" -> compilerState.optimize = optionArgument.firstOrNull()?.digitToIntOrNull() ?: if (optionArgument == "s") 2 else 1
+                "std" -> if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112
+                "debug" -> compilerState.debug = true
+                "linker" -> if (setLinker(optionArgument) < 0) return ParsedArguments(-1, argv.drop(index), argv.toList())
+                "preprocessor" -> argv.addAll(index - 1, splitArguments(optionArgument, ','))
+                "run" -> {
+                    if (!nativeRun) return fail("-run is not available in a cross compiler")
+                    compilerState.runCommand = optionArgument
+                    compilerState.outputType = OUTPUT_MEMORY
+                }
+                "M", "MM", "MD", "MMD", "MF", "MP" -> {
+                    when (selected.index) {
+                        "M" -> { compilerState.includeSystemDependencies = true; compilerState.justDependencies = true; compilerState.generateDependencies = true; compilerState.dependencyOutputFile = "-" }
+                        "MM" -> { compilerState.justDependencies = true; compilerState.generateDependencies = true; compilerState.dependencyOutputFile = "-" }
+                        "MD" -> { compilerState.includeSystemDependencies = true; compilerState.generateDependencies = true; if (optionArgument.isNotEmpty()) compilerState.dependencyOutputFile = optionArgument }
+                        "MMD" -> { compilerState.generateDependencies = true; if (optionArgument.isNotEmpty()) compilerState.dependencyOutputFile = optionArgument }
+                        "MF" -> compilerState.dependencyOutputFile = optionArgument
+                        "MP" -> compilerState.generatePhonyDependencies = true
+                    }
+                }
+                "language" -> compilerState.fileType = when (optionArgument.firstOrNull()) { 'c' -> TYPE_C; 'a' -> TYPE_ASM_PREPROCESSED; 'b' -> TYPE_BINARY; 'n' -> 0; else -> compilerState.fileType }
+                "ignored", "ignoredArg" -> Unit
+                "P", "d" -> Unit
+                "ar" -> return ParsedArguments(OPTION_AR, argv.drop(index - 1), argv.toList())
+                "rdynamic" -> compilerState.exportDynamic = true
+            }
+            empty = false
+        }
+        if (compilerState.runCommand != null) return ParsedArguments(0, argv.drop(index), argv.toList())
+        if (!empty) return ParsedArguments(0, argv.drop(index), argv.toList())
+        return ParsedArguments(if (compilerState.verbose == 2) OPTION_PRINT_DIRS else if (compilerState.verbose != 0) OPTION_V else OPTION_HELP, argv.drop(index), argv.toList())
+    }
+
+    private fun setFeatureFlag(s: CompilerState, flag: String): Boolean {
+        val enabled = !flag.startsWith("no-")
+        val name = flag.removePrefix("no-")
+        when (name) {
+            "unsigned-char" -> s.charIsUnsigned = enabled
+            "signed-char" -> s.charIsUnsigned = !enabled
+            "common" -> s.noCommon = !enabled
+            "leading-underscore" -> s.leadingUnderscore = enabled
+            "ms-extensions" -> s.msExtensions = enabled
+            "dollars-in-identifiers" -> s.dollarsInIdentifiers = enabled
+            "test-coverage" -> s.testCoverage = enabled
+            "reverse-funcargs" -> s.reverseFuncargs = enabled
+            "gnu89-inline" -> s.gnu89Inline = enabled
+            "asynchronous-unwind-tables" -> s.unwindTables = enabled
+            else -> return false
+        }
+        return true
+    }
+
+    private fun setWarningFlag(s: CompilerState, flag: String): Boolean {
+        val enabled = !flag.startsWith("no-")
+        val name = flag.removePrefix("no-")
+        when {
+            name == "all" -> { s.warnAll = enabled; s.warnImplicitFunction = enabled; s.warnDiscardedQualifiers = enabled }
+            name == "error" -> s.warnError = enabled
+            name == "write-strings" -> s.warnWriteStrings = enabled
+            name == "unsupported" -> s.warnUnsupported = enabled
+            name == "implicit-function-declaration" -> s.warnImplicitFunction = enabled
+            name == "discarded-qualifiers" -> s.warnDiscardedQualifiers = enabled
+            name.startsWith("error=") -> { s.warningOption = if (enabled) WARN_ON or WARN_ERR else WARN_NOE }
+            else -> return false
+        }
+        return true
     }
 
     fun copyTruncated(destination: ByteArray, source: String): ByteArray {
