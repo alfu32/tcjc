@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 47
+- **DONE:** 48
 - **DOING:** 1
-- **TODO:** 7
-- **Currently doing:** `tccelf.c` → `src/main/kotlin/tcc/kt/TccElf.kt`
+- **TODO:** 5
+- **Currently doing:** `tccgen.c` → `src/main/kotlin/tcc/kt/TccGen.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -50,8 +50,8 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `tccasm.c` | DONE |
 | `tcccoff.c` | DONE |
 | `tccdbg.c` | DONE |
-| `tccelf.c` | DOING |
-| `tccgen.c` | TODO |
+| `tccelf.c` | DONE |
+| `tccgen.c` | DOING |
 | `tccmacho.c` | TODO |
 | `tccpe.c` | TODO |
 | `tccpp.c` | TODO |
