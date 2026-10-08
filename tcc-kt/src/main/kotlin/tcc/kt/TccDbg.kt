@@ -1005,6 +1005,7 @@ object TccDbg {
         if (state.lastFileName != sourceFile) {
             if (state.lastFunctionName != null) state.section.append(0)
             if (state.lastFileName != null) state.section.append(0)
+            state.lastFunctionName = null
             state.lastFileName = sourceFile
             appendCString(state.section, sourceFile)
         }
@@ -1016,6 +1017,7 @@ object TccDbg {
             writeData8(state.section, sourceLine.toLong())
         }
         val previousOffset = state.counterOffset
+        endCoverageBlock(state, sourceLine)
         if (instruction == state.instruction && sourceLine == state.line) {
             state.counterOffset = previousOffset
         } else {
