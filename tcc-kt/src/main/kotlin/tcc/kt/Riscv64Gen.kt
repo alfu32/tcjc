@@ -82,6 +82,7 @@ class Riscv64Gen(
     )
     enum class IntegerOperation { ADD, SUBTRACT, SHIFT_LEFT, SHIFT_RIGHT, SHIFT_ARITHMETIC, MULTIPLY, DIVIDE, DIVIDE_UNSIGNED, REMAINDER, REMAINDER_UNSIGNED, AND, OR, XOR, LESS_THAN, LESS_THAN_UNSIGNED }
     enum class Comparison { EQUAL, NOT_EQUAL, LESS, LESS_EQUAL, GREATER, GREATER_EQUAL, LESS_UNSIGNED, LESS_EQUAL_UNSIGNED, GREATER_UNSIGNED, GREATER_EQUAL_UNSIGNED }
+    enum class FloatingOperation { ADD, SUBTRACT, MULTIPLY, DIVIDE, EQUAL, NOT_EQUAL, LESS, LESS_EQUAL, GREATER, GREATER_EQUAL }
 
     private var bytes = ByteArray(256)
     val relocations = mutableListOf<Relocation>()
@@ -668,6 +669,21 @@ class Riscv64Gen(
         if (invert) emitImmediate(0x13, 4, rd, rd, 1)
     }
 
+    fun lowerFloatingOperation(operation: FloatingOperation, left: Int, right: Int, destination: Int, double: Boolean) {
+        when (operation) {
+            FloatingOperation.ADD -> floatingArithmetic(0, left, right, destination, double)
+            FloatingOperation.SUBTRACT -> floatingArithmetic(1, left, right, destination, double)
+            FloatingOperation.MULTIPLY -> floatingArithmetic(2, left, right, destination, double)
+            FloatingOperation.DIVIDE -> floatingArithmetic(3, left, right, destination, double)
+            FloatingOperation.EQUAL -> floatingCompare(2, left, right, destination, double)
+            FloatingOperation.NOT_EQUAL -> floatingCompare(2, left, right, destination, double, true)
+            FloatingOperation.LESS -> floatingCompare(1, left, right, destination, double)
+            FloatingOperation.LESS_EQUAL -> floatingCompare(0, left, right, destination, double)
+            FloatingOperation.GREATER -> floatingCompare(1, right, left, destination, double)
+            FloatingOperation.GREATER_EQUAL -> floatingCompare(0, right, left, destination, double)
+        }
+    }
+
     fun convertIntegerToFloat(source: Int, destination: Int, double: Boolean, unsigned: Boolean, wide: Boolean) {
         val format = (0x68 or if (double) 1 else 0) shl 5
         emitImmediateUnsigned(0x53, 7, floatingRegister(destination), integerRegister(source), format or (if (unsigned) 1 else 0) or (if (wide) 2 else 0))
@@ -697,6 +713,11 @@ class Riscv64Gen(
                 emitImmediateUnsigned(0x13, 5, rd, rd, 0x438)
             }
         }
+    }
+
+    fun signExtendWord(register: Int) {
+        val rd = integerRegister(register)
+        emitImmediate(0x1b, 0, rd, rd, 0)
     }
 
     fun saveVlaStackPointer(offset: Int) {
