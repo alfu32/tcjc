@@ -140,7 +140,7 @@ object TccElf {
         val table = state.symbolTable ?: return IntArray(0)
         val strings = requireNotNull(table.link)
         val firstSymbol = state.fileSymbolMark
-        val newSymbols = table.symbols.drop(firstSymbol).toList()
+        val newSymbols = table.symbols.drop(firstSymbol).map { it to elfString(strings, it.nameOffset) }
         val newCount = newSymbols.size
         truncate(table, firstSymbol * table.entrySize)
         truncate(strings, state.fileStringMark)
@@ -148,7 +148,7 @@ object TccElf {
         table.hash = table.relocation
         table.relocation = null
         val translation = IntArray(newCount)
-        newSymbols.forEachIndexed { i, symbol ->
+        newSymbols.forEachIndexed { i, (symbol, name) ->
             var info = symbol.info
             if (symbol.sectionIndex == SHN_UNDEF) {
                 var binding = symbolBind(info)
@@ -158,7 +158,6 @@ object TccElf {
                 if (!peTarget && outputObject && binding == STB_GLOBAL && type != STT_TLS) adjustedType = STT_NOTYPE
                 info = (binding shl 4) or adjustedType
             }
-            val name = elfString(strings, symbol.nameOffset)
             translation[i] = setElfSymbol(state, table, symbol.value, symbol.size, info, symbol.other, symbol.sectionIndex, name, reportDuplicate)
         }
         state.sections.drop(1).filterNotNull().forEach { relocationSection ->
