@@ -59,12 +59,14 @@ object TccElf {
         var type: Int,
         var flags: Int,
         var index: Int = 0,
+        var nameOffset: Int = 0,
         var alignment: Int = 0,
         var entrySize: Int = 0,
         var offset: Long = 0,
         var address: Long = 0,
         var allocatedSize: Int = 0,
         var dataOffset: Int = 0,
+        var outputSize: Long = 0,
         val data: MutableList<Byte> = mutableListOf(),
         var link: ElfSection? = null,
         var relocation: ElfSection? = null,
@@ -226,6 +228,45 @@ object TccElf {
         symbols.hash = hash
         initializeSymbolTable(symbols)
         return SymbolTablePair(symbols, strings, hash)
+    }
+
+    fun allocateSectionNames(state: ElfState, objectOutput: Boolean): ElfSection {
+        val strings = newSection(state, ".shstrtab", SHT_STRTAB, 0)
+        state.namedSections[".shstrtab"] = strings
+        putElfString(strings, "")
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if (objectOutput) section.outputSize = section.dataOffset.toLong()
+            if (section.outputSize != 0L || section === strings || section.flags and SHF_ALLOC != 0 || objectOutput) {
+                section.nameOffset = putElfString(strings, section.name)
+            }
+        }
+        strings.outputSize = strings.dataOffset.toLong()
+        return strings
+    }
+
+    fun setSectionSizes(
+        state: ElfState,
+        dynamicOutput: Boolean,
+        includeDebug: Boolean,
+        prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
+    ): Int {
+        var textRelocations = 0
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if ((section.type == SHT_REL || section.type == SHT_RELA) && section.flags and SHF_ALLOC == 0) {
+                val target = state.sections.getOrNull(section.sectionInfo)
+                if (dynamicOutput && target != null && target.flags and SHF_ALLOC != 0) {
+                    val count = prepareDynamicRelocations(section)
+                    if (count != 0) {
+                        section.flags = section.flags or SHF_ALLOC
+                        section.outputSize = (count * section.entrySize).toLong()
+                        if (target.flags and SHF_EXECINSTR != 0) textRelocations += count
+                    }
+                }
+            } else if (section.flags and SHF_ALLOC != 0 || includeDebug) {
+                section.outputSize = section.dataOffset.toLong()
+            }
+        }
+        return textRelocations
     }
 
     fun initializeSymbolTable(symbols: ElfSection) {
