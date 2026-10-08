@@ -10,6 +10,10 @@ class Riscv64Asm(
     enum class OperandType { REGISTER, IMMEDIATE_12_SIGNED, IMMEDIATE_32 }
     data class Expression(val value: Long, val symbol: String? = null)
     data class Operand(var type: Int = 0, var register: Int = 0, var registerSet: Int = 0, var expression: Expression = Expression(0))
+    data class AsmValue(
+        val constant: Long = 0, val symbol: String? = null, val register: Int = -1,
+        val local: Boolean = false, val lvalue: Boolean = false, val floating: Boolean = false,
+    )
 
     companion object {
         const val REGISTER_COUNT = 64
@@ -134,6 +138,37 @@ class Riscv64Asm(
         val register = parseRegister(name)
         if (register == null) error("invalid register '$name'")
         return register ?: 0
+    }
+
+    fun parseRegisterVariable(name: String): Int = parseRegister(name) ?: -1
+
+    fun parseCsrVariable(name: String): Int = when (name.lowercase()) {
+        "cycle" -> 0xc00; "fcsr" -> 3; "fflags" -> 1; "frm" -> 2; "instret" -> 0xc02
+        "time" -> 0xc01; "cycleh" -> 0xc80; "instreth" -> 0xc82; "timeh" -> 0xc81; else -> -1
+    }
+
+    fun markClobber(clobbers: BooleanArray, name: String): Boolean {
+        if (name in setOf("memory", "cc", "flags")) return true
+        val register = parseRegisterVariable(name)
+        if (register < 0 || register >= clobbers.size) { error("invalid clobber register '$name'"); return false }
+        clobbers[register] = true
+        return true
+    }
+
+    fun substituteAssemblyOperand(value: AsmValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false): String {
+        if (value.symbol != null || value.local) {
+            if (value.symbol == null) return value.constant.toString()
+            val prefix = if (leadingUnderscore) "_" else ""
+            if (value.constant == 0L) return prefix + value.symbol
+            val adjusted = if (modifier == 'n') -value.constant else value.constant
+            return "$prefix${value.symbol}+${adjusted}"
+        }
+        if (value.register >= 0) {
+            val number = registerValue(value.register)
+            return (if (isFloatRegister(value.register) || value.floating) "f" else "x") + number
+        }
+        val adjusted = if (modifier == 'n') -value.constant else value.constant
+        return if (modifier == 'z' && adjusted == 0L) "zero" else adjusted.toString()
     }
 
     fun parseExpression(text: String): Expression {
