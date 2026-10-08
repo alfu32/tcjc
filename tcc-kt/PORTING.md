@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 14
+- **DONE:** 22
 - **DOING:** 1
-- **TODO:** 39
-- **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
+- **TODO:** 31
+- **Currently doing:** `win32/lib/wincrt1.c` → `src/main/kotlin/tcc/kt/Win32Wincrt1.kt`
 - **C tests retained:** all C test programs and test cases under `tests/` except the `tcctest.c` harness
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -57,14 +57,14 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `tccpp.c` | TODO |
 | `tccrun.c` | DONE |
 | `tcctools.c` | TODO |
-| `tests/tcctest.c` | DOING |
-| `win32/lib/crt1.c` | TODO |
-| `win32/lib/crt1w.c` | TODO |
-| `win32/lib/crtinit.c` | TODO |
-| `win32/lib/dllcrt1.c` | TODO |
-| `win32/lib/dllmain.c` | TODO |
-| `win32/lib/wincrt1.c` | TODO |
-| `win32/lib/wincrt1w.c` | TODO |
-| `win32/lib/winex.c` | TODO |
+| `tests/tcctest.c` | TODO |
+| `win32/lib/crt1.c` | DONE |
+| `win32/lib/crt1w.c` | DONE |
+| `win32/lib/crtinit.c` | DONE |
+| `win32/lib/dllcrt1.c` | DONE |
+| `win32/lib/dllmain.c` | DONE |
+| `win32/lib/wincrt1.c` | DONE |
+| `win32/lib/wincrt1w.c` | DONE |
+| `win32/lib/winex.c` | DONE |
 | `x86_64-gen.c` | TODO |
 | `x86_64-link.c` | TODO |
