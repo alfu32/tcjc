@@ -765,11 +765,40 @@ object ArmGen {
     }
 
     data class BoundsPrologue(val sectionOffset: Long, val instructionOffset: Int, val addEpilog: Boolean = false)
+    data class BoundsRelocation(val wordIndex: Int, val symbol: Symbol, val type: String, val addend: Int = 0)
+    data class BoundsEpilogue(val patchOffset: Int?, val prologueWords: List<Int>, val words: List<Int>, val relocations: List<BoundsRelocation>, val terminator: Long?)
 
     /** Reserves the five ARM instructions patched by bounds-check epilogue generation. */
     fun emitBoundsPrologue(sectionOffset: Long, instructionOffset: Int, output: (Int) -> Unit): BoundsPrologue {
         repeat(5) { output(0xe1a00000.toInt()) }
         return BoundsPrologue(sectionOffset, instructionOffset)
+    }
+
+    /** Plans bounds table termination, deferred local registration, and function cleanup. */
+    fun boundsEpilogue(state: BoundsPrologue, sectionOffset: Long, boundsSymbol: Symbol,
+        newLocalHelper: Symbol, deleteLocalHelper: Symbol): BoundsEpilogue {
+        val modified = state.sectionOffset != sectionOffset
+        if (!modified && !state.addEpilog) return BoundsEpilogue(null, emptyList(), emptyList(), emptyList(), null)
+        val prologue = mutableListOf<Int>()
+        val words = mutableListOf<Int>()
+        val relocations = mutableListOf<BoundsRelocation>()
+        fun call(helper: Symbol) {
+            relocations += BoundsRelocation(words.size, helper, "R_ARM_PC24")
+            words += 0xebfffffe.toInt()
+        }
+        if (modified) {
+            prologue += listOf(0xe59f0000.toInt(), 0xea000000.toInt())
+            relocations += BoundsRelocation(2, boundsSymbol, "R_ARM_REL32")
+            prologue += listOf(-12, 0xe080000f.toInt())
+            prologue += 0xebfffffe.toInt()
+            relocations += BoundsRelocation(4, newLocalHelper, "R_ARM_PC24")
+        }
+        words.addAll(listOf(0xe92d0003.toInt(), 0xed2d0b04.toInt(), 0xe59f0000.toInt(), 0xea000000.toInt()))
+        relocations += BoundsRelocation(words.size, boundsSymbol, "R_ARM_REL32")
+        words.addAll(listOf(-12, 0xe080000f.toInt()))
+        call(deleteLocalHelper)
+        words.addAll(listOf(0xecbd0b04.toInt(), 0xe8bd0003.toInt()))
+        return BoundsEpilogue(if (modified) state.instructionOffset else null, prologue, words, relocations, 0L)
     }
 
     fun generateJump(position: Int, target: Int, noCode: Boolean = false, output: (Int) -> Unit = {}): Int {
