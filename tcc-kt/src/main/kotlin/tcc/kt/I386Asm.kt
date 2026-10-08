@@ -375,16 +375,26 @@ class I386Asm(
             if (value.symbol == null || value.constant != 0) out.append(number)
             return out.toString()
         }
-        if (value.isLocal) return "${value.constant}(%ebp)"
-        require(value.register in 0..7) { "invalid i386 inline-asm register ${value.register}" }
-        if (value.isLValue) return "(%${registerName(value.register, 4)})"
-        var size = when (value.kind) { "byte", "bool" -> 1; "short" -> 2; else -> 4 }
+        if (value.isLocal) return "${value.constant}(%${registerName(5, if (x64Target) 8 else 4)})"
+        require(value.register in 0 until if (x64Target) 16 else 8) { "invalid inline-asm register ${value.register}" }
+        if (value.isLValue) return "(%${if (value.register >= 8) "r${value.register}" else registerName(value.register, if (x64Target) 8 else 4)})"
+        var size = when (value.kind) {
+            "byte", "bool" -> 1
+            "short" -> 2
+            "long_long", "pointer" -> if (x64Target) 8 else 4
+            else -> 4
+        }
         if (size == 1 && value.register >= 4) size = 4
         when (modifier) {
             'b' -> { require(value.register < 4) { "cannot use byte register" }; size = 1 }
             'h' -> { require(value.register < 4) { "cannot use byte register" }; size = -1 }
             'w' -> size = 2
             'k' -> size = 4
+            'q' -> if (x64Target) size = 8
+        }
+        if (value.register >= 8) {
+            val suffix = when (size) { 1 -> "b"; 2 -> "w"; 4 -> "d"; else -> "" }
+            return "%r${value.register}$suffix"
         }
         return "%${registerName(value.register, size)}"
     }
@@ -394,6 +404,7 @@ class I386Asm(
             -1 -> listOf("ah", "ch", "dh", "bh", "ah", "ch", "dh", "bh")
             1 -> listOf("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")
             2 -> listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+            8 -> listOf("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi")
             else -> listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
         }
         return names[register]
