@@ -462,6 +462,107 @@ class Arm64Asm(
         clobbers[register] = 1
     }
 
+    enum class SubstitutionLocation { CONSTANT, LOCAL, INDIRECT_LOCAL, REGISTER_LVALUE, REGISTER }
+    data class SubstitutionValue(
+        val location: SubstitutionLocation, val value: Long = 0, val register: Int = -1,
+        val symbol: String? = null, val lvalue: Boolean = false, val symbolic: Boolean = false,
+        val typeSize: Int = 4,
+    )
+
+    fun substituteAsmOperand(value: SubstitutionValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false,
+        registerSymbol: (String) -> Unit = {}): String = when (value.location) {
+        SubstitutionLocation.CONSTANT -> {
+            if ((modifier == 'w' || modifier == 'x') && !value.lvalue && !value.symbolic && value.value == 0L)
+                if (modifier == 'w') "wzr" else "xzr"
+            else buildString {
+                if (!value.lvalue && modifier !in setOf('c', 'n', 'P')) append('#')
+                value.symbol?.let { symbol ->
+                    if (leadingUnderscore) append('_')
+                    append(symbol)
+                    registerSymbol(symbol)
+                    if (value.value.toInt() == 0) return@buildString
+                    append('+')
+                }
+                if (modifier == 'n') append(-value.value)
+                else if (value.value.toULong() > Long.MAX_VALUE.toULong()) append("0x${value.value.toULong().toString(16)}")
+                else append(value.value)
+            }
+        }
+        SubstitutionLocation.LOCAL, SubstitutionLocation.INDIRECT_LOCAL -> "[x29,#${value.value.toInt()}]"
+        SubstitutionLocation.REGISTER_LVALUE -> "[x${value.register}]"
+        SubstitutionLocation.REGISTER -> {
+            if (value.register in FREG_BASE..FREG_BASE + 7) {
+                val fp = value.register - FREG_BASE
+                val selected = if (modifier == '\u0000') when { value.typeSize <= 4 -> 's'; value.typeSize == 8 -> 'd'; else -> 'q' } else modifier
+                if (selected !in setOf('b', 'h', 's', 'd', 'q', 'Z')) error("invalid operand modifier for SIMD/FP register")
+                "${if (selected == 'Z') 'z' else selected}$fp"
+            } else {
+                val size = when (modifier) {
+                    'x', 'q' -> 8
+                    'w', 'k' -> 4
+                    'b' -> 1
+                    'h' -> 2
+                    else -> value.typeSize
+                }
+                if (size <= 4) "w${value.register}" else "x${value.register}"
+            }
+        }
+    }
+
+    data class AsmCodegenOperand(
+        val register: Int, val value: SubstitutionValue, val isMemory: Boolean = false, val isReadWrite: Boolean = false,
+    )
+
+    /** Emits AArch64 extended-asm callee-save, operand load/store, and stack-restore sequences. */
+    fun emitAsmCode(operands: List<AsmCodegenOperand>, outputs: Int, isOutput: Boolean, clobbers: ByteArray,
+        outputRegister: Int, load: (Int, SubstitutionValue) -> Unit, store: (Int, SubstitutionValue) -> Unit,
+        loadMemoryBase: (Int, SubstitutionValue) -> Unit = load) {
+        val allocated = ByteArray(64)
+        clobbers.copyInto(allocated, endIndex = minOf(clobbers.size, allocated.size))
+        operands.forEach { if (it.register in allocated.indices && it.register >= 0) allocated[it.register] = 1 }
+        val saved = (19..30).filter { allocated[it].toInt() != 0 }
+        val stackSize = ((saved.size + 1) / 2) * 16
+        if (!isOutput) {
+            if (saved.isNotEmpty()) {
+                emitSubImmediate(31, 31, stackSize.toLong(), true)
+                var i = 0
+                var offset = 0
+                while (i < saved.size) {
+                    if (i + 1 < saved.size) {
+                        emitLoadStorePair(0xa9000000.toInt(), saved[i], saved[i + 1], 31, offset, 3)
+                        offset += 16; i += 2
+                    } else { emitLoadStoreImmediate(0xf9000000.toInt(), saved[i], 31, offset, 3); i++ }
+                }
+            }
+            operands.forEachIndexed { index, operand ->
+                if (operand.register < 0) return@forEachIndexed
+                if (operand.isMemory) loadMemoryBase(operand.register, operand.value)
+                else if (index >= outputs || operand.isReadWrite) load(operand.register, operand.value)
+            }
+        } else {
+            operands.take(outputs).forEach { operand ->
+                if (operand.register < 0 || operand.isMemory) return@forEach
+                if (operand.value.location == SubstitutionLocation.INDIRECT_LOCAL ||
+                    operand.value.location == SubstitutionLocation.LOCAL && operand.value.lvalue) {
+                    val address = operand.value.copy(lvalue = false, typeSize = 8)
+                    load(outputRegister, address)
+                    store(operand.register, operand.value.copy(location = SubstitutionLocation.REGISTER_LVALUE, register = outputRegister))
+                } else store(operand.register, operand.value)
+            }
+            if (saved.isNotEmpty()) {
+                var i = 0
+                var offset = 0
+                while (i < saved.size) {
+                    if (i + 1 < saved.size) {
+                        emitLoadStorePair(0xa9400000.toInt(), saved[i], saved[i + 1], 31, offset, 3)
+                        offset += 16; i += 2
+                    } else { emitLoadStoreImmediate(0xf9400000.toInt(), saved[i], 31, offset, 3); i++ }
+                }
+                emitAddImmediate(31, 31, stackSize.toLong(), true)
+            }
+        }
+    }
+
     fun emitMoveImmediate(register: Int, immediate: Long, is64Bit: Boolean) {
         var first = true
         for (halfword in 0 until if (is64Bit) 4 else 2) {
