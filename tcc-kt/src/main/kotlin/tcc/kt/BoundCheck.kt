@@ -228,9 +228,11 @@ object BoundCheck {
     }
 
     @JvmStatic
-    fun free(address: Long) = lock.withLock {
-        allocations.remove(address) ?: return
-        regions.remove(address)
+    fun free(address: Long) {
+        lock.withLock {
+            if (allocations.remove(address) == null) return@withLock
+            regions.remove(address)
+        }
     }
 
     @JvmStatic
