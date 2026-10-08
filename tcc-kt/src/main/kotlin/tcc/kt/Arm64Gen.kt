@@ -36,6 +36,11 @@ class Arm64Gen(
     )
     data class VaArgPlan(val size: Int, val alignment: Int, val homogeneousCount: Int, val indirect: Boolean, val registerClass: String)
     data class ReturnPlan(val location: Int, val indirect: Boolean, val homogeneousCount: Int, val size: Int)
+    data class CallLoweringCallbacks(
+        val saveRegisters: (Int) -> Unit = {}, val storeStructureTemporary: (Int, Int) -> Unit = { _, _ -> },
+        val storeStackArgument: (Int, Int) -> Unit = { _, _ -> }, val moveRegisterArgument: (Int, Int) -> Unit = { _, _ -> },
+        val call: () -> Unit = {}, val restoreRegisters: () -> Unit = {},
+    )
 
     companion object {
         const val NB_REGS = 28
@@ -283,6 +288,23 @@ class Arm64Gen(
         else if (offset < 256uL || 0uL - offset <= 256uL)
             o(0x3c000000 or source or (base shl 5) or ((offset.toInt() and 511) shl 12) or ((size and 4) shl 21) or ((size and 3) shl 30))
         else { moveImmediate(30, offset); o(ARM64_STR_Q_REG or source or (base shl 5) or (30 shl 16) or (size shl 30) or ((size and 4) shl 21)) }
+    }
+
+    fun copyStructure(sourceAddressRegister: Int, destinationAddressRegister: Int, byteSize: Int) {
+        var offset = 0
+        while (byteSize - offset >= 8) {
+            loadInteger(false, 3, 16, sourceAddressRegister, offset.toULong())
+            storeInteger(3, 16, destinationAddressRegister, offset.toULong())
+            offset += 8
+        }
+        while (offset < byteSize) {
+            val remaining = byteSize - offset
+            val size = when { remaining >= 4 -> 2; remaining >= 2 -> 1; else -> 0 }
+            val width = 1 shl size
+            loadInteger(false, size, 16, sourceAddressRegister, offset.toULong())
+            storeInteger(size, 16, destinationAddressRegister, offset.toULong())
+            offset += width
+        }
     }
 
     private fun addRelocation(symbol: Symbol, type: String, addend: Long) {
@@ -634,6 +656,28 @@ class Arm64Gen(
         return CallPlan(stack, abi.locations, temporaries)
     }
 
+    /** Executes the compiler-independent argument placement order used by gfunc_call. */
+    fun lowerCall(arguments: List<AbiType>, callbacks: CallLoweringCallbacks,
+        variadicIndex: Int = 0, macho: Boolean = false, pe: Boolean = false): CallPlan {
+        callbacks.saveRegisters(arguments.size + 1)
+        val plan = planCall(arguments, variadicIndex, macho, pe)
+        subtractStackPointer(plan.stackBytes.toULong(), pe)
+        for (i in arguments.indices.reversed()) {
+            val location = plan.argumentLocations[i]
+            val temporary = plan.structureTemporaryOffsets[i]
+            if (temporary != null) callbacks.storeStructureTemporary(i, temporary)
+            if (location >= 32) callbacks.storeStackArgument(i, (location - 32) shr 1)
+        }
+        for (i in arguments.indices.reversed()) {
+            val location = plan.argumentLocations[i]
+            if (location < 16 || location in 16..31) callbacks.moveRegisterArgument(i, location)
+        }
+        callbacks.call()
+        restoreStackPointer(plan.stackBytes.toULong())
+        callbacks.restoreRegisters()
+        return plan
+    }
+
     fun restoreStackPointer(byteCount: ULong) {
         val low = byteCount and 0xfffuL
         val high = byteCount shr 12
@@ -674,6 +718,13 @@ class Arm64Gen(
         val stack = if (pe && variadic && locations.isNotEmpty()) peParameterOffset(locations.last()) else assignAbiArguments(parameterTypes, if (variadic) parameterTypes.size else 0, macho, pe).stackBytes
         return FunctionFramePlan(locations, offsets, lastInteger, lastVector, saveX8, stack,
             if (variadic && !macho) -64 else 0, if (variadic && !macho) -128 else 0)
+    }
+
+    fun setupFunctionParameters(plan: FunctionFramePlan, setParameter: (Int, Int, Boolean) -> Unit) {
+        for (index in plan.parameterLocations.indices) {
+            val location = plan.parameterLocations[index]
+            setParameter(index, plan.parameterOffsets[index], location and 1 != 0)
+        }
     }
 
     /** Emits the fixed frame save sequence described by planFunctionFrame. */
@@ -729,6 +780,18 @@ class Arm64Gen(
         return VaArgPlan(type.size, type.alignment, hfa, type.size > 16,
             if (hfa != 0) "vector" else "general")
     }
+
+    /** Runs the target independent parts of va_arg lowering through the caller's value-stack hooks. */
+    fun lowerVaArg(type: AbiType, vaListAddressRegister: Int,
+        allocateResult: (Boolean) -> Int, emitAddressUpdate: (Int, VaArgPlan) -> Unit,
+        peTarget: Boolean = false): Int {
+        val plan = planVaArg(type)
+        val result = allocateResult(plan.indirect)
+        emitAddressUpdate(vaListAddressRegister, plan)
+        return result
+    }
+
+    fun structureReturnInMemory(type: AbiType, variadic: Boolean = false): Boolean = classifyReturn(type).indirect
 
     /** Emits the register-register integer operation selected by the source operator token. */
     fun integerOperation(operation: String, is64Bit: Boolean, destination: Int, left: Int, right: Int) {
@@ -925,14 +988,17 @@ class Arm64Gen(
         val plan = classifyReturn(type)
         when (plan.location) {
             -1 -> Unit
-            0 -> if (type.type == Type.STRUCT && type.size > 0) loadStructure(valueRegister, type.size) else Unit
-            1 -> { moveImmediate(30, addressRegister.toULong()); storeInteger(3, 30, 29, 144uL) }
+            0 -> if (type.type == Type.STRUCT && type.size > 0) loadStructure(valueRegister, type.size)
+                else if (isAbiFloat(type.type)) o(0x1e604000 or (floatReg(0)) or (floatReg(valueRegister) shl 5))
+                else if (intReg(valueRegister) != 0) o(0xaa0003e0.toInt() or (intReg(valueRegister) shl 16))
+            1 -> { loadInteger(false, 3, 8, 29, 144uL); copyStructure(addressRegister, 8, type.size) }
             16 -> if (type.type == Type.STRUCT) {
+                val elementBytes = type.size / plan.homogeneousCount
+                val encodedSize = when (elementBytes) { 4 -> 2; 8 -> 3; 16 -> 4; else -> throw IllegalArgumentException("unsupported HFA element size: $elementBytes") }
                 for (index in 0 until plan.homogeneousCount) {
-                    val elementSize = type.size / plan.homogeneousCount
-                    loadVector(elementSize, 0x20 + index, addressRegister, (index * elementSize).toULong())
+                    loadVector(encodedSize, 0x20 + index, addressRegister, (index * elementBytes).toULong())
                 }
-            }
+            } else if (isAbiFloat(type.type)) o(0x1e604000 or floatReg(0) or (floatReg(valueRegister) shl 5))
         }
     }
 }
