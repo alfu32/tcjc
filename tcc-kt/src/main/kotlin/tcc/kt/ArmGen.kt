@@ -185,6 +185,48 @@ object ArmGen {
         return register - TREG_F0
     }
 
+    data class Symbol(val name: String, val isStatic: Boolean = false)
+    data class ConstantValue(val value: Int, val symbol: Symbol? = null)
+
+    /** Emits the literal-pool and relocation sequence used to load a C value into an ARM register. */
+    fun emitLoadValue(
+        value: ConstantValue, register: Int, cpuVersion: Int, pic: Boolean,
+        output: (Int) -> Unit, currentPosition: () -> Int,
+        relocate: (Symbol, Int, String) -> Unit,
+    ) {
+        val armRegister = integerRegister(register)
+        if (cpuVersion >= 7 && value.symbol == null) {
+            val constant = value.value
+            output(0xe3000000.toInt() or (armRegister shl 12) or (constant and 0xfff) or ((constant shl 4) and 0xf0000))
+            if (constant and 0xffff0000.toInt() != 0)
+                output(0xe3400000.toInt() or (armRegister shl 12) or ((constant ushr 16) and 0xfff) or ((constant ushr 12) and 0xf0000))
+            return
+        }
+        output(0xe59f0000.toInt() or (armRegister shl 12))
+        output(0xea000000.toInt())
+        val symbol = value.symbol
+        if (!pic) {
+            if (symbol != null) relocate(symbol, currentPosition(), "R_ARM_ABS32")
+            output(value.value)
+            return
+        }
+        if (symbol == null) {
+            output(value.value)
+        } else if (symbol.isStatic) {
+            relocate(symbol, currentPosition(), "R_ARM_REL32")
+            output(value.value - 12)
+            output(0xe080000f.toInt() or (armRegister shl 12) or (armRegister shl 16))
+        } else {
+            relocate(symbol, currentPosition(), "R_ARM_GOT_PREL")
+            output(-12)
+            output(0xe080000f.toInt() or (armRegister shl 12) or (armRegister shl 16))
+            output(0xe5900000.toInt() or (armRegister shl 12) or (armRegister shl 16))
+            if (value.value != 0) {
+                stuffConstantHarder(0xe2800000.toInt() or (armRegister shl 12) or (armRegister shl 16), value.value).forEach(output)
+            }
+        }
+    }
+
     /** Encodes a PC-relative ARM branch displacement. */
     fun encodeBranch(position: Int, address: Int, fail: Boolean, error: (String) -> Unit = { throw IllegalArgumentException(it) }): Int {
         val displacement = address - position - 8
