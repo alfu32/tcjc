@@ -368,7 +368,11 @@ object TccCoff {
                 }
             }
             out.write(entry)
-            if (symbol.info != FILE_SYMBOL) out.write(ByteArray(18))
+            if (symbol.info != FILE_SYMBOL) {
+                val aux = ByteArray(18)
+                put32(aux, 4, 0x20)
+                out.write(aux)
+            }
             symbolIndex += coffEntryCount(symbol)
         }
         return out.toByteArray()
