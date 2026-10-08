@@ -146,7 +146,11 @@ class I386Asm(
             emit(0xcc)
             return true
         }
-        var opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16 || operands.any { it.type and X64_EA32 != 0 })
+        val sseModePrefix = instruction.operandTypes.indices.any { index ->
+            val accepted = expandOperandType(instruction.operandTypes[index], instruction.x64)
+            accepted and (OP_MMX or OP_SSE) == (OP_MMX or OP_SSE) && operands[index].type and OP_SSE != 0
+        }
+        var opcode = emitPrefixes(instruction, operandSize16 || sseModePrefix, segmentPrefix, addressSize16 || operands.any { it.type and X64_EA32 != 0 })
         if (x64Target) {
             val modrmIndex = if (instruction.instructionType and OPC_MODRM != 0)
                 operands.indices.firstOrNull { operands[it].type and OP_EA != 0 }
