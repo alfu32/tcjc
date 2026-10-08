@@ -793,6 +793,7 @@ object TccDbg {
         pointerSize: Int,
         functionAddress: Long,
         refs: DwarfSymbolRefs,
+        unitStart: Int = 0,
         parent: Boolean = false,
     ) {
         if (state.dwarfEnabled) {
@@ -805,7 +806,7 @@ object TccDbg {
                 writeStringReference(state, info, symbol.name, refs.strings, pointerSize = pointerSize)
                 if (external || static) { writeUleb(info, symbol.file.toLong()); writeUleb(info, symbol.line.toLong()) }
                 state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
-                writeData4(info, symbol.typeOffset)
+                writeData4(info, symbol.typeOffset - unitStart)
                 if (external) writeData1(info, 1)
                 if (external || static) {
                     writeData1(info, pointerSize + 1); writeData1(info, 0x03) // DW_OP_addr
@@ -823,14 +824,14 @@ object TccDbg {
             val length = (scope.end - scope.start).toLong()
             if (pointerSize == 4) { writeData4(info, start.toInt()); writeData4(info, length.toInt()) }
             else { writeData8(info, start); writeData8(info, length) }
-            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs) }
+            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs, unitStart) }
             if (scope.children.isNotEmpty()) writeData1(info, 0)
         } else {
             scope.symbols.forEach { symbol ->
                 putStabs(state, symbol.name, symbol.stabType, 0, 0, symbol.value)
             }
             putStabs(state, null, 0xc0, 0, 0, scope.start.toLong()) // N_LBRAC
-            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs) }
+            scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs, unitStart) }
             putStabs(state, null, 0xe0, 0, 0, scope.end.toLong()) // N_RBRAC
         }
     }
@@ -882,12 +883,12 @@ object TccDbg {
                 lineOperation(line, 0); lineOperationUleb(line, (payload.size + 1).toLong()); lineOperation(line, 0x80)
                 payload.forEach { line.operations += it }
             }
-            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
+            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs, function.unitStart) }
             writeData1(info, 0)
             patch32(info, siblingOffset, info.size - function.unitStart)
         } else {
             putStabs(state, "${function.name}:${if (function.external) 'F' else 'f'}", N_FUN, 0, function.sourceLine, function.startAddress)
-            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
+            scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs, function.unitStart) }
             putStabs(state, null, N_FUN, 0, 0, endAddress - function.startAddress)
         }
     }
