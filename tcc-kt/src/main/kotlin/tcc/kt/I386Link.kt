@@ -15,12 +15,13 @@ object I386Link {
     const val ALWAYS_GOTPLT_ENTRY = 3
     const val PTR_SIZE = 4
 
-    data class Symbol(val dynamicIndex: Int = 0, val gotOffset: Int = 0, val sectionAddress: Long = 0, val sectionDataOffset: Long = 0)
+    data class Symbol(val dynamicIndex: Int = 0, val gotOffset: Int = 0, val sectionAddress: Long = 0, val sectionDataOffset: Long = 0, val symbolValue: Long = 0)
     data class RelocationEntry(var offset: Int, var info: Int)
     data class State(
         var outputDynamic: Boolean = false,
         var outputDll: Boolean = false,
         var outputBinary: Boolean = false,
+        var targetPe: Boolean = false,
         var gotAddress: Int = 0,
         var pltAddress: Int = 0,
         var imageBase: Int = 0,
@@ -141,13 +142,13 @@ object I386Link {
                 if (!state.outputBinary) state.errors += "can only produce 16-bit binary files"
                 write16(data, offset, read16(data, offset) + value - address)
             }
-            Relocation.RELATIVE -> if (state.imageBase != 0) add32(data, offset, value - state.imageBase)
+            Relocation.RELATIVE -> if (state.targetPe) add32(data, offset, value - state.imageBase)
             Relocation.COPY, Relocation.NONE -> Unit
             Relocation.TLS_GD -> {
                 val errors = state.errors.size
                 relaxTls(data, offset - 3, GD_EXPECT, GD_REPLACE, following, state)
                 if (state.errors.size == errors) {
-                    val localOffset = value - symbol.sectionAddress.toInt() - symbol.sectionDataOffset.toInt()
+                    val localOffset = symbol.symbolValue.toInt() - symbol.sectionAddress.toInt() - symbol.sectionDataOffset.toInt()
                     add32(data, offset + 5, -localOffset)
                 }
             }
