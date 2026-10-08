@@ -100,6 +100,7 @@ object TccGen {
         val outputOpcode: (Int) -> Unit = {},
         val tokenName: (Int) -> String = { it.toString() },
         val saveRegister: (Int) -> Unit = {},
+        val loadRegister: (Int, Int, Int) -> Unit = { _, _, _ -> },
         val temporaryTypeSize: (Int) -> Pair<Int, Int> = { 0 to 1 },
     )
     data class SymbolEmissionHooks(
@@ -1112,6 +1113,12 @@ object TccGen {
 
     private fun temporaryLocalIndex(state: RuntimeState, location: Int): Int =
         state.temporaryLocals.indexOfFirst { it.location == location }.let { if (it < 0) VT_CONST else VT_CONST + 1 + it }
+
+    fun moveRegister(state: RuntimeState, destination: Int, source: Int, type: Int) {
+        if (destination == source) return
+        saveRegister(state, destination)
+        state.hooks.loadRegister(destination, source, type)
+    }
 
     const val VT_CONST = 0x0040
     const val VT_SYM = 0x0200
