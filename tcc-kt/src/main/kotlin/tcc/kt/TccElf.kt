@@ -41,7 +41,7 @@ object TccElf {
         var other: Int,
         var sectionIndex: Int,
     )
-    data class ElfRelocation(var offset: Long, var symbolIndex: Int, var type: Int, val addend: Long = 0)
+    data class ElfRelocation(var offset: Long, var symbolIndex: Int, var type: Int, var addend: Long = 0)
     data class SymbolAttributes(
         var gotOffset: Long = 0,
         var pltOffset: Long = 0,
@@ -669,6 +669,54 @@ object TccElf {
         return count
     }
 
+    fun fillGotEntry(state: ElfState, got: ElfSection, symbols: ElfSection, relocation: ElfRelocation) {
+        val symbol = symbols.symbols.getOrNull(relocation.symbolIndex) ?: return
+        val offset = getSymbolAttributes(state, relocation.symbolIndex, false)?.gotOffset ?: return
+        if (offset == 0L) return
+        reserveSection(got, (offset + state.wordSize).toInt())
+        writeWord(got.data, offset.toInt(), symbol.value, state.wordSize)
+    }
+
+    fun fillGot(
+        state: ElfState,
+        symbols: ElfSection,
+        supportedRelocationTypes: Set<Int>,
+    ) {
+        val got = state.namedSections[".got"] ?: return
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if ((section.type != SHT_REL && section.type != SHT_RELA) || section.link !== symbols) return@forEach
+            section.relocations.forEach { relocation ->
+                if (relocation.type in supportedRelocationTypes) fillGotEntry(state, got, symbols, relocation)
+            }
+        }
+    }
+
+    fun fillLocalGotEntries(state: ElfState, symbols: ElfSection, relativeType: Int, error: (String) -> Unit = {}) {
+        val got = state.namedSections[".got"] ?: return
+        val relocations = got.relocation ?: return
+        relocations.relocations.forEach { relocation ->
+            if (relocation.type != relativeType) return@forEach
+            val symbol = symbols.symbols.getOrNull(relocation.symbolIndex) ?: return@forEach
+            val attributes = getSymbolAttributes(state, relocation.symbolIndex, false) ?: return@forEach
+            val offset = attributes.gotOffset
+            if (offset != relocation.offset - got.address) error("fill_local_got_entries: huh?")
+            relocation.symbolIndex = 0
+            if (relocations.type == SHT_RELA) relocation.addend = symbol.value
+            else writeWord(got.data, offset.toInt(), symbol.value, 4)
+        }
+    }
+
+    fun reserveSection(section: ElfSection, size: Int) {
+        if (section.type == SHT_NOBITS) {
+            section.dataOffset = maxOf(section.dataOffset, size)
+            section.allocatedSize = maxOf(section.allocatedSize, size)
+            return
+        }
+        while (section.data.size < size) section.data += 0
+        section.dataOffset = maxOf(section.dataOffset, size)
+        section.allocatedSize = maxOf(section.allocatedSize, section.data.size)
+    }
+
     fun relocateSection(
         state: ElfState,
         target: ElfSection,
@@ -917,5 +965,8 @@ object TccElf {
     }
     private fun writeInt64(output: MutableList<Byte>, offset: Int, value: Long) {
         repeat(8) { shift -> output[offset + shift] = (value ushr (shift * 8)).toByte() }
+    }
+    private fun writeWord(output: MutableList<Byte>, offset: Int, value: Long, wordSize: Int) {
+        if (wordSize == 8) writeInt64(output, offset, value) else writeInt32(output, offset, value.toInt())
     }
 }
