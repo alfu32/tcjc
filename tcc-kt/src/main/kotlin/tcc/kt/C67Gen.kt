@@ -17,6 +17,9 @@ class C67Gen(
         val register: Int = -1, val symbol: Int? = null, val lvalue: Boolean = false,
         val unsigned: Boolean = false,
     )
+    data class CallTarget(val symbol: Int? = null, val targetRegister: Int = -1, val addend: Int = 0)
+    data class FunctionFrame(val argumentSizes: List<Int>, val parameterOffsets: List<Int>, val pushedArgumentBytes: Int,
+        val stackAdjustmentOffset: Int, val returnSubtraction: Int, val structReturnOffset: Int?)
     companion object {
         const val NB_REGS = 24
         const val RC_INT = 0x0001
@@ -53,6 +56,83 @@ class C67Gen(
     val translateStackToRegister: IntArray = IntArray(NO_CALL_ARGS_PASSED_ON_STACK)
     val parameterLocationsOnStack: IntArray = IntArray(NO_CALL_ARGS_PASSED_ON_STACK)
     var totalBytesPushedOnStack: Int = 0
+    private var functionStackAdjustmentOffset: Int = 0
+    private var functionReturnSubtraction: Int = 0
+
+    fun structureReturnResultAlignment(): Int = 1
+    fun structureReturnRegisterCount(): Int = 0
+
+    /** Emits direct or register based C67 branches and the delayed return address for calls. */
+    fun callOrJump(isJump: Boolean, target: CallTarget, returnAddressSymbol: Int? = null) {
+        if (target.symbol != null) {
+            relocate(target.symbol, position(), "R_C60LO16")
+            relocate(target.symbol, position() + 4, "R_C60HI16")
+            moveLow(C67_A0, target.addend)
+            moveHigh(C67_A0, target.addend)
+            conditionalBranch(false, C67_CREG_ZERO, C67_A0)
+        } else {
+            require(target.targetRegister >= 0) { "indirect C67 call requires a target register" }
+            conditionalBranch(false, C67_CREG_ZERO, target.targetRegister)
+        }
+        if (isJump) nop(5) else {
+            val returnSym = returnAddressSymbol ?: throw IllegalArgumentException("call requires return address symbol")
+            relocate(returnSym, position(), "R_C60LO16")
+            relocate(returnSym, position() + 4, "R_C60HI16")
+            moveLow(C67_B3, 0)
+            moveHigh(C67_B3, 0)
+            nop(3)
+        }
+    }
+
+    fun emitJump(chainValue: Int): Int {
+        if (noCode()) return chainValue
+        val site = position()
+        moveLow(C67_A0, chainValue); moveHigh(C67_A0, chainValue)
+        conditionalBranch(false, C67_CREG_ZERO, C67_A0)
+        nop(5)
+        return site
+    }
+
+    fun emitJumpAddress(address: Int, symbolForAddress: (Int) -> Int) {
+        val sym = symbolForAddress(address)
+        relocate(sym, position(), "R_C60LO16")
+        relocate(sym, position() + 4, "R_C60HI16")
+        emitJump(0)
+    }
+
+    fun emitConditionalJump(invert: Boolean, chainValue: Int): Int {
+        if (noCode()) return chainValue
+        val site = position()
+        moveLow(C67_A0, chainValue); moveHigh(C67_A0, chainValue)
+        if (compareRegister != 0 && compareRegister != 2 && compareRegister != 3 && compareRegister != C67_B2) {
+            move(compareRegister, C67_B2)
+            compareRegister = C67_B2
+        }
+        conditionalBranch(invert xor invertTest, compareRegister, C67_A0)
+        nop(5)
+        return site
+    }
+
+    fun appendJumpChain(head: Int, tail: Int): Int {
+        if (head == 0) return tail
+        var site = head
+        while (site != 0) {
+            val low = readWord(site); val high = readWord(site + 4)
+            val next = ((low ushr 7) and 0xffff) or (((high ushr 7) and 0xffff) shl 16)
+            if (next == 0) {
+                writeWord(site, low or ((tail and 0xffff) shl 7))
+                writeWord(site + 4, high or (((tail ushr 16) and 0xffff) shl 7))
+                break
+            }
+            site = next
+        }
+        return head
+    }
+
+    fun fillNops(byteCount: Int) {
+        require(byteCount % 4 == 0) { "alignment of code section not multiple of 4" }
+        repeat(byteCount.coerceAtLeast(0) / 4) { nop(4) }
+    }
 
     private fun memorySize(type: ValueType): Int = when (type) {
         ValueType.BYTE, ValueType.BOOL -> 1
