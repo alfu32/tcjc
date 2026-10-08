@@ -1,6 +1,7 @@
 package tcc.kt
 
 import java.io.InputStream
+import java.io.OutputStream
 
 /** ELF section and symbol table routines ported from tccelf.c. */
 object TccElf {
@@ -254,6 +255,7 @@ object TccElf {
         val noDelete: Boolean = false,
         val symbolic: Boolean = false,
     )
+    enum class FileOutputKind { ELF_OBJECT, ELF, BINARY }
     data class LinkerScriptToken(val type: Int, val text: String)
 
     class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
@@ -1871,6 +1873,23 @@ object TccElf {
         return serializeElf(
             state, 1, machine, 0, LayoutResult(emptyList(), 0, sectionHeaderOffset, 0, 0), flags,
         )
+    }
+
+    fun writeElfFile(
+        output: OutputStream,
+        state: ElfState,
+        kind: FileOutputKind,
+        machine: Int = 0,
+        request: ElfOutputRequest? = null,
+    ): Int {
+        val bytes = when (kind) {
+            FileOutputKind.ELF_OBJECT -> buildElfObjectOutput(state, machine, request?.flags ?: 0)
+            FileOutputKind.ELF -> buildElfOutput(state, requireNotNull(request) { "ELF link output requires layout options" })
+            FileOutputKind.BINARY -> serializeBinary(state)
+        }
+        output.write(bytes)
+        output.flush()
+        return 0
     }
 
     /** Creates the ARM ABI attribute payload emitted by tccelf.c for DLL support. */
