@@ -257,6 +257,24 @@ object TccElf {
         val noDelete: Boolean = false,
         val symbolic: Boolean = false,
     )
+    data class ElfLinkRequest(
+        val staticLink: Boolean = false,
+        val outputExecutable: Boolean = true,
+        val outputSharedLibrary: Boolean = false,
+        val positionIndependentExecutable: Boolean = false,
+        val interpreterPath: String? = null,
+        val copyRelocationType: Int = 0,
+        val includeDebug: Boolean = true,
+        val metadata: DynamicMetadataOptions = DynamicMetadataOptions(),
+    )
+    data class ElfLinkPreparation(
+        val dynamicSections: DynamicOutputSections?,
+        val gnuHash: ElfSection?,
+        val versions: VersionOutput?,
+        val gotSymbol: Int,
+        val textRelocationCount: Int,
+        val dynamicPrefixSize: Int,
+    )
     enum class FileOutputKind { ELF_OBJECT, ELF, BINARY }
     data class LinkerScriptToken(val type: Int, val text: String)
 
@@ -1334,6 +1352,57 @@ object TccElf {
             }
         }
         return DynamicOutputSections(pair.symbols, pair.strings, dynamic, interpreter)
+    }
+
+    fun prepareElfLink(
+        state: ElfState,
+        request: ElfLinkRequest,
+        versions: VersionRegistry? = null,
+        addRuntime: () -> Unit = {},
+        buildGot: () -> Int = { 0 },
+        buildGotEntries: (Int) -> Unit = {},
+        prepareDynamicRelocations: (ElfSection) -> Int = { 0 },
+        reportWarning: (String) -> Unit = {},
+        reportError: (String) -> Unit = {},
+    ): ElfLinkPreparation? {
+        addRuntime()
+        resolveCommonSymbols(state, request.outputSharedLibrary, reportWarning)
+        var dynamicSections: DynamicOutputSections? = null
+        var gnuHash: ElfSection? = null
+        var gotSymbol = 0
+        if (!request.staticLink) {
+            dynamicSections = initializeDynamicOutput(
+                state,
+                request.interpreterPath.takeIf { request.outputExecutable },
+            )
+            gotSymbol = buildGot()
+            if (request.outputExecutable) {
+                var errors = 0
+                bindExecutableDynamicSymbols(state, request.positionIndependentExecutable, request.copyRelocationType) {
+                    reportError(it)
+                    errors++
+                }
+                if (errors != 0) return null
+            }
+            buildGotEntries(gotSymbol)
+            if (request.outputExecutable) bindLibraryDynamicSymbols(state, false, reportWarning)
+            else exportGlobalSymbols(state)
+            gnuHash = createGnuHash(state, dynamicSections.symbols)
+        } else {
+            buildGotEntries(0)
+        }
+        val versionOutput = versions?.let { buildVersionOutput(state, it, request.outputExecutable) }
+        val textRelocations = setSectionSizes(
+            state, dynamicOutput = !request.staticLink, includeDebug = request.includeDebug,
+            prepareDynamicRelocations = prepareDynamicRelocations,
+        )
+        val prefixSize = if (dynamicSections == null) 0 else {
+            val metadata = request.metadata.copy(
+                neededLibraries = request.metadata.neededLibraries + versionOutput?.neededLibraries.orEmpty().map { it to 0 },
+            )
+            fillDynamicMetadata(dynamicSections.dynamic, dynamicSections.strings, metadata, state.wordSize)
+        }
+        return ElfLinkPreparation(dynamicSections, gnuHash, versionOutput, gotSymbol, textRelocations, prefixSize)
     }
 
     /** Saves section offsets and suspends the main symbol hash during one input file. */
