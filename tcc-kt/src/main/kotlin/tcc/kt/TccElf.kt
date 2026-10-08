@@ -426,6 +426,27 @@ object TccElf {
         return state.symbolAttributes[index]
     }
 
+    /** Places all local symbols before global and weak symbols and fixes relocation references. */
+    fun sortSymbols(state: ElfState, table: ElfSection): IntArray {
+        val old = table.symbols.toList()
+        val localIndices = old.indices.filter { symbolBind(old[it].info) == STB_LOCAL }
+        val globalIndices = old.indices.filter { symbolBind(old[it].info) != STB_LOCAL }
+        val order = localIndices + globalIndices
+        val oldToNew = IntArray(old.size)
+        order.forEachIndexed { newIndex, oldIndex -> oldToNew[oldIndex] = newIndex }
+        table.symbols.clear()
+        order.forEach { table.symbols += old[it] }
+        table.sectionInfo = localIndices.size
+        state.sections.drop(1).filterNotNull().forEach { relocationSection ->
+            if ((relocationSection.type == SHT_REL || relocationSection.type == SHT_RELA) && relocationSection.link === table) {
+                relocationSection.relocations.forEach { relocation ->
+                    if (relocation.symbolIndex in oldToNew.indices) relocation.symbolIndex = oldToNew[relocation.symbolIndex]
+                }
+            }
+        }
+        return oldToNew
+    }
+
     fun freeSection(section: ElfSection) {
         section.data.clear()
         section.dataOffset = 0
