@@ -1212,7 +1212,7 @@ object TccDbg {
         frameAddress: Long,
         headerAddress: Long,
         frameBytes: ByteArray,
-        entries: List<EhFrameHeaderEntry>,
+        entries: List<EhFrameHeaderEntry>? = null,
     ): DwarfSection {
         val header = DwarfSection(".eh_frame_hdr", flags = 2)
         writeData1(header, 1) // version
@@ -1220,7 +1220,7 @@ object TccDbg {
         writeData1(header, 0x03) // unsigned data4 count
         writeData1(header, 0x3b) // signed data4, data relative table
         writeData4(header, (frameAddress - headerAddress - header.size).toInt())
-        val sorted = entries.sortedBy { it.pcOffset }
+        val sorted = (entries ?: scanEhFrameHeaderEntries(frameAddress, headerAddress, frameBytes)).sortedBy { it.pcOffset }
         writeData4(header, sorted.size)
         sorted.forEach { entry ->
             writeData4(header, entry.pcOffset.toInt())
