@@ -22,6 +22,7 @@ object TccElf {
     const val SHF_ALLOC = 2
     const val SHF_EXECINSTR = 4
     const val SHF_TLS = 0x400
+    const val SHF_GROUP = 0x200
     const val SHF_PRIVATE = -0x80000000
     const val SHF_DYNSYM = 0x40000000
     const val SHN_UNDEF = 0
@@ -196,6 +197,7 @@ object TccElf {
     )
     data class InputElf(val wordSize: Int, val machine: Int, val fileType: Int, val sections: List<InputSectionHeader>)
     data class InputSymbol(val name: String, val value: Long, val size: Long, val info: Int, val other: Int, val sectionIndex: Int)
+    data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -529,6 +531,56 @@ object TccElf {
                 read(data, base + 14, 2).toInt(),
             )
         }
+    }
+
+    /** Merges supported input section payloads and returns the old-to-output section map. */
+    fun mergeInputSections(
+        state: ElfState,
+        input: InputElf,
+        debugEnabled: Boolean = false,
+        ehFrameEnabled: Boolean = false,
+        bsdTarget: Boolean = false,
+        instructionAlignment: Boolean = false,
+    ): List<SectionMergeInfo> {
+        val result = MutableList(input.sections.size) { SectionMergeInfo() }
+        val compressedInput = input.sections.any { it.flags and 0x800L != 0L }
+        input.sections.forEachIndexed { index, original ->
+            if (index == 0) return@forEachIndexed
+            if (original.type == SHT_STRTAB && original.name.isEmpty()) return@forEachIndexed
+            val filterSection = if (original.type == SHT_REL || original.type == SHT_RELA)
+                input.sections.getOrNull(original.info) ?: original else original
+            val name = filterSection.name
+            if ((name.startsWith(".debug_") || name.startsWith(".stab")) && (!debugEnabled || compressedInput)) return@forEachIndexed
+            if (name.startsWith(".eh_frame") && !ehFrameEnabled && !bsdTarget) return@forEachIndexed
+            val supported = original.type in setOf(SHT_PROGBITS, SHT_NOTE, SHT_NOBITS,
+                SHT_PREINIT_ARRAY, SHT_INIT_ARRAY, SHT_FINI_ARRAY, SHT_REL, SHT_RELA)
+            if (!supported) return@forEachIndexed
+            val alignment = original.alignment.coerceAtLeast(1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            if (alignment and (alignment - 1) != 0) return@forEachIndexed
+            require(original.size in 0..Int.MAX_VALUE.toLong()) { "input section is too large: ${original.name}" }
+            var section = state.sections.drop(1).filterNotNull().firstOrNull { it.name == original.name }
+            if (section != null && section.type != original.type && original.name != ".eh_frame" && original.name != ".note.GNU-stack") {
+                throw IllegalArgumentException("section type conflict: ${original.name}")
+            }
+            if (section != null && original.name.startsWith(".gnu.linkonce")) {
+                result[index].linkOnce = true
+                return@forEachIndexed
+            }
+            val isNew = section == null
+            if (section == null) {
+                section = newSection(state, original.name, original.type, original.flags.toInt() and SHF_GROUP.inv())
+                section.alignment = alignment
+                section.entrySize = original.entrySize.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            }
+            val offset = sectionAdd(section, original.size.toInt(), alignment)
+            if (original.type != SHT_NOBITS) {
+                if (original.data.size > original.size) throw IllegalArgumentException("invalid section payload: ${original.name}")
+                original.data.forEachIndexed { byteIndex, byte -> section.data[offset + byteIndex] = byte }
+            }
+            if (instructionAlignment && section.flags and SHF_EXECINSTR != 0) sectionAdd(section, 0, 4)
+            result[index] = SectionMergeInfo(section, offset, isNew, false)
+        }
+        return result
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
