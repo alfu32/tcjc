@@ -864,7 +864,6 @@ object TccDbg {
         context.baseTypes[index]?.let { return it }
         require(index in defaults.indices)
         val default = defaults[index]
-        val separator = default.stabs.indexOf(':').let { if (it < 0) default.stabs.length else it }
         val name = default.stabs.substringBefore(':')
         val offset = context.section.size
         writeData1(context.section, 2) // DWARF_ABBREV_BASE_TYPE
