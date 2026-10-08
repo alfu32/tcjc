@@ -725,8 +725,6 @@ object TccDbg {
                     writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
                     val typeOffset = context.section.size; writeData4(context.section, 0)
                     if (member.bitSize > 0) { writeUleb(context.section, member.bitSize.toLong()); writeUleb(context.section, member.bitOffset.toLong()) }
-                    context.strings.relocations.getOrPut(context.section.name) { mutableListOf() }
-                        .add(Relocation(typeOffset, "R_DATA_32DW", context.refs.info))
                     memberFixups += typeOffset to member.type
                 }
                 if (hasMembers) {
