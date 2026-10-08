@@ -356,6 +356,47 @@ class Riscv64Gen(
         return RegisterPass(classes, offsets)
     }
 
+    fun fillNops(byteCount: Int) {
+        require(byteCount and 3 == 0) { "alignment of code section not multiple of 4" }
+        repeat(byteCount / 4) { emitInstruction(0x00000013) }
+    }
+
+    /** Emits an unresolved jump word and returns its position, matching gjmp(). */
+    fun jump(targetWord: Int): Int {
+        if (noCode()) return targetWord
+        emitInstruction(targetWord)
+        return position - 4
+    }
+
+    fun jumpAddress(address: Int) {
+        val relative = address - position
+        if ((relative + (1 shl 21)) and ((1 shl 22) - 2).inv() != 0) {
+            emitInstruction(0x17 or (5 shl 7) or lowOverflow(relative))
+            emitImmediate(0x67, 0, 0, 5, sign11(relative))
+        } else {
+            val immediate = (((relative ushr 12) and 0xff) shl 12) or (((relative ushr 11) and 1) shl 20) or
+                (((relative ushr 1) and 0x3ff) shl 21) or (((relative ushr 20) and 1) shl 31)
+            emitInstruction(0x6f or immediate)
+        }
+    }
+
+    /** Encodes the inverse conditional branch followed by the unresolved jump chain word. */
+    fun conditionalJump(function3: Int, left: Int, right: Int, targetWord: Int, reverseOperands: Boolean = false): Int {
+        require(function3 in 0..7)
+        val first = if (reverseOperands) right else left
+        val second = if (reverseOperands) left else right
+        emitInstruction(0x63 or ((function3 xor 1) shl 12) or (first shl 15) or (second shl 20) or (8 shl 7))
+        return jump(targetWord)
+    }
+
+    fun appendJumpChain(first: Int, second: Int): Int {
+        if (first == 0) return second
+        var tail = first
+        while (read32(tail) != 0) tail = read32(tail)
+        write32(tail, second)
+        return first
+    }
+
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
         var current = chain
