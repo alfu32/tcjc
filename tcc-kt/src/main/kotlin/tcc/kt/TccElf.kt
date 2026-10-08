@@ -47,6 +47,7 @@ object TccElf {
         var offset: Long = 0,
         var address: Long = 0,
         var allocatedSize: Int = 0,
+        var dataOffset: Int = 0,
         val data: MutableList<Byte> = mutableListOf(),
         var link: ElfSection? = null,
         var relocation: ElfSection? = null,
@@ -57,7 +58,7 @@ object TccElf {
         val hashBuckets: MutableList<Int> = mutableListOf(0),
         val hashChains: MutableList<Int> = mutableListOf(0),
     ) {
-        val size: Int get() = data.size
+        val size: Int get() = dataOffset
     }
 
     data class ElfState(
@@ -97,7 +98,7 @@ object TccElf {
         hashFlags: Int,
     ): SymbolTablePair {
         val symbols = newSection(state, symbolName, symbolType, symbolFlags)
-        symbols.entrySize = state.wordSize * 2
+        symbols.entrySize = if (state.wordSize == 8) 24 else 16
         val strings = newSection(state, stringName, SHT_STRTAB, symbolFlags)
         symbols.link = strings
         val hash = newSection(state, hashName, SHT_HASH, hashFlags)
@@ -112,20 +113,23 @@ object TccElf {
         val strings = requireNotNull(symbols.link)
         putElfString(strings, "")
         repeat(symbols.entrySize) { symbols.data += 0 }
+        symbols.dataOffset = symbols.entrySize
         val hash = requireNotNull(symbols.hash)
         hash.data.clear()
-        appendInt32(hash.data, 1) // bucket count
-        appendInt32(hash.data, 1) // first available symbol index
-        appendInt32(hash.data, 0)
-        appendInt32(hash.data, 0)
+        hash.dataOffset = 0
+        appendInt32(hash, 1) // bucket count
+        appendInt32(hash, 1) // first available symbol index
+        appendInt32(hash, 0)
+        appendInt32(hash, 0)
         symbols.symbols += ElfSymbol(0, 0, 0, 0, 0, SHN_UNDEF)
     }
 
     fun putElfString(section: ElfSection, text: String): Int {
         section.stringOffsets[text]?.let { return it }
-        val offset = section.size
+        val offset = section.dataOffset
         text.toByteArray(Charsets.UTF_8).forEach { section.data += it }
         section.data += 0
+        section.dataOffset = section.data.size
         section.stringOffsets[text] = offset
         return offset
     }
@@ -135,14 +139,16 @@ object TccElf {
 
     fun sectionAdd(section: ElfSection, size: Int, alignment: Int): Int {
         require(size >= 0 && alignment > 0 && alignment and (alignment - 1) == 0)
-        val offset = (section.size + alignment - 1) and -alignment
+        val offset = (section.dataOffset + alignment - 1) and -alignment
         val end = offset + size
         if (section.type != SHT_NOBITS) {
             while (section.data.size < end) section.data += 0
             section.allocatedSize = maxOf(section.allocatedSize, section.data.size)
         }
+        section.dataOffset = end
         section.alignment = maxOf(section.alignment, alignment)
-        return offset.also { if (section.type == SHT_NOBITS) section.allocatedSize = maxOf(section.allocatedSize, end) }
+        if (section.type == SHT_NOBITS) section.allocatedSize = maxOf(section.allocatedSize, end)
+        return offset
     }
 
     fun appendSection(section: ElfSection, bytes: ByteArray): Int {
@@ -166,6 +172,7 @@ object TccElf {
         val nameOffset = if (name.isNullOrEmpty()) 0 else putElfString(requireNotNull(section.link), name)
         val index = section.symbols.size
         section.symbols += ElfSymbol(nameOffset, value, size, info, other, sectionIndex)
+        sectionAdd(section, section.entrySize, 1)
         val hash = section.hash
         if (hash != null) {
             val bucketCount = readInt32(hash.data, 0).coerceAtLeast(1)
@@ -214,6 +221,7 @@ object TccElf {
 
     fun freeSection(section: ElfSection) {
         section.data.clear()
+        section.dataOffset = 0
         section.allocatedSize = 0
         section.symbols.clear()
         section.hashBuckets.clear()
@@ -232,8 +240,9 @@ object TccElf {
         val needed = 8 + (readInt32(hash.data, 0) + symbolIndex + 1) * 4
         while (hash.data.size < needed) hash.data += 0
     }
-    private fun appendInt32(output: MutableList<Byte>, value: Int) {
-        repeat(4) { shift -> output += (value ushr (shift * 8)).toByte() }
+    private fun appendInt32(section: ElfSection, value: Int) {
+        repeat(4) { shift -> section.data += (value ushr (shift * 8)).toByte() }
+        section.dataOffset = section.data.size
     }
     private fun readInt32(input: List<Byte>, offset: Int): Int =
         (input[offset].toInt() and 0xff) or ((input[offset + 1].toInt() and 0xff) shl 8) or
