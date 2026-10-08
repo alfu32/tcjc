@@ -181,6 +181,20 @@ object TccElf {
         val machoTarget: Boolean = false,
     )
     data class RuntimeAction(val kind: String, val name: String = "")
+    data class InputSectionHeader(
+        val name: String,
+        val type: Int,
+        val flags: Long,
+        val address: Long,
+        val offset: Long,
+        val size: Long,
+        val link: Int,
+        val info: Int,
+        val alignment: Long,
+        val entrySize: Long,
+        val data: ByteArray,
+    )
+    data class InputElf(val wordSize: Int, val machine: Int, val fileType: Int, val sections: List<InputSectionHeader>)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -421,6 +435,61 @@ object TccElf {
             return BINARY_TYPE_ARCHIVE
         }
         return 0
+    }
+
+    fun parseElfSections(input: ByteArray): InputElf? {
+        if (objectType(input) !in setOf(BINARY_TYPE_REL, BINARY_TYPE_DYN) || input.size < 64) return null
+        val is64 = (input[4].toInt() and 0xff) == 2
+        val littleEndian = (input[5].toInt() and 0xff) == 1
+        if (!is64 && (input[4].toInt() and 0xff) != 1) return null
+        fun readUnsigned(offset: Int, width: Int): Long {
+            if (offset < 0 || offset + width > input.size || width !in 1..8) return -1
+            var value = 0L
+            repeat(width) { index ->
+                val shift = if (littleEndian) index * 8 else (width - index - 1) * 8
+                value = value or ((input[offset + index].toLong() and 0xff) shl shift)
+            }
+            return value
+        }
+        val sectionOffset = readUnsigned(if (is64) 40 else 32, if (is64) 8 else 4)
+        val headerSize = if (is64) 64 else 52
+        val entrySize = readUnsigned(if (is64) 58 else 46, 2).toInt()
+        val sectionCount = readUnsigned(if (is64) 60 else 48, 2).toInt()
+        val stringIndex = readUnsigned(if (is64) 62 else 50, 2).toInt()
+        val requiredEntrySize = if (is64) 64 else 40
+        if (sectionOffset < headerSize || entrySize < requiredEntrySize || sectionCount < 1 || stringIndex !in 0 until sectionCount) return null
+        if (sectionOffset + entrySize.toLong() * sectionCount > input.size) return null
+        fun raw(index: Int): LongArray {
+            val base = sectionOffset.toInt() + index * entrySize
+            val widths = if (is64) intArrayOf(4, 4, 8, 8, 8, 8, 4, 4, 8, 8) else intArrayOf(4, 4, 4, 4, 4, 4, 4, 4, 4, 4)
+            var cursor = base
+            return LongArray(widths.size) { field ->
+                val width = widths[field]
+                val value = readUnsigned(cursor, width)
+                cursor += width
+                value
+            }
+        }
+        val rawHeaders = (0 until sectionCount).map(::raw)
+        val stringHeader = rawHeaders[stringIndex]
+        val names = if (stringHeader[1] == SHT_NOBITS.toLong() || stringHeader[4] < 0 || stringHeader[5] < 0 ||
+            stringHeader[4] + stringHeader[5] > input.size) return null else
+            input.copyOfRange(stringHeader[4].toInt(), (stringHeader[4] + stringHeader[5]).toInt())
+        fun nameAt(offset: Int): String {
+            if (offset !in names.indices) return ""
+            var end = offset
+            while (end < names.size && names[end] != 0.toByte()) end++
+            return names.copyOfRange(offset, end).toString(Charsets.UTF_8)
+        }
+        val sections = rawHeaders.map { h ->
+            val sectionData = if (h[1] == SHT_NOBITS.toLong()) byteArrayOf() else {
+                if (h[4] < 0 || h[5] < 0 || h[4] + h[5] > input.size) return null
+                input.copyOfRange(h[4].toInt(), (h[4] + h[5]).toInt())
+            }
+            InputSectionHeader(nameAt(h[0].toInt()), h[1].toInt(), h[2], h[3], h[4], h[5], h[6].toInt(), h[7].toInt(), h[8], h[9], sectionData)
+        }
+        val machine = readUnsigned(18, 2).toInt()
+        return InputElf(if (is64) 8 else 4, machine, readUnsigned(16, 2).toInt(), sections)
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
