@@ -86,6 +86,7 @@ class LibTcc(
         val machOTbdSoname: (Int) -> String? = { null }, val loadPe: (Int, String) -> Int = { _, _ -> 0 },
         val loadCoff: (Int) -> Int = { 0 }, val close: (Int) -> Unit = {},
     )
+    data class SourceFileHooks(val open: (String) -> Int = { -1 }, val close: (Int) -> Unit = {})
     data class FunctionContext(var callingConvention: Int = 0)
     data class BufferedSource(
         var filename: String, var trueFilename: String = filename, var lineNumber: Int = 1,
@@ -896,9 +897,30 @@ class LibTcc(
             bufferEnd = initialLength).also { sourceFile = it; tokenFlags = 3 }
     }
 
+    fun openSourceFile(compilerState: CompilerState, filename: String, includeDepth: Int, hooks: SourceFileHooks): Int {
+        val displayName = if (filename == "-") "<stdin>" else filename
+        val descriptor = if (filename == "-") 0 else hooks.open(filename)
+        if ((compilerState.verbose == 2 && descriptor >= 0) || compilerState.verbose == 3) {
+            output("${if (descriptor < 0) "nf" else "->"} ${" ".repeat(includeDepth.coerceAtLeast(0))}$displayName\n")
+        }
+        if (descriptor < 0) return -1
+        openBufferedSource(filename).fileDescriptor = descriptor
+        return 0
+    }
+
     fun closeBufferedSource() {
         val current = sourceFile ?: return
         if (current.fileDescriptor > 0) totalLines += current.lineNumber - 1L
+        sourceFile = current.previous
+        tokenFlags = current.tokenFlags
+    }
+
+    fun closeBufferedSource(hooks: SourceFileHooks) {
+        val current = sourceFile ?: return
+        if (current.fileDescriptor > 0) {
+            hooks.close(current.fileDescriptor)
+            totalLines += current.lineNumber - 1L
+        }
         sourceFile = current.previous
         tokenFlags = current.tokenFlags
     }
