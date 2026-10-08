@@ -71,7 +71,22 @@ class I386Asm(private val emit: (Int) -> Unit) {
     }
 
     fun selectMnemonic(mnemonic: String, operands: List<Operand>): Instruction? =
-        selectInstruction(I386AsmInstructionTable.entries.filter { it.mnemonic == mnemonic }, 0, operands)
+        selectInstruction(I386AsmInstructionTable.entries.filter { acceptsMnemonic(it, mnemonic) }, 0, operands)
+
+    private fun acceptsMnemonic(instruction: Instruction, requested: String): Boolean {
+        if (instruction.mnemonic == requested) return true
+        val template = instruction.mnemonic
+        val templateRoot = template.dropLastWhile { it in "bwl" }
+        val requestedRoot = requested.dropLastWhile { it in "bwl" }
+        if (templateRoot != requestedRoot) return false
+        val requestedSuffix = requested.lastOrNull()?.takeIf { it in "bwl" }
+        val widths = instruction.instructionType and 3
+        return when (widths) {
+            1, 3 -> requestedSuffix == null || requestedSuffix in "bwl"
+            2 -> requestedSuffix == null || requestedSuffix in "wl"
+            else -> false
+        }
+    }
 
     /** Selects a mnemonic template and emits its i386 opcode and operands. */
     fun assemble(
