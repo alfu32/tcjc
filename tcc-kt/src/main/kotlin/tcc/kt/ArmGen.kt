@@ -236,7 +236,7 @@ object ArmGen {
     enum class FloatAbi { SOFT, HARD }
     data class FunctionCallPlan(val effectiveFloatAbi: FloatAbi, val argumentRegisters: RegisterAssignment,
         val stackBytesBeforeAlignment: Int, val alignmentPadding: Int, val stackBytesAfterAlignment: Int,
-        val floatingReturnWords: List<Int>)
+        val floatingReturnWords: List<Int>, val argumentCopies: ParameterCopyPlan, val valueStackPopCount: Int)
 
     /** Plans ARM function entry instructions and incoming parameter addresses. */
     fun functionPrologue(parameters: List<FunctionParameter>, structReturnInMemory: Boolean, variadic: Boolean, hardFloat: Boolean, eabi: Boolean): FunctionProloguePlan {
@@ -639,7 +639,9 @@ object ArmGen {
         val returnWords = if (eabi && vfp && effectiveAbi == FloatAbi.SOFT && returnsFloat) {
             if (returnsDouble) listOf(0xee000b10.toInt(), 0xee201b10.toInt()) else listOf(0xee000a10.toInt())
         } else emptyList()
-        return FunctionCallPlan(effectiveAbi, assignment, assignment.stackBytes, padding, alignedSize, returnWords)
+        val copies = copyParameterPlan(parameters, assignment)
+        return FunctionCallPlan(effectiveAbi, assignment, assignment.stackBytes, padding, alignedSize,
+            returnWords, copies, parameters.size + copies.extraStackValues + 1)
     }
 
     /** Allocates a VFP argument range using the AAPCS hole and alignment rules. */
