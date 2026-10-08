@@ -107,6 +107,25 @@ class I386Asm(private val emit: (Int) -> Unit) {
         return position()
     }
 
+    /** Emits a branch displacement, resolving a same-section symbol locally. */
+    fun displacement32(expression: Expression, position: Int, sameSectionAddress: (String) -> Int?): Int {
+        val local = expression.symbol?.let(sameSectionAddress)
+        if (local != null) {
+            val value = expression.value + local - position - 4
+            emit32(value)
+            return value
+        }
+        emitRelocation(expression.symbol, expression.value, true)
+        emit32(expression.value - 4)
+        return expression.value - 4
+    }
+
+    /** Emits the assembler's condition-code suffix for a conditional branch. */
+    fun conditionCode(tokenOffset: Int): Int {
+        require(tokenOffset in conditionCodes.indices) { "unknown condition-code token offset $tokenOffset" }
+        return conditionCodes[tokenOffset]
+    }
+
     private fun emitExpression32(expression: Expression) {
         if (expression.pcRelative) {
             emitRelocation(expression.symbol, expression.value, true)
