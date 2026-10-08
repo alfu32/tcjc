@@ -1642,6 +1642,33 @@ object TccElf {
         return startIndex to endIndex
     }
 
+    fun addStandardLinkerSymbols(
+        state: ElfState,
+        text: ElfSection,
+        data: ElfSection,
+        bss: ElfSection,
+        outputSharedLibrary: Boolean,
+        openBsd: Boolean = false,
+        executableStart: Long = 0,
+        riscv64Target: Boolean = false,
+    ) {
+        setLinkerSymbol(state, "_etext", text, 0)
+        setLinkerSymbol(state, "_edata", data, 0)
+        setLinkerSymbol(state, "_end", bss, 0)
+        if (openBsd) setGlobalSymbol(state, requireNotNull(state.symbolTable), "__executable_start", null, executableStart)
+        if (riscv64Target) setGlobalSymbol(state, requireNotNull(state.symbolTable), "__global_pointer$", data, 0x800)
+        listOf(".preinit_array", ".init_array", ".fini_array").forEach { addInitArrayDefines(state, it) }
+        if (outputSharedLibrary) return
+        val table = state.symbolTable ?: return
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            if (section.flags and SHF_ALLOC == 0 || section.type !in setOf(SHT_PROGBITS, SHT_NOBITS, SHT_STRTAB)) return@forEach
+            val name = section.name.removePrefix(".")
+            if (name.isEmpty() || name.any { !(it == '_' || it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9') }) return@forEach
+            setGlobalSymbol(state, table, "__start_$name", section, 0)
+            setGlobalSymbol(state, table, "__stop_$name", section, -1)
+        }
+    }
+
     fun addBoundsCheckEntry(state: ElfState, boundsName: String = ".bounds") {
         val bounds = state.namedSections[boundsName] ?: return
         sectionAdd(bounds, state.wordSize, 1)
