@@ -2625,7 +2625,7 @@ object TccElf {
                 existing.value = section.dataOffset.toLong()
             }
         }
-        if (name.startsWith('_')) setLinkerSymbol(state, name.drop(1), section, mode, warn)
+        if (name.startsWith('_')) setLinkerSymbol(state, name.drop(1), section, mode + 1, warn)
         return result
     }
 
