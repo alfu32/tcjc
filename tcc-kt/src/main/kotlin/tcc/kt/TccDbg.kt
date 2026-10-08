@@ -240,6 +240,22 @@ object TccDbg {
         return true
     }
 
+    fun putStabsReloc(
+        state: DebugSections,
+        text: String?,
+        type: Int,
+        other: Int,
+        description: Int,
+        value: Long,
+        symbolIndex: Int,
+        relocationType: String = "R_DATA_32",
+    ): Boolean {
+        val entryIndex = state.stabs.size
+        if (!putStabs(state, text, type, other, description, value)) return false
+        state.relocations.getOrPut(".stab") { mutableListOf() } += Relocation(entryIndex * 12 + 8, relocationType, symbolIndex)
+        return true
+    }
+
     private fun putStabString(state: DebugSections, text: String): Int {
         state.stabStringOffsets[text]?.let { return it }
         val bytes = text.toByteArray(Charsets.UTF_8)
@@ -481,8 +497,8 @@ object TccDbg {
         ) else null
         if (dwarfVersion == 0) {
             val directoryName = if (compilationDirectory.endsWith('/')) compilationDirectory else "$compilationDirectory/"
-            putStabs(sections, directoryName, N_SO, 0, 0, textStart)
-            putStabs(sections, filename, N_SO, 0, 0, textStart)
+            putStabsReloc(sections, directoryName, N_SO, 0, 0, textStart, refs.text)
+            putStabsReloc(sections, filename, N_SO, 0, 0, textStart, refs.text)
             defaultTypes(pointerSize, charUnsignedByDefault = false).forEach { putStabs(sections, it.stabs, N_LSYM, 0, 0, 0) }
             putStabs(sections, filename, N_BINCL, 0, 0, 0)
         }
@@ -867,7 +883,8 @@ object TccDbg {
             if (scope.children.isNotEmpty()) writeData1(info, 0)
         } else {
             scope.symbols.forEach { symbol ->
-                putStabs(state, symbol.name, symbol.stabType, 0, 0, symbol.value)
+                if (symbol.section != null) putStabsReloc(state, symbol.name, symbol.stabType, 0, 0, symbol.value, symbol.symbolIndex)
+                else putStabs(state, symbol.name, symbol.stabType, 0, 0, symbol.value)
             }
             putStabs(state, null, N_LBRAC, 0, 0, scope.start.toLong())
             scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs, unitStart) }
@@ -986,7 +1003,10 @@ object TccDbg {
     ): Int {
         if (!state.dwarfEnabled) {
             val letter = when { global -> 'G'; staticData -> 'S'; else -> 'V' }
-            putStabs(state, "$name:$letter${stabsType(type, typeContext)}", if (global) N_GSYM else N_STSYM, 0, 0, value)
+            val stabType = if (global) N_GSYM else N_STSYM
+            val record = "$name:$letter${stabsType(type, typeContext)}"
+            if (global || sectionName == null) putStabs(state, record, stabType, 0, 0, value)
+            else putStabsReloc(state, record, stabType, 0, 0, value, symbolIndex)
             return typeContext.nextId
         }
         val context = dwarf ?: return -1
