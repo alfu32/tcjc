@@ -9,6 +9,7 @@ object TccDbg {
     const val N_FUN = 0x24
     const val N_SLINE = 0x44
     const val N_SO = 0x64
+    const val N_SOL = 0x84
     const val N_BINCL = 0x82
     const val N_EINCL = 0xa2
 
@@ -117,6 +118,7 @@ object TccDbg {
         var lastLine: Int = 1,
         var lastSourceLine: Int = 0,
         var newFile: Boolean = false,
+        var currentFilename: String = "",
     )
 
     class StringPool {
@@ -471,6 +473,7 @@ object TccDbg {
     }
 
     fun registerDwarfFile(state: DwarfLineState, filename: String, dwarfVersion: Int): Int {
+        state.currentFilename = filename
         val indexOffset = if (dwarfVersion < 5) 1 else 0
         if (filename == "<command line>") { state.currentFile = 1; return 1 }
         val slash = filename.lastIndexOf('/')
@@ -545,11 +548,15 @@ object TccDbg {
     }
 
     fun debugNewFile(state: DebugSections, line: DwarfLineState, filename: String): Int {
+        line.currentFilename = filename
+        line.lastSourceLine = 0
         if (!state.dwarfEnabled) { line.newFile = true; return line.currentFile }
         return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
     }
 
     fun debugIncludeBegin(state: DebugSections, line: DwarfLineState, filename: String): Int {
+        line.currentFilename = filename
+        line.lastSourceLine = 0
         if (state.dwarfEnabled) return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
         putStabs(state, filename, N_BINCL, 0, 0, 0)
         line.newFile = true
@@ -557,6 +564,8 @@ object TccDbg {
     }
 
     fun debugIncludeEnd(state: DebugSections, line: DwarfLineState, filename: String = ""): Int {
+        if (filename.isNotEmpty()) line.currentFilename = filename
+        line.lastSourceLine = 0
         if (state.dwarfEnabled) return registerDwarfFile(line, filename, state.dwarfVersion).also { line.newFile = true }
         putStabs(state, null, N_EINCL, 0, 0, 0)
         line.newFile = true
@@ -575,7 +584,13 @@ object TccDbg {
     fun debugLine(session: DebugSession, sourceLine: Int, address: Int): Boolean {
         if (!session.enabled || !session.codeSection || session.suppressCode) return false
         val line = session.line
-        if (line.newFile) line.newFile = false
+        if (line.newFile) {
+            line.newFile = false
+            line.lastSourceLine = 0
+            if (!session.sections.dwarfEnabled && line.currentFilename.isNotEmpty()) {
+                putStabs(session.sections, line.currentFilename, N_SOL, 0, 0, address.toLong())
+            }
+        }
         if (line.lastSourceLine == sourceLine) return false
         return if (session.sections.dwarfEnabled) {
             emitDwarfLine(line, address, sourceLine, session.minimumInstructionLength)
