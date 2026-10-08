@@ -199,6 +199,7 @@ object TccElf {
     data class InputSymbol(val name: String, val value: Long, val size: Long, val info: Int, val other: Int, val sectionIndex: Int)
     data class InputRelocation(val offset: Long, val symbolIndex: Int, val type: Int, val addend: Long = 0)
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
+    data class ObjectMergeResult(val sections: List<SectionMergeInfo>, val symbolIndexes: IntArray)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
@@ -442,10 +443,11 @@ object TccElf {
     }
 
     fun parseElfSections(input: ByteArray): InputElf? {
-        if (objectType(input) !in setOf(BINARY_TYPE_REL, BINARY_TYPE_DYN) || input.size < 64) return null
+        if (objectType(input) !in setOf(BINARY_TYPE_REL, BINARY_TYPE_DYN) || input.size < 52) return null
         val is64 = (input[4].toInt() and 0xff) == 2
         val littleEndian = (input[5].toInt() and 0xff) == 1
         if (!is64 && (input[4].toInt() and 0xff) != 1) return null
+        if (is64 && input.size < 64) return null
         fun readUnsigned(offset: Int, width: Int): Long {
             if (offset < 0 || offset + width > input.size || width !in 1..8) return -1
             var value = 0L
@@ -696,6 +698,58 @@ object TccElf {
                 )
             }
         }
+    }
+
+    fun mergeObjectFile(
+        state: ElfState,
+        inputBytes: ByteArray,
+        expectedMachine: Int,
+        outputObject: Boolean = false,
+        peTarget: Boolean = false,
+        debugEnabled: Boolean = false,
+        ehFrameEnabled: Boolean = false,
+        bsdTarget: Boolean = false,
+        instructionAlignment: Boolean = false,
+        allowedUndefinedRelocationTypes: Set<Int> = emptySet(),
+        reportError: (String) -> Unit = {},
+        reportDuplicate: (String) -> Unit = {},
+    ): ObjectMergeResult? {
+        val input = parseElfSections(inputBytes)
+        if (input == null || input.fileType != 1 || !input.littleEndian || input.machine != expectedMachine) {
+            reportError("invalid object file")
+            return null
+        }
+        val symbolTableIndices = input.sections.indices.filter { input.sections[it].type == SHT_SYMTAB }
+        if (symbolTableIndices.size > 1) {
+            reportError("object must contain only one symtab")
+            return null
+        }
+        val mappings = try {
+            mergeInputSections(state, input, debugEnabled, ehFrameEnabled, bsdTarget, instructionAlignment)
+        } catch (error: IllegalArgumentException) {
+            reportError(error.message ?: "invalid object section")
+            return null
+        }
+        val symbolIndexes = if (symbolTableIndices.isEmpty()) IntArray(0) else {
+            val symbolTableIndex = symbolTableIndices.single()
+            mappings[symbolTableIndex].section = state.symbolTable
+            val symbols = parseInputSymbols(inputBytes, input, symbolTableIndex)
+            if (symbols == null) {
+                reportError("invalid object symbol table")
+                return null
+            }
+            mergeObjectSymbols(state, symbols, mappings, outputObject, peTarget, reportDuplicate)
+        }
+        resolveInputSectionLinks(input, mappings)
+        if (symbolTableIndices.isNotEmpty()) {
+            try {
+                mergeObjectRelocations(input, mappings, symbolIndexes, allowedUndefinedRelocationTypes)
+            } catch (error: IllegalArgumentException) {
+                reportError(error.message ?: "invalid relocation entry")
+                return null
+            }
+        }
+        return ObjectMergeResult(mappings, symbolIndexes)
     }
 
     private fun parseInputRelocationsFromData(wordSize: Int, rela: Boolean, data: ByteArray, littleEndian: Boolean, requestedEntrySize: Int): List<InputRelocation> {
