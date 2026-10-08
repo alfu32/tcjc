@@ -2,7 +2,7 @@
 
 - **Translation candidates:** 54
 - **DONE:** 26
-- **DOING:** 3
+- **DOING:** 1
 - **TODO:** 27
 - **Currently doing:** `tests/tcctest.c` → `src/main/kotlin/tcc/kt/TccTest.kt`
 - **C tests retained:** all C test programs and test cases under `tests/` except the `tcctest.c` harness
