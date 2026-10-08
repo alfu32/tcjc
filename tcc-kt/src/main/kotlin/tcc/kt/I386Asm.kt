@@ -34,6 +34,8 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OPC_TEST = 0x50
         const val OPC_0F01 = 0x60
         const val OPC_0F = 0x100
+        const val X64_REG = 1 shl 20
+        const val X64_LOW8 = 1 shl 21
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
         val conditionCodes = intArrayOf(
@@ -58,6 +60,39 @@ class I386Asm(private val emit: (Int) -> Unit) {
         val token: Int, val opcode: Int, val instructionType: Int,
         val operandTypes: List<Int>, val mnemonic: String = "",
     )
+
+    data class RexOperand(var type: Int, var register: Int, var index: Int = -1)
+
+    /** Calculates and emits the REX prefix for the shared x86-64 assembler path. */
+    fun rexPrefix(width64: Boolean, operands: List<RexOperand>, registerOperand: Int, modRmOperand: Int): Int {
+        var rex = if (width64) 0x48 else 0
+        var highByteRegister = -1
+        fun markRegister(operand: RexOperand, bit: Int) {
+            if (operand.register >= 8) {
+                rex = rex or bit
+                operand.register -= 8
+            } else if (operand.type and X64_LOW8 != 0) rex = rex or 0x40
+            else if (operand.type and OP_REG8 != 0 && operand.register >= 4) highByteRegister = operand.register
+        }
+        if (modRmOperand < 0) {
+            operands.firstOrNull { it.type and (X64_REG or OP_REG8 or OP_REG16 or OP_REG32 or OP_ST) != 0 }
+                ?.let { markRegister(it, 0x41) }
+        } else {
+            if (registerOperand >= 0) markRegister(operands[registerOperand], 0x44)
+            val rm = operands[modRmOperand]
+            if (rm.type and (X64_REG or OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_CR or OP_EA) != 0)
+                markRegister(rm, 0x41)
+            if (rm.type and OP_EA != 0 && rm.index >= 8) {
+                rex = rex or 0x42
+                rm.index -= 8
+            }
+        }
+        if (rex != 0) {
+            require(highByteRegister < 0) { "cannot encode a high byte register when REX is required" }
+            emit(rex)
+        }
+        return rex
+    }
 
     /** Selects the first instruction template whose arity and operand masks match. */
     fun selectInstruction(instructions: List<Instruction>, token: Int, operands: List<Operand>): Instruction? {
