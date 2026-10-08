@@ -9,7 +9,13 @@ object TccDbg {
     const val N_FUN = 0x24
     const val N_SLINE = 0x44
     const val N_SO = 0x64
+    const val N_GSYM = 0x20
+    const val N_STSYM = 0x26
+    const val N_LSYM = 0x80
     const val N_SOL = 0x84
+    const val N_PSYM = 0xa0
+    const val N_LBRAC = 0xc0
+    const val N_RBRAC = 0xe0
     const val N_BINCL = 0x82
     const val N_EINCL = 0xa2
 
@@ -645,7 +651,7 @@ object TccDbg {
 
     /** Adapts N_LBRAC/N_RBRAC events to the nested scope and type checkpoint state. */
     fun debugStabn(stack: DebugScopeStack, type: Int, value: Int, resolveForwards: (fromIndex: Int, endIndex: Int) -> Unit = { _, _ -> }): DebugScope? {
-        if (type == 0xc0) { // N_LBRAC
+        if (type == N_LBRAC) {
             return openDebugScope(stack.scopes, value, stack.localTypeCount, stack.forwardTypeCount)
         }
         val active = stack.scopes.lastOrNull() ?: return null
@@ -824,9 +830,9 @@ object TccDbg {
         if (state.dwarfEnabled) {
             val info = state.sections.getValue(".debug_info")
             scope.symbols.asReversed().forEach { symbol ->
-                val external = symbol.stabType == 0x20 // N_GSYM
-                val static = symbol.stabType == 0x26 // N_STSYM
-                val parameter = symbol.stabType == 0xa0 // N_PSYM
+                val external = symbol.stabType == N_GSYM
+                val static = symbol.stabType == N_STSYM
+                val parameter = symbol.stabType == N_PSYM
                 writeData1(info, if (parameter) 6 else if (external) 3 else if (static) 4 else 5)
                 writeStringReference(state, info, symbol.name, refs.strings, pointerSize = pointerSize)
                 if (external || static) { writeUleb(info, symbol.file.toLong()); writeUleb(info, symbol.line.toLong()) }
@@ -855,9 +861,9 @@ object TccDbg {
             scope.symbols.forEach { symbol ->
                 putStabs(state, symbol.name, symbol.stabType, 0, 0, symbol.value)
             }
-            putStabs(state, null, 0xc0, 0, 0, scope.start.toLong()) // N_LBRAC
+            putStabs(state, null, N_LBRAC, 0, 0, scope.start.toLong())
             scope.children.forEach { finishDebugScope(state, it, pointerSize, functionAddress, refs, unitStart) }
-            putStabs(state, null, 0xe0, 0, 0, scope.end.toLong()) // N_RBRAC
+            putStabs(state, null, N_RBRAC, 0, 0, scope.end.toLong())
         }
     }
 
@@ -874,7 +880,7 @@ object TccDbg {
         stabsContext: StabsTypeContext? = null,
     ): Int {
         var added = 0
-        val stabType = if (parameters) 0xa0 else 0x80 // N_PSYM / N_LSYM
+        val stabType = if (parameters) N_PSYM else N_LSYM
         for (symbol in symbols) {
             if (symbol.name.isNullOrEmpty() || !symbol.isLocal) continue
             val typeOffset = if (dwarfContext != null) emitDwarfType(symbol.type, dwarfContext) else 0
@@ -946,7 +952,7 @@ object TccDbg {
     fun emitTypedef(state: DebugSections, name: String, type: DebugType, context: StabsTypeContext, dwarf: DwarfTypeContext? = null): Int {
         if (!state.dwarfEnabled) {
             val description = "$name:t${stabsType(type, context)}"
-            putStabs(state, description, 0x80, 0, 0, 0)
+            putStabs(state, description, N_LSYM, 0, 0, 0)
             return context.nextId
         }
         val typeOffset = dwarf?.let { emitDwarfType(type, it) } ?: return -1
@@ -972,7 +978,7 @@ object TccDbg {
     ): Int {
         if (!state.dwarfEnabled) {
             val letter = when { global -> 'G'; staticData -> 'S'; else -> 'V' }
-            putStabs(state, "$name:$letter${stabsType(type, typeContext)}", if (global) 0x20 else 0x26, 0, 0, value)
+            putStabs(state, "$name:$letter${stabsType(type, typeContext)}", if (global) N_GSYM else N_STSYM, 0, 0, value)
             return typeContext.nextId
         }
         val context = dwarf ?: return -1
