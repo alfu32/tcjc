@@ -384,6 +384,45 @@ class ArmAsm(
         emitOpcode(token, firstConditionToken, opcode)
     }
 
+    /** Encodes ARM halfword and signed-byte load/store transfer instructions. */
+    fun emitMiscDataTransfer(
+        group: String, token: Int, firstConditionToken: Int,
+        destination: Operand, base: Operand, offset: Operand? = null,
+        preIndexed: Boolean = true, writeback: Boolean = false, subtractOffset: Boolean = false,
+    ) {
+        if (destination.kind != Kind.REG32 || base.kind != Kind.REG32) { expect("register operands"); return }
+        var opcode = (1 shl 7) or (1 shl 4) or (destination.register shl 12) or (base.register shl 16)
+        if (preIndexed) opcode = opcode or (1 shl 24)
+        if (writeback) {
+            if (!preIndexed) { error("writeback with post-indexing is unpredictable"); return }
+            opcode = opcode or (1 shl 21)
+        }
+        val transferOffset = offset ?: Operand(Kind.IMM8, value = Expression(0))
+        when (transferOffset.kind) {
+            Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
+                val value = transferOffset.value.value
+                if (subtractOffset && value < 0) { error("minus before immediate is unsupported"); return }
+                val magnitude = if (value < 0) -value else value
+                if (magnitude >= 0x100) { error("offset out of range for '$group'"); return }
+                if ((value >= 0) xor subtractOffset) opcode = opcode or (1 shl 23)
+                opcode = opcode or ((magnitude and 0xf0) shl 4) or (magnitude and 0x0f) or (1 shl 22)
+            }
+            Kind.REG32 -> {
+                if (!subtractOffset) opcode = opcode or (1 shl 23)
+                opcode = opcode or transferOffset.register
+            }
+            else -> { expect("register or immediate offset"); return }
+        }
+        when (group) {
+            "ldrsb" -> opcode = opcode or (1 shl 6) or (1 shl 20)
+            "ldrsh" -> opcode = opcode or (1 shl 5) or (1 shl 6) or (1 shl 20)
+            "ldrh" -> opcode = opcode or (1 shl 5) or (1 shl 20)
+            "strh" -> opcode = opcode or (1 shl 5)
+            else -> { expect("miscellaneous data transfer instruction"); return }
+        }
+        emitOpcode(token, firstConditionToken, opcode)
+    }
+
     /** Encodes ARM block load/store and push/pop register-list instructions. */
     fun emitBlockDataTransfer(
         group: String, token: Int, firstConditionToken: Int,
