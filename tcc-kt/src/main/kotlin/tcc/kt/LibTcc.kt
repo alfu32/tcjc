@@ -28,7 +28,12 @@ class LibTcc(
         val pragmaLibraries: MutableList<String> = mutableListOf(), val loadedLibraries: MutableList<DllReference> = mutableListOf(),
         var entryName: String? = null, var initSymbol: String? = null, var finiSymbol: String? = null,
         var mapFile: String? = null, var dependencyOutput: String? = null,
+        var elfInterpreter: String? = null, var textAddress: ULong = 0uL, var hasTextAddress: Boolean = false,
+        var sectionAlignment: ULong = 0uL, var symbolic: Boolean = false, var exportDynamic: Boolean = false,
+        var enableNewDtags: Boolean = false, var noDelete: Boolean = false, var linkerArgumentIndex: Int = 0,
+        val linkerArguments: MutableList<String> = mutableListOf(), var outputFormatName: String? = null,
     )
+    data class LinkOptionMatch(val result: Int, val optionArgument: String?, val pendingSeparateArgument: Boolean = false)
     data class DllReference(val name: String, var level: Int = 0, var found: Boolean = false, var index: Int = 0, var handle: Any? = null)
     data class CompileHooks(
         val enter: (CompilerState) -> Unit = {}, val openSource: (String, String?, Int) -> Unit = { _, _, _ -> },
@@ -248,6 +253,82 @@ class LibTcc(
 
     fun addPragmaLibraries(compilerState: CompilerState, addLibrary: (String) -> Int) {
         compilerState.pragmaLibraries.toList().forEach { addLibrary(it) }
+    }
+
+    /** Matches the one/two-dash linker option syntax, aliases, negation, and split arguments. */
+    fun matchLinkerOption(compilerState: CompilerState, option: String, patterns: String, peTarget: Boolean = false): LinkOptionMatch {
+        if (!option.startsWith('-')) return LinkOptionMatch(0, null)
+        val start = if (option.startsWith("--")) 2 else 1
+        val negatable = patterns.startsWith('?')
+        val patternSet = if (negatable) patterns.drop(1) else patterns
+        var negative = false
+        val normalizedOption = option.substring(start).let {
+            if (negatable && it.startsWith("no-")) { negative = true; it.substring(3) }
+            else if (peTarget && negatable && it.startsWith("disable-")) { negative = true; it.substring(8) }
+            else it
+        }
+        for (pattern in patternSet.split('|')) {
+            val name = pattern.trimEnd('=', ':')
+            if (normalizedOption == name) {
+                if (pattern.endsWith('=') || pattern.endsWith(':')) {
+                    val next = compilerState.linkerArguments.getOrNull(compilerState.linkerArgumentIndex + 1)
+                    if (next == null) return LinkOptionMatch(0, null, pendingSeparateArgument = true)
+                    compilerState.linkerArgumentIndex++
+                    return LinkOptionMatch(if (negative) -1 else 1, next)
+                }
+                return LinkOptionMatch(if (negative) -1 else 1, "")
+            }
+            if (normalizedOption.startsWith("$name=") || normalizedOption.startsWith("$name:"))
+                return LinkOptionMatch(if (negative) -1 else 1, normalizedOption.substring(name.length + 1))
+            if (normalizedOption.startsWith(name) && pattern.endsWith(':'))
+                return LinkOptionMatch(if (negative) -1 else 1, normalizedOption.substring(name.length))
+        }
+        return LinkOptionMatch(0, null)
+    }
+
+    /** Consumes and applies the linker options handled by libtcc.c. */
+    fun setLinkerOptions(compilerState: CompilerState, encodedOptions: String, addFile: (String, Int) -> Int = { _, _ -> 0 },
+        warnUnsupported: (String) -> Unit = {}, peTarget: Boolean = false): Int {
+        compilerState.linkerArguments += splitArguments(encodedOptions, ',')
+        while (compilerState.linkerArgumentIndex < compilerState.linkerArguments.size) {
+            val option = compilerState.linkerArguments[compilerState.linkerArgumentIndex]
+            var matched: LinkOptionMatch
+            fun match(pattern: String) = matchLinkerOption(compilerState, option, pattern, peTarget)
+            when {
+                match("Bsymbolic").also { matched = it }.result != 0 -> compilerState.symbolic = true
+                match("nostdlib").also { matched = it }.result != 0 -> compilerState.noStandardLibraryPaths = true
+                match("e=|entry=").also { matched = it }.result != 0 -> compilerState.entryName = matched.optionArgument
+                match("image-base=|Ttext=").also { matched = it }.result != 0 -> {
+                    compilerState.textAddress = matched.optionArgument.orEmpty().removePrefix("0x").toULongOrNull(16) ?: 0uL
+                    compilerState.hasTextAddress = true
+                }
+                match("init=").also { matched = it }.result != 0 -> { compilerState.initSymbol = matched.optionArgument; warnUnsupported(option) }
+                match("fini=").also { matched = it }.result != 0 -> { compilerState.finiSymbol = matched.optionArgument; warnUnsupported(option) }
+                match("Map=").also { matched = it }.result != 0 -> { compilerState.mapFile = matched.optionArgument; warnUnsupported(option) }
+                match("oformat=").also { matched = it }.result != 0 -> {
+                    val format = matched.optionArgument.orEmpty()
+                    if (format.startsWith("elf32-") || format.startsWith("elf64-") || (peTarget && format.startsWith("pe-"))) compilerState.outputFormatName = "elf"
+                    else if (format == "binary" || format == "coff") compilerState.outputFormatName = format
+                    else return reportError(compilerState, ERROR_NO_ABORT, "unsupported linker option '$option'").let { -1 }
+                }
+                match("export-all-symbols|export-dynamic|E").also { matched = it }.result != 0 -> compilerState.exportDynamic = true
+                match("rpath=").also { matched = it }.result != 0 -> compilerState.rpath =
+                    if (compilerState.rpath.isNullOrEmpty()) matched.optionArgument.orEmpty() else compilerState.rpath + ":" + matched.optionArgument.orEmpty()
+                match("dynamic-linker=|I:").also { matched = it }.result != 0 -> compilerState.elfInterpreter = matched.optionArgument
+                match("enable-new-dtags").also { matched = it }.result != 0 -> compilerState.enableNewDtags = true
+                match("section-alignment=").also { matched = it }.result != 0 -> compilerState.sectionAlignment = matched.optionArgument.orEmpty().toULongOrNull(16) ?: 0uL
+                match("soname=|install_name=").also { matched = it }.result != 0 -> compilerState.soname = matched.optionArgument
+                match("?whole-archive").also { matched = it }.result != 0 -> compilerState.fileType = if (matched.result > 0) compilerState.fileType or TYPE_WHOLE_ARCHIVE else compilerState.fileType and TYPE_WHOLE_ARCHIVE.inv()
+                match("znodelete").also { matched = it }.result != 0 -> compilerState.noDelete = true
+                match("as-needed|O|z=").also { matched = it }.result != 0 -> warnUnsupported(option)
+                match("L:").also { matched = it }.result != 0 -> addLibraryPath(compilerState, matched.optionArgument.orEmpty())
+                match("l:").also { matched = it }.result != 0 -> addFile(matched.optionArgument.orEmpty(), TYPE_BINARY or (compilerState.fileType and TYPE_WHOLE_ARCHIVE))
+                matched.pendingSeparateArgument -> return 0
+                else -> return reportError(compilerState, ERROR_NO_ABORT, "unsupported linker option '$option'").let { -1 }
+            }
+            compilerState.linkerArgumentIndex++
+        }
+        return 0
     }
 
     fun copyTruncated(destination: ByteArray, source: String): ByteArray {
