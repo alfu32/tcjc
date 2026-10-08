@@ -583,9 +583,9 @@ object TccElf {
         layout.sections[".fini"]?.takeIf { it.dataOffset != 0 }?.let { put(13, it.address) }
         put(21, if (layout.debugEnabled) 0 else 0) // DT_DEBUG
         put(0, 0) // DT_NULL
-        dynamic.dataOffset = layout.startOffset
-        dynamic.data.clear()
-        repeat(layout.startOffset) { dynamic.data += 0 }
+        val prefix = dynamic.data.take(layout.startOffset.coerceIn(0, dynamic.data.size))
+        dynamic.data.clear(); dynamic.data.addAll(prefix)
+        dynamic.dataOffset = dynamic.data.size
         entries.forEach { entry ->
             if (dynamic.entrySize == 16) {
                 appendInt64(dynamic.data, entry.tag); appendInt64(dynamic.data, entry.value)
@@ -596,6 +596,16 @@ object TccElf {
         dynamic.dataOffset = dynamic.data.size
         dynamic.outputSize = dynamic.dataOffset.toLong()
         return entries
+    }
+
+    fun appendDynamicTag(dynamic: ElfSection, tag: Long, value: Long, wordSize: Int) {
+        if (wordSize == 8) {
+            appendInt64(dynamic.data, tag); appendInt64(dynamic.data, value)
+        } else {
+            appendInt32(dynamic.data, tag.toInt()); appendInt32(dynamic.data, value.toInt())
+        }
+        dynamic.dataOffset = dynamic.data.size
+        dynamic.outputSize = dynamic.dataOffset.toLong()
     }
 
     fun compactDynamicRelocations(state: ElfState, pltRelocations: ElfSection?): Pair<Long, Long> {
