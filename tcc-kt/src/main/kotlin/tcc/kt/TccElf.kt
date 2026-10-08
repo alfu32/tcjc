@@ -400,6 +400,16 @@ object TccElf {
         return symbol.value
     }
 
+    fun listElfSymbols(state: ElfState, callback: (String, Long) -> Unit) {
+        val table = state.symbolTable ?: return
+        val strings = table.link ?: return
+        table.symbols.forEach { symbol ->
+            if (symbol.value != 0L && symbolBind(symbol.info) == STB_GLOBAL && (symbol.other and 3) == STV_DEFAULT) {
+                callback(elfString(strings, symbol.nameOffset), symbol.value)
+            }
+        }
+    }
+
     fun putElfRelocation(
         state: ElfState,
         symbolTable: ElfSection,
