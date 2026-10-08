@@ -1231,6 +1231,7 @@ object TccDbg {
 
     fun scanEhFrameHeaderEntries(frameAddress: Long, headerAddress: Long, frame: ByteArray): List<EhFrameHeaderEntry> {
         val entries = mutableListOf<EhFrameHeaderEntry>()
+        val validCieOffsets = mutableSetOf<Int>()
         var offset = 0
         while (offset + 8 <= frame.size) {
             val length = readInt32(frame, offset)
@@ -1239,7 +1240,11 @@ object TccDbg {
                 continue
             }
             val ciePointer = readInt32(frame, offset + 4)
-            if (ciePointer != 0) {
+            if (ciePointer == 0) {
+                if (isSupportedCie(frame, offset, length)) validCieOffsets += offset
+            } else {
+                val cieOffset = offset + 4 - ciePointer
+                if (cieOffset !in validCieOffsets) { offset += length + 4; continue }
                 val fdeAddress = frameAddress + offset
                 val pcField = offset + 8
                 val pc = readInt32(frame, pcField).toLong() + (fdeAddress - headerAddress) + 8
@@ -1249,6 +1254,53 @@ object TccDbg {
             offset += length + 4
         }
         return entries.sortedBy { it.pcOffset }
+    }
+
+    private fun isSupportedCie(frame: ByteArray, offset: Int, length: Int): Boolean {
+        val end = offset + length + 4
+        var cursor = offset + 8
+        if (cursor >= end) return false
+        val version = frame[cursor++].toInt() and 0xff
+        if (version != 1 && version != 3) return false
+        if (cursor + 3 > end || frame[cursor++].toInt() != 'z'.code ||
+            frame[cursor++].toInt() != 'R'.code || frame[cursor++].toInt() != 0) return false
+        val codeAlignment = readUleb(frame, end, cursor) ?: return false
+        cursor = codeAlignment.second
+        val dataAlignment = readSleb(frame, end, cursor) ?: return false
+        cursor = dataAlignment.second
+        if (cursor >= end) return false
+        cursor++ // return address column
+        val augmentationLength = readUleb(frame, end, cursor) ?: return false
+        cursor = augmentationLength.second
+        return augmentationLength.first == 1L && cursor < end && (frame[cursor].toInt() and 0xff) == 0x1b
+    }
+
+    private fun readUleb(bytes: ByteArray, limit: Int, start: Int): Pair<Long, Int>? {
+        var value = 0L
+        var shift = 0
+        var cursor = start
+        while (cursor < limit && shift < 64) {
+            val byte = bytes[cursor++].toInt() and 0xff
+            value = value or ((byte and 0x7f).toLong() shl shift)
+            if (byte and 0x80 == 0) return value to cursor
+            shift += 7
+        }
+        return null
+    }
+
+    private fun readSleb(bytes: ByteArray, limit: Int, start: Int): Pair<Long, Int>? {
+        var value = 0L
+        var shift = 0
+        var cursor = start
+        var byte: Int
+        do {
+            if (cursor >= limit || shift >= 64) return null
+            byte = bytes[cursor++].toInt() and 0xff
+            value = value or ((byte and 0x7f).toLong() shl shift)
+            shift += 7
+        } while (byte and 0x80 != 0)
+        if (shift < 64 && byte and 0x40 != 0) value = value or (-1L shl shift)
+        return value to cursor
     }
 
     private fun readInt32(bytes: ByteArray, offset: Int): Int =
