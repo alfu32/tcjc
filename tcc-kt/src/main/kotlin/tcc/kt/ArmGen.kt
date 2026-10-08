@@ -318,6 +318,36 @@ object ArmGen {
         }
     }
 
+    fun fillNops(bytes: Int, output: (Int) -> Unit) {
+        require(bytes and 3 == 0) { "alignment of code section not multiple of 4" }
+        repeat(bytes / 4) { output(0xe1a00000.toInt()) }
+    }
+
+    fun generateJump(position: Int, target: Int, noCode: Boolean = false, output: (Int) -> Unit = {}): Int {
+        if (noCode) return target
+        output(jumpWord(position, target))
+        return position
+    }
+
+    fun jumpWord(position: Int, target: Int): Int = 0xe0000000.toInt() or encodeBranch(position, target, true)
+
+    fun conditionalJumpWord(position: Int, target: Int, condition: Condition): Int =
+        mapCondition(condition) or encodeBranch(position, target, true)
+
+    /** Appends one unresolved branch to the end of an existing branch chain. */
+    fun appendJump(code: ByteArray, chain: Int, target: Int): Int {
+        if (chain == 0) return target
+        var patch = chain
+        var next: Int
+        do {
+            next = decodeBranch(patch, readLe32(code, patch))
+            if (next != 0) patch = next
+        } while (next != 0)
+        val current = readLe32(code, patch)
+        writeLe32(code, patch, (current and -0x1000000) or encodeBranch(patch, target, true))
+        return chain
+    }
+
     private fun readLe32(bytes: ByteArray, at: Int): Int =
         (bytes[at].toInt() and 255) or ((bytes[at + 1].toInt() and 255) shl 8) or
             ((bytes[at + 2].toInt() and 255) shl 16) or (bytes[at + 3].toInt() shl 24)
