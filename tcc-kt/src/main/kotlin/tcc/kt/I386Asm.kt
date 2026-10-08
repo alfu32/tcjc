@@ -68,6 +68,42 @@ class I386Asm(private val emit: (Int) -> Unit) {
     fun selectMnemonic(mnemonic: String, operands: List<Operand>): Instruction? =
         selectInstruction(I386AsmInstructionTable.entries.filter { it.mnemonic == mnemonic }, 0, operands)
 
+    /** Selects a mnemonic template and emits its i386 opcode and operands. */
+    fun assemble(
+        mnemonic: String, operands: List<Operand>, operandSize16: Boolean = false,
+        segmentPrefix: Int = 0, addressSize16: Boolean = false,
+        emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
+    ): Boolean {
+        val instruction = selectMnemonic(mnemonic, operands) ?: return false
+        val opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16)
+        emitInstruction(instruction, operands, opcodeForMnemonic(instruction, mnemonic, opcode), emitExpression = emitExpression)
+        return true
+    }
+
+    private fun opcodeForMnemonic(instruction: Instruction, mnemonic: String, baseOpcode: Int): Int {
+        val kind = instruction.instructionType and 0x70
+        val root = mnemonic.dropLastWhile { it in "bwl" }
+        val group = when (kind) {
+            0x30 -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
+            0x20 -> mapOf("rol" to 0, "ror" to 1, "rcl" to 2, "rcr" to 3, "shl" to 4, "sal" to 4, "shr" to 5, "sar" to 7)[root]
+            0x40 -> mapOf("fadd" to 0, "fmul" to 1, "fcom" to 2, "fcomp" to 3, "fsub" to 4, "fsubr" to 5, "fdiv" to 6, "fdivr" to 7)[root]
+            else -> null
+        }
+        if (group != null) return baseOpcode + (group shl 3)
+        if (kind == 0x50) {
+            val condition = conditionNames.indexOf(root.removePrefix("cmov").removePrefix("set").removePrefix("j"))
+            if (condition >= 0) return baseOpcode + condition
+        }
+        val width = when (mnemonic.lastOrNull()) { 'b' -> 0; 'w' -> 1; 'l' -> 2; else -> 0 }
+        return if (instruction.instructionType and 1 != 0 && width > 0) baseOpcode + 1 else baseOpcode
+    }
+
+    private val conditionNames = listOf(
+        "o", "no", "b", "c", "nae", "nb", "nc", "ae", "e", "z", "ne", "nz",
+        "be", "na", "nbe", "a", "s", "ns", "p", "pe", "np", "po", "l", "nge",
+        "nl", "ge", "le", "ng", "nle", "g",
+    )
+
     private fun expandOperandType(type: Int): Int = when (type and 0x1f) {
         in 0..19 -> 1 shl (type and 0x1f)
         20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
