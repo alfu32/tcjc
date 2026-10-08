@@ -159,4 +159,37 @@ class Riscv64Asm(
         emitOpcode(opcode or encodeRd(rd.register) or encoded)
         return true
     }
+
+    fun emitAtomic(opcode: Int, rd: Operand, rs2: Operand, rs1: Operand, acquire: Boolean, release: Boolean): Boolean {
+        if (!requireRegister(rd, "first destination operand") || !requireRegister(rs2, "second source operand") ||
+            !requireRegister(rs1, "third source operand")) return false
+        emitOpcode(opcode or encodeRs1(rs1.register) or encodeRs2(rs2.register) or encodeRd(rd.register) or
+            ((if (acquire) 1 else 0) shl 26) or ((if (release) 1 else 0) shl 25))
+        return true
+    }
+
+    fun emitS(opcode: Int, rs1: Operand, rs2: Operand, immediate: Operand): Boolean {
+        if (!requireRegister(rs1, "first source operand") || !requireRegister(rs2, "second source operand")) return false
+        if (immediate.type != OP_IM12S) { error("Expected immediate value between 0 and 8191"); return false }
+        val value = immediate.expression.value.toInt()
+        emitOpcode(opcode or encodeRs1(rs1.register) or encodeRs2(rs2.register) or ((value and 0x1f) shl 7) or ((value ushr 5) shl 25))
+        return true
+    }
+
+    fun emitB(opcode: Int, rs1: Operand, rs2: Operand, immediate: Operand,
+        expandFarBranch: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> error("far branch relocation required") }): Boolean {
+        if (!requireRegister(rs1, "first source operand") || !requireRegister(rs2, "destination operand")) return false
+        val symbol = immediate.expression.symbol
+        if (immediate.type == OP_IM32 && symbol != null) {
+            val inverseFunction = ((opcode ushr 12) and 7) xor 1
+            val inverseOpcode = (opcode and (7 shl 12).inv()) or (inverseFunction shl 12)
+            expandFarBranch(inverseOpcode, rs1.register, rs2.register, symbol)
+            return true
+        }
+        if (immediate.type != OP_IM12S) { error("Expected branch immediate value between 0 and 8191"); return false }
+        val offset = immediate.expression.value.toInt()
+        emitOpcode(opcode or encodeRs1(rs1.register) or encodeRs2(rs2.register) or (((offset ushr 1) and 0xf) shl 8) or
+            (((offset ushr 5) and 0x1f) shl 25) or (((offset ushr 11) and 1) shl 7) or (((offset ushr 12) and 1) shl 31))
+        return true
+    }
 }
