@@ -3,6 +3,7 @@ package tcc.kt
 import java.nio.file.Paths
 import java.nio.file.Files
 import java.nio.file.Path
+import java.io.RandomAccessFile
 
 /** Public library and shared utility functions mechanically translated from libtcc.c. */
 class LibTcc(
@@ -622,6 +623,20 @@ class LibTcc(
     }
 
     fun normalizeSlashes(path: String): String = path.replace('\\', '/')
+    fun openFile(path: String, mode: String): RandomAccessFile {
+        val access = if (mode.contains('w') || mode.contains('+') || mode.contains('a')) "rw" else "r"
+        return RandomAccessFile(path, access).apply {
+            if (mode.contains('w')) setLength(0)
+            if (mode.contains('a')) seek(length())
+        }
+    }
+    fun closeFile(file: RandomAccessFile) = file.close()
+
+    /** Derives the executable directory used as CONFIG_TCCDIR on Windows. */
+    fun windowsInstallDirectory(modulePath: String): String = normalizeSlashes(modulePath.lowercase()).let { path ->
+        val end = path.lastIndexOf('/')
+        if (end < 0) "" else path.substring(0, end)
+    }
     fun basename(path: String): String = path.substring(path.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
     fun fileExtension(path: String): String {
         val base = basename(path)
