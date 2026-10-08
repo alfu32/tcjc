@@ -158,6 +158,76 @@ class I386Gen(
     enum class IntegerOperation { ADD, ADC, SUB, SBB, AND, XOR, OR, COMPARE, MULTIPLY, SHIFT_LEFT, SHIFT_RIGHT, SHIFT_ARITHMETIC, DIVIDE, UDIVIDE, MODULO, UMODULO, MULTIPLY_UNSIGNED_WIDE }
     data class IntegerResult(val register: Int, val highRegister: Int? = null, val comparison: Boolean = false)
 
+    enum class FloatingOperation { NEGATE, ADD, SUBTRACT, MULTIPLY, DIVIDE, EQUAL, NOT_EQUAL, LESS, LESS_EQUAL, GREATER, GREATER_EQUAL }
+    data class FloatingResult(val comparison: FloatingOperation? = null)
+
+    /** Emits x87 scalar arithmetic and compare sequences. */
+    fun floatingOperation(operation: FloatingOperation, kind: I386ValueKind, right: I386Value? = null, initiallySwapped: Boolean = false): FloatingResult {
+        if (operation == FloatingOperation.NEGATE) { o(0xe0d9); return FloatingResult() }
+        var swapped = initiallySwapped
+        val isCompare = operation in setOf(FloatingOperation.EQUAL, FloatingOperation.NOT_EQUAL, FloatingOperation.LESS, FloatingOperation.LESS_EQUAL, FloatingOperation.GREATER, FloatingOperation.GREATER_EQUAL)
+        if ((isCompare || kind == I386ValueKind.LONG_DOUBLE) && right != null) load(0, right)
+        if (kind == I386ValueKind.LONG_DOUBLE && !isCompare) swapped = !swapped
+        if (isCompare) {
+            when (operation) {
+                FloatingOperation.GREATER_EQUAL, FloatingOperation.GREATER -> swapped = !swapped
+                FloatingOperation.EQUAL, FloatingOperation.NOT_EQUAL -> swapped = false
+                else -> Unit
+            }
+            if (swapped) o(0xc9d9)
+            if (operation == FloatingOperation.EQUAL || operation == FloatingOperation.NOT_EQUAL) o(0xe9da) else o(0xd9de)
+            o(0xe0df)
+            when (operation) {
+                FloatingOperation.EQUAL -> { o(0x45e480); o(0x40fc80) }
+                FloatingOperation.NOT_EQUAL -> { o(0x45e480); o(0x40f480) }
+                FloatingOperation.GREATER_EQUAL, FloatingOperation.LESS_EQUAL -> { o(0x05c4f6) }
+                else -> o(0x45c4f6)
+            }
+            return FloatingResult(operation)
+        }
+        val field = when (operation) {
+            FloatingOperation.ADD -> 0
+            FloatingOperation.SUBTRACT -> if (swapped) 5 else 4
+            FloatingOperation.MULTIPLY -> 1
+            FloatingOperation.DIVIDE -> if (swapped) 7 else 6
+            else -> throw IllegalArgumentException("unsupported floating operation $operation")
+        }
+        if (kind == I386ValueKind.LONG_DOUBLE) {
+            o(0xde); o(0xc1 + (field shl 3))
+        } else {
+            val address = right?.location as? I386ValueLocation.Memory
+                ?: throw IllegalArgumentException("i386 x87 arithmetic expects its right operand in memory")
+            genModRm(if (kind == I386ValueKind.DOUBLE) 0xdc else 0xd8, field, address.address)
+        }
+        return FloatingResult()
+    }
+
+    /** Converts an integer register pair or word to the x87 stack. */
+    fun convertIntToFloat(register: Int, unsigned: Boolean = false, wide: Boolean = false, highRegister: Int = 2) {
+        if (wide) {
+            o(0x50 + (highRegister and 7)); o(0x50 + (register and 7))
+            o(0x242cdf); o(0x08c483)
+        } else if (unsigned) {
+            o(0x6a); g(0); o(0x50 + (register and 7)); o(0x242cdf); o(0x08c483)
+        } else {
+            o(0x50 + (register and 7)); o(0x2404db); o(0x04c483)
+        }
+    }
+
+    /** Selects the runtime helper used for a floating point to integer cast. */
+    fun floatToIntegerHelper(source: I386ValueKind): String = when (source) {
+        I386ValueKind.FLOAT -> "__fixsfdi"
+        I386ValueKind.LONG_DOUBLE -> "__fixxfdi"
+        else -> "__fixdfdi"
+    }
+
+    /** Emits the signed/unsigned byte or short extension into a 32 bit register. */
+    fun convertCharShortToInt(register: Int, kind: I386ValueKind) {
+        val signed = kind == I386ValueKind.BYTE || kind == I386ValueKind.SHORT
+        val isShort = kind == I386ValueKind.SHORT || kind == I386ValueKind.USHORT
+        o(0xc0b60f or (((if (signed) 1 else 0) shl 3 or (if (isShort) 1 else 0)) shl 8) or (((register and 7) shl 3 or (register and 7)) shl 16))
+    }
+
     /** Emits the integer instruction sequences selected by i386-gen.c's gen_opi. */
     fun integerOperation(operation: IntegerOperation, destination: Int, sourceRegister: Int? = null, immediate: Int? = null): IntegerResult {
         val dst = destination and 7
