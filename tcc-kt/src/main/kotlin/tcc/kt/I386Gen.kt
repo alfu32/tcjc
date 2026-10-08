@@ -6,7 +6,7 @@ class I386Gen(
     private val picEnabled: Boolean = false,
     private val staticCall: (String) -> Unit = {},
 ) {
-    enum class RelocType { R386_32, R386_PC32, R386_GOT32X, R386_GOTPC, R386_TLS_LE }
+    enum class RelocType { R386_32, R386_PC32, R386_PLT32, R386_GOT32X, R386_GOTPC, R386_TLS_LE }
     data class Symbol(val name: String, val isStatic: Boolean = false, val isTls: Boolean = false)
     data class Relocation(val offset: Int, val type: RelocType, val symbol: Symbol, val addend: Int)
 
@@ -232,6 +232,57 @@ class I386Gen(
             }
             is I386ValueLocation.Compare -> Unit
         }
+    }
+
+    /** Emits an unresolved near jump and returns its patch-chain node. */
+    fun gjmp(next: Int = 0): Int = oad(0xe9, next)
+
+    /** Emits a jump to a known address, using the short encoding when possible. */
+    fun gjmpAddr(target: Int) {
+        val shortDelta = target - position - 2
+        if (shortDelta in -128..127) { g(0xeb); g(shortDelta) }
+        else oad(0xe9, target - position - 5)
+    }
+
+    fun gjmpCond(condition: Int, next: Int = 0): Int {
+        g(0x0f)
+        return oad(condition - 16, next)
+    }
+
+    /** Joins a linked list of unresolved jump fields into another chain. */
+    fun gjmpAppend(head: Int, tail: Int): Int {
+        if (head == 0) return tail
+        var last = head
+        while (true) {
+            val next = read32(last)
+            if (next == 0) break
+            last = next
+        }
+        write32(last, tail)
+        return head
+    }
+
+    fun gaddSp(amount: Int) {
+        if (amount in -128..127) { o(0xc483); g(amount) }
+        else oad(0xc481, amount)
+    }
+
+    /** Emits a direct relocated call/jump or an indirect register call/jump. */
+    fun callOrJump(isJump: Boolean, target: Any, addend: Int = 0) {
+        if (target is Symbol) {
+            val opcode = 0xe8 + if (isJump) 1 else 0
+            if (picEnabled && !target.isStatic) {
+                getPcThunk(3, true)
+                val at = oad(opcode, addend - 4)
+                relocations += Relocation(at, RelocType.R386_PLT32, target, addend)
+            } else {
+                val at = oad(opcode, addend - 4)
+                relocations += Relocation(at, RelocType.R386_PC32, target, addend)
+            }
+        } else if (target is Int) {
+            o(0xff)
+            o(0xd0 + (target and 7) + (if (isJump) 0x10 else 0))
+        } else throw IllegalArgumentException("i386 call target must be a symbol or register")
     }
 
     fun read32(offset: Int): Int = (code[offset].toInt() and 0xff) or
