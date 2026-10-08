@@ -78,7 +78,7 @@ object TccDbg {
         data class ArrayType(val element: DebugType, val upperBound: Int) : DebugType
         data class Function(val result: DebugType, val parameters: List<DebugType>) : DebugType
         data class Aggregate(val name: String, val isUnion: Boolean, val byteSize: Int, val members: List<DebugMember>, val identity: Long = 0) : DebugType
-        data class Enumeration(val name: String, val unsigned: Boolean, val values: List<Pair<String, Long>>, val identity: Long = 0) : DebugType
+        data class Enumeration(val name: String, val unsigned: Boolean, val values: List<Pair<String, Long>>, val identity: Long = 0, val baseTypeCode: Int = 0) : DebugType
     }
     data class DebugMember(val name: String, val type: DebugType, val bitOffset: Int, val bitSize: Int = 0)
     data class StabsTypeContext(var nextId: Int = 0, val aggregateIds: MutableMap<Long, Int> = mutableMapOf(), val definedAggregates: MutableSet<Long> = mutableSetOf())
@@ -706,10 +706,11 @@ object TccDbg {
             }
             is DebugType.ArrayType -> {
                 val element = emit(current.element)
+                val indexType = context.baseTypes[4] ?: element
                 val offset = context.section.size
                 writeData1(context.section, 8); writeData4(context.section, ref(element))
                 val sibling = context.section.size; writeData4(context.section, 0)
-                writeData1(context.section, 9); writeData4(context.section, ref(element)); writeUleb(context.section, current.upperBound.toLong())
+                writeData1(context.section, 9); writeData4(context.section, ref(indexType)); writeUleb(context.section, current.upperBound.toLong())
                 writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)); offset
             }
             is DebugType.Aggregate -> {
@@ -737,9 +738,11 @@ object TccDbg {
             }
             is DebugType.Enumeration -> {
                 context.typeOffsets[current.identity]?.let { return it }
+                val baseType = context.baseTypes[current.baseTypeCode]
+                    ?: error("missing DWARF enum base type ${current.baseTypeCode}")
                 val offset = context.section.size; context.typeOffsets[current.identity] = offset
                 writeData1(context.section, 13); name(current.name); writeData1(context.section, if (current.unsigned) 7 else 5); writeData1(context.section, 4)
-                writeData4(context.section, 0); writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
+                writeData4(context.section, ref(baseType)); writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
                 val sibling = context.section.size; writeData4(context.section, 0)
                 current.values.forEach { (enumName, value) ->
                     writeData1(context.section, if (current.unsigned) 12 else 11); name(enumName)
