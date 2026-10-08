@@ -62,6 +62,7 @@ object BoundCheck {
     /** Checks an address addition and returns INVALID_POINTER when it escapes a known region. */
     @JvmStatic
     fun pointerAdd(pointer: Long, offset: Long): Long {
+        count("bound_ptr_add")
         if (checkingDepth.get() > 0) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
@@ -75,6 +76,7 @@ object BoundCheck {
     /** Checks access width, matching the generated __bound_ptr_indirN helpers. */
     @JvmStatic
     fun pointerIndir(pointer: Long, offset: Long, width: Int): Long {
+        count("bound_ptr_indir$width")
         if (checkingDepth.get() > 0) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
@@ -100,6 +102,7 @@ object BoundCheck {
 
     @JvmStatic
     fun memCopy(dest: ByteArray, destOffset: Int, src: ByteArray, srcOffset: Int, size: Int): ByteArray {
+        count("bound_memcpy")
         check(destOffset.toLong(), size.toLong(), "memcpy dest")
         check(srcOffset.toLong(), size.toLong(), "memcpy src")
         require(!(dest === src && destOffset < srcOffset + size && srcOffset < destOffset + size)) { "overlapping regions in memcpy" }
@@ -109,6 +112,7 @@ object BoundCheck {
 
     @JvmStatic
     fun memMove(dest: ByteArray, destOffset: Int, src: ByteArray, srcOffset: Int, size: Int): ByteArray {
+        count("bound_memmove")
         check(destOffset.toLong(), size.toLong(), "memmove dest")
         check(srcOffset.toLong(), size.toLong(), "memmove src")
         src.copyInto(dest, destOffset, srcOffset, srcOffset + size)
@@ -117,6 +121,7 @@ object BoundCheck {
 
     @JvmStatic
     fun memSet(dest: ByteArray, value: Int, size: Int): ByteArray {
+        count("bound_memset")
         check(0, size.toLong(), "memset")
         dest.fill(value.toByte(), 0, size)
         return dest
@@ -226,13 +231,14 @@ object BoundCheck {
 
     @JvmStatic
     fun malloc(size: Int): Allocation = lock.withLock {
+        count("bound_malloc")
         allocate(size, 1)
     }
 
     @JvmStatic
     fun calloc(count: Int, size: Int): Allocation {
         require(count >= 0 && size >= 0)
-        return lock.withLock { allocate(Math.multiplyExact(count, size), 2) }
+        return lock.withLock { this.count("bound_calloc"); allocate(Math.multiplyExact(count, size), 2) }
     }
 
     @JvmStatic
@@ -243,6 +249,7 @@ object BoundCheck {
 
     @JvmStatic
     fun realloc(address: Long, size: Int): Allocation = lock.withLock {
+        count("bound_realloc")
         val previous = allocations[address] ?: throw IllegalArgumentException("realloc of unknown address 0x${address.toString(16)}")
         val replacement = allocate(size, 3)
         previous.bytes.copyInto(replacement.bytes, 0, 0, minOf(previous.bytes.size, replacement.bytes.size))
@@ -253,6 +260,7 @@ object BoundCheck {
 
     @JvmStatic
     fun free(address: Long) {
+        count("bound_free")
         lock.withLock {
             if (allocations.remove(address) == null) return@withLock
             regions.remove(address)
@@ -400,6 +408,33 @@ object BoundCheck {
     fun dispatchSigaction(signum: Int, info: Long = 0L) {
         val action = lock.withLock { signalActions[signum] }
         action?.handler?.invoke(signum, info)
+    }
+
+
+    private val statistics = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private fun count(name: String) { statistics.merge(name, 1L, Long::plus) }
+
+    @JvmStatic fun statistics(): Map<String, Long> = statistics.toSortedMap()
+    @JvmStatic fun clearStatistics() = statistics.clear()
+
+    @JvmStatic
+    fun fork(forkBackend: () -> Int): Int {
+        val result = forkBackend()
+        if (result == 0) {
+            checkingDepth.set(0)
+            lock.withLock { signalHandlers.clear(); signalActions.clear() }
+        }
+        return result
+    }
+
+    @JvmStatic
+    fun createThreadTask(name: String? = null, start: () -> Any?): java.util.concurrent.FutureTask<Any?> {
+        val task = java.util.concurrent.FutureTask {
+            checkingDepth.set(0)
+            start()
+        }
+        Thread(task, name).start()
+        return task
     }
 
 }
