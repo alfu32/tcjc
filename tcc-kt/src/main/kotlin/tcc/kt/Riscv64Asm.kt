@@ -390,4 +390,64 @@ class Riscv64Asm(
         emitLittleEndian16(opcode or encoded)
         return true
     }
+
+    private fun compressedRegisterNumber(operand: Operand, role: String): Int? {
+        if (!requireRegister(operand, role)) return null
+        val register = registerValue(operand.register) - 8
+        if (register !in 0..7) { error("Expected $role to use a valid C-extension register"); return null }
+        return register
+    }
+
+    fun emitCompressedCl(name: String, opcode: Int, rd: Operand, rs1: Operand, immediate: Operand): Boolean {
+        val dst = compressedRegisterNumber(rd, "destination operand") ?: return false
+        val base = compressedRegisterNumber(rs1, "source operand") ?: return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val offset = immediate.expression.value.toInt()
+        if (offset > 0xff) { error("Expected immediate value between 0 and 0xff"); return false }
+        if (offset and 3 != 0) { error("Expected immediate divisible by 4"); return false }
+        val encoded = when (name) {
+            "c.flw", "c.lw" -> (nthBit(offset, 6) shl 5) or (nthBit(offset, 2) shl 6) or (((offset ushr 3) and 7) shl 10)
+            "c.fld", "c.ld" -> (((offset ushr 6) and 3) shl 5) or (((offset ushr 3) and 7) shl 10)
+            else -> { expect("known compressed load"); return false }
+        }
+        emitLittleEndian16(opcode or encodeCompressedRs2(dst) or encodeCompressedRs1(base) or encoded)
+        return true
+    }
+
+    fun emitCompressedCr(opcode: Int, rd: Operand, rs2: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand") || !requireRegister(rs2, "source operand")) return false
+        emitLittleEndian16(opcode or encodeCompressedRs1(rd.register) or encodeCompressedRs2(rs2.register))
+        return true
+    }
+
+    fun emitCompressedCs(name: String, opcode: Int, rs2: Operand, rs1: Operand, immediate: Operand): Boolean {
+        val base = compressedRegisterNumber(rs1, "base operand") ?: return false
+        val source = compressedRegisterNumber(rs2, "source operand") ?: return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val offset = immediate.expression.value.toInt()
+        if (offset > 0xff) { error("Expected immediate value between 0 and 0xff"); return false }
+        if (offset and 3 != 0) { error("Expected immediate divisible by 4"); return false }
+        val encoded = when (name) {
+            "c.fsw", "c.sw" -> (nthBit(offset, 6) shl 5) or (nthBit(offset, 2) shl 6) or (((offset ushr 3) and 7) shl 10)
+            "c.fsd", "c.sd" -> (((offset ushr 6) and 3) shl 5) or (((offset ushr 3) and 7) shl 10)
+            else -> { expect("known compressed store"); return false }
+        }
+        emitLittleEndian16(opcode or encodeCompressedRs2(base) or encodeCompressedRs1(source) or encoded)
+        return true
+    }
+
+    fun emitCompressedCss(name: String, opcode: Int, rs2: Operand, immediate: Operand): Boolean {
+        if (!requireRegister(rs2, "destination operand")) return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected immediate source operand"); return false }
+        val offset = immediate.expression.value.toInt()
+        if (offset > 0xff) { error("Expected immediate value between 0 and 0xff"); return false }
+        if (offset and 3 != 0) { error("Expected immediate divisible by 4"); return false }
+        val encoded = when (name) {
+            "c.fswsp", "c.swsp" -> (((offset ushr 6) and 3) shl 7) or (((offset ushr 2) and 0xf) shl 9)
+            "c.fsdsp", "c.sdsp" -> (((offset ushr 6) and 7) shl 7) or (((offset ushr 3) and 7) shl 10)
+            else -> { expect("known compressed stack store"); return false }
+        }
+        emitLittleEndian16(opcode or (registerValue(rs2.register) shl 2) or encoded)
+        return true
+    }
 }
