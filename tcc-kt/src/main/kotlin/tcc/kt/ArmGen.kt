@@ -194,6 +194,72 @@ object ArmGen {
         var lastHole: Int = 0, var firstFree: Int = 0,
     )
 
+    enum class ParameterType { STRUCT, FLOAT, DOUBLE, LONG_DOUBLE, LONG_LONG, OTHER }
+    enum class ParameterClass { STACK, CORE_STRUCT, VFP, VFP_STRUCT, CORE }
+    data class Parameter(val type: ParameterType, val size: Int, val alignment: Int, val homogeneousFloatAggregate: Boolean = false)
+    data class ParameterPlan(val parameterIndex: Int, val parameterClass: ParameterClass, val start: Int, val end: Int)
+    data class RegisterAssignment(val plans: List<ParameterPlan>, val stackBytes: Int, val coreRegisterTodo: Int)
+
+    /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
+    fun assignParameterRegisters(parameters: List<Parameter>, hardFloat: Boolean): RegisterAssignment {
+        var nextCore = 0
+        var nextStack = 0
+        var coreTodo = 0
+        val plans = mutableListOf<ParameterPlan>()
+        val vfpRegisters = AvailableVfpRegisters()
+        for (index in parameters.indices.reversed()) {
+            val parameter = parameters[index]
+            val size = (parameter.size + 3) and -4
+            val alignment = (parameter.alignment + 3) and -4
+            var startVfp = 0
+            var assigned = false
+            if (parameter.type in setOf(ParameterType.STRUCT, ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE)) {
+                if (hardFloat && (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE) || parameter.homogeneousFloatAggregate)) {
+                    startVfp = assignVfpRegister(vfpRegisters, alignment, size)
+                    if (startVfp >= 0) {
+                        val cls = if (parameter.homogeneousFloatAggregate) ParameterClass.VFP_STRUCT else ParameterClass.VFP
+                        plans.add(0, ParameterPlan(index, cls, startVfp, startVfp + ((size - 1) shr 2)))
+                        continue
+                    }
+                }
+                nextCore = (nextCore + (alignment - 1) / 4) and ((alignment / 4) - 1).inv()
+                if (nextCore + size / 4 <= 4 || (nextCore < 4 && startVfp != -1)) {
+                    var reg = nextCore
+                    while (reg < 4 && reg < nextCore + size / 4) {
+                        coreTodo = coreTodo or (1 shl reg)
+                        reg++
+                    }
+                    plans.add(0, ParameterPlan(index, ParameterClass.CORE_STRUCT, nextCore, reg))
+                    nextCore += size / 4
+                    if (nextCore > 4) nextStack = (nextCore - 4) * 4
+                    assigned = true
+                } else nextCore = 4
+            } else if (nextCore < 4) {
+                val isLong = parameter.type == ParameterType.LONG_LONG
+                if (isLong) {
+                    nextCore = (nextCore + 1) and -2
+                    if (nextCore == 4) {
+                        // Fall through to stack allocation below.
+                    } else {
+                        plans.add(0, ParameterPlan(index, ParameterClass.CORE, nextCore, nextCore + 1))
+                        nextCore += 2
+                        continue
+                    }
+                } else {
+                    plans.add(0, ParameterPlan(index, ParameterClass.CORE, nextCore, nextCore))
+                    nextCore++
+                    continue
+                }
+            }
+            if (!assigned) {
+                nextStack = (nextStack + alignment - 1) and (alignment - 1).inv()
+                plans.add(0, ParameterPlan(index, ParameterClass.STACK, nextStack, nextStack + size))
+                nextStack += size
+            }
+        }
+        return RegisterAssignment(plans, nextStack, coreTodo)
+    }
+
     /** Allocates a VFP argument range using the AAPCS hole and alignment rules. */
     fun assignVfpRegister(registers: AvailableVfpRegisters, alignment: Int, size: Int): Int {
         if (registers.firstFree == -1) return -1
