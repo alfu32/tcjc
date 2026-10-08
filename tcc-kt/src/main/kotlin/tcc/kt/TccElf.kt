@@ -27,6 +27,11 @@ object TccElf {
     const val STT_OBJECT = 1
     const val STT_FUNC = 2
     const val STT_TLS = 6
+    const val STV_DEFAULT = 0
+    const val STV_INTERNAL = 1
+    const val STV_HIDDEN = 2
+    const val STV_PROTECTED = 3
+    const val ST_ASM_SET = 0x80
 
     data class ElfSymbol(
         val nameOffset: Int,
@@ -230,6 +235,69 @@ object TccElf {
         }
         return 0
     }
+
+    /** Merges an object symbol with an earlier global/weak definition. */
+    fun setElfSymbol(
+        state: ElfState,
+        table: ElfSection,
+        value: Long,
+        size: Long,
+        info: Int,
+        other: Int,
+        sectionIndex: Int,
+        name: String,
+        reportDuplicate: (String) -> Unit = {},
+    ): Int {
+        val binding = symbolBind(info)
+        val type = info and 0x0f
+        val visibility = other and 3
+        if (binding == STB_LOCAL) return putElfSymbol(table, value, size, info, other, sectionIndex, name)
+        val index = findElfSymbol(table, name)
+        if (index == 0) return putElfSymbol(table, value, size, info, other, sectionIndex, name)
+        val existing = table.symbols[index]
+        if (existing.value == value && existing.size == size && existing.info == info &&
+            existing.other == other && existing.sectionIndex == sectionIndex) return index
+        if (existing.sectionIndex == SHN_UNDEF) {
+            existing.other = other
+            existing.info = (binding shl 4) or type
+            existing.sectionIndex = sectionIndex
+            existing.value = value
+            existing.size = size
+            return index
+        }
+        val oldBinding = symbolBind(existing.info)
+        val oldVisibility = existing.other and 3
+        val mergedVisibility = when {
+            oldVisibility == STV_DEFAULT -> visibility
+            visibility == STV_DEFAULT -> oldVisibility
+            else -> minOf(oldVisibility, visibility)
+        }
+        existing.other = (existing.other and 3.inv()) or mergedVisibility
+        when {
+            sectionIndex == SHN_UNDEF -> Unit
+            binding == STB_GLOBAL && oldBinding == STB_WEAK -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            binding == STB_WEAK && oldBinding == STB_GLOBAL -> Unit
+            binding == STB_WEAK && oldBinding == STB_WEAK -> Unit
+            visibility == STV_HIDDEN || visibility == STV_INTERNAL -> Unit
+            table.flags and SHF_DYNSYM != 0 -> Unit
+            !isBss(state, sectionIndex) && isBss(state, existing.sectionIndex) -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            isBss(state, sectionIndex) -> Unit
+            existing.other and ST_ASM_SET != 0 -> patchSymbol(existing, value, size, binding, type, other, sectionIndex)
+            else -> reportDuplicate("link symbol '$name' defined twice")
+        }
+        return index
+    }
+
+    private fun patchSymbol(symbol: ElfSymbol, value: Long, size: Long, binding: Int, type: Int, other: Int, sectionIndex: Int) {
+        symbol.info = (binding shl 4) or type
+        symbol.other = other
+        symbol.sectionIndex = sectionIndex
+        symbol.value = value
+        symbol.size = size
+    }
+
+    private fun isBss(state: ElfState, sectionIndex: Int): Boolean =
+        sectionIndex == SHN_COMMON || (sectionIndex >= 0 && sectionIndex < state.sections.size && state.sections[sectionIndex]?.type == SHT_NOBITS)
 
     fun symbolAddress(state: ElfState, name: String, reportMissing: (String) -> Unit = {}): Long? {
         val symbols = state.symbolTable ?: return null
