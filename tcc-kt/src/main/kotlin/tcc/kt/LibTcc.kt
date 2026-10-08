@@ -556,6 +556,7 @@ class LibTcc(
                 "libPath" -> setLibraryPath(compilerState, optionArgument)
                 "define" -> defineSymbol(compilerState, optionArgument)
                 "undefine" -> undefineSymbol(compilerState, optionArgument)
+                "include" -> compilerState.commandLineIncludes += "#include \"$optionArgument\"\n"
                 "library" -> { compilerState.inputFiles += optionArgument; addArgumentFile(compilerState, optionArgument, TYPE_LIBRARY or compilerState.fileType); compilerState.linkerArguments += "-l$optionArgument" }
                 "output" -> {
                     if (compilerState.outputFile != null) reportError(compilerState, ERROR_WARNING, "multiple -o option")
@@ -684,6 +685,7 @@ class LibTcc(
             name == "discarded-qualifiers" -> s.warnDiscardedQualifiers = enabled
             name.startsWith("error=") -> {
                 val warningName = name.removePrefix("error=")
+                if (warningName !in setOf("all", "error", "write-strings", "unsupported", "implicit-function-declaration", "discarded-qualifiers")) return false
                 val optionFlags = if (enabled) WARN_ON or WARN_ERR else WARN_NOE
                 s.warningOverrides[warningName] = optionFlags
                 s.warningOption = optionFlags
