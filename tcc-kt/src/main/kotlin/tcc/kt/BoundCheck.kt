@@ -110,4 +110,83 @@ object BoundCheck {
     @JvmStatic fun strcmp(a: ByteArray, b: ByteArray): Int = memCompare(a, 0, b, 0, minOf(strlen(a), strlen(b))).let { d ->
         if (d != 0) d else strlen(a).compareTo(strlen(b))
     }
+
+    @JvmStatic fun strcpy(dest: ByteArray, destOffset: Int, src: ByteArray, srcOffset: Int): ByteArray {
+        val length = strlen(src.copyOfRange(srcOffset, src.size)) + 1
+        check(destOffset.toLong(), length.toLong(), "strcpy dest")
+        check(srcOffset.toLong(), length.toLong(), "strcpy src")
+        require(!(dest === src && destOffset < srcOffset + length && srcOffset < destOffset + length)) { "overlapping regions in strcpy" }
+        src.copyInto(dest, destOffset, srcOffset, srcOffset + length)
+        return dest
+    }
+
+    @JvmStatic fun strncpy(dest: ByteArray, destOffset: Int, src: ByteArray, srcOffset: Int, size: Int): ByteArray {
+        val available = strlen(src.copyOfRange(srcOffset, src.size))
+        val copied = minOf(size, available)
+        check(destOffset.toLong(), size.toLong(), "strncpy dest")
+        check(srcOffset.toLong(), copied.toLong(), "strncpy src")
+        for (i in 0 until size) dest[destOffset + i] = if (i < copied) src[srcOffset + i] else 0
+        return dest
+    }
+
+    @JvmStatic fun strcat(dest: ByteArray, src: ByteArray): ByteArray {
+        val destLength = strlen(dest)
+        val srcLength = strlen(src)
+        check(0, (destLength + srcLength + 1).toLong(), "strcat dest")
+        check(0, (srcLength + 1).toLong(), "strcat src")
+        require(!(dest === src)) { "overlapping regions in strcat" }
+        src.copyInto(dest, destLength, 0, srcLength + 1)
+        return dest
+    }
+
+    @JvmStatic fun strncat(dest: ByteArray, src: ByteArray, count: Int): ByteArray {
+        val destLength = strlen(dest)
+        val length = minOf(strlen(src), count)
+        check(0, (destLength + length + 1).toLong(), "strncat dest")
+        check(0, length.toLong(), "strncat src")
+        src.copyInto(dest, destLength, 0, length)
+        dest[destLength + length] = 0
+        return dest
+    }
+
+    @JvmStatic fun strncmp(a: ByteArray, aOffset: Int, b: ByteArray, bOffset: Int, count: Int): Int {
+        for (i in 0 until count) {
+            val av = a[aOffset + i].toInt() and 0xff
+            val bv = b[bOffset + i].toInt() and 0xff
+            if (av != bv || av == 0) return av - bv
+        }
+        return 0
+    }
+
+    @JvmStatic fun strchr(value: ByteArray, character: Int): Int {
+        val ch = character and 0xff
+        for (i in value.indices) {
+            if ((value[i].toInt() and 0xff) == ch) return i
+            if (value[i].toInt() == 0) return -1
+        }
+        return if (ch == 0) value.size else -1
+    }
+
+    @JvmStatic fun strrchr(value: ByteArray, character: Int): Int {
+        val ch = character and 0xff
+        var found = if (ch == 0) strlen(value) else -1
+        for (i in 0 until strlen(value)) if ((value[i].toInt() and 0xff) == ch) found = i
+        return found
+    }
+
+    @JvmStatic fun strdup(value: ByteArray): ByteArray = value.copyOfRange(0, strlen(value) + 1)
+
+    @JvmStatic
+    fun allocaRegion(pointer: Long, size: Long, frame: Long) = lock.withLock {
+        newRegion(pointer, size)
+        frameRegions.getOrPut(frame) { mutableListOf() }.add(pointer)
+    }
+
+    @JvmStatic
+    fun deleteFrameRegions(frame: Long) = lock.withLock {
+        frameRegions.remove(frame)?.forEach { regions.remove(it) }
+    }
+
+    private val frameRegions = mutableMapOf<Long, MutableList<Long>>()
+
 }
