@@ -203,6 +203,7 @@ object ArmGen {
     data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
+    data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
 
     /** Plans ARM function entry instructions and incoming parameter addresses. */
     fun functionPrologue(parameters: List<FunctionParameter>, structReturnInMemory: Boolean, variadic: Boolean, hardFloat: Boolean, eabi: Boolean): FunctionProloguePlan {
@@ -271,6 +272,75 @@ object ArmGen {
         words.addAll(listOf(0xe59fc004.toInt(), 0xe04bd00c.toInt(), 0xe1a0f00e.toInt(), difference))
         val patch = 0xe1000000.toInt() or encodeBranch(patchPosition, sequencePosition, true)
         return FunctionEpiloguePlan(words, difference, patch)
+    }
+
+    fun integerToFloat(source: ValueType, target: ValueType, unsigned: Boolean, sourceCoreRegister: Int,
+        destinationFloatRegister: Int, vfp: Boolean): ConversionPlan {
+        if (source in setOf(ValueType.BYTE, ValueType.SHORT, ValueType.INT)) {
+            val sourceRegister = integerRegister(sourceCoreRegister)
+            val destination = floatingRegister(destinationFloatRegister, vfp)
+            if (vfp) {
+                val targetDouble = if (target == ValueType.FLOAT) 0 else 0x100
+                val signed = if (unsigned) 0 else 0x80
+                return ConversionPlan(listOf(
+                    0xee000a10.toInt() or (sourceRegister shl 12) or (destination shl 16),
+                    0xeeb80a40.toInt() or (destination shl 12) or destination or signed or targetDouble,
+                ))
+            }
+            val targetDouble = if (target == ValueType.FLOAT) 0 else 0x80
+            return ConversionPlan(listOf(0xee000110.toInt() or targetDouble or (destination shl 16) or (sourceRegister shl 12)))
+        }
+        if (source == ValueType.LONG_LONG) {
+            val helper = when (target) {
+                ValueType.FLOAT -> if (unsigned) "__floatundisf" else "__floatdisf"
+                ValueType.DOUBLE -> if (unsigned) "__floatundidf" else "__floatdidf"
+                ValueType.LONG_DOUBLE -> if (unsigned) "__floatundixf" else "__floatdixf"
+                else -> null
+            }
+            return ConversionPlan(helper = helper)
+        }
+        return ConversionPlan()
+    }
+
+    fun floatToInteger(source: ValueType, target: ValueType, unsigned: Boolean, sourceFloatRegister: Int,
+        destinationCoreRegister: Int, vfp: Boolean): ConversionPlan {
+        val sourceRegister = floatingRegister(sourceFloatRegister, vfp)
+        if (target == ValueType.INT && vfp) {
+            val signedBit = if (unsigned) 0 else 0x10000
+            val sourceDouble = if (source == ValueType.FLOAT) 0 else 0x100
+            val destination = integerRegister(destinationCoreRegister)
+            return ConversionPlan(listOf(
+                0xeebc0ac0.toInt() or (sourceRegister shl 12) or sourceRegister or sourceDouble or signedBit,
+                0xee100a10.toInt() or (sourceRegister shl 16) or (destination shl 12),
+            ))
+        }
+        if (target == ValueType.INT && !unsigned) {
+            val destination = integerRegister(destinationCoreRegister)
+            return ConversionPlan(listOf(0xee100170.toInt() or (destination shl 12) or sourceRegister))
+        }
+        val helper = when (target) {
+            ValueType.INT -> when (source) {
+                ValueType.FLOAT -> "__fixunssfsi"
+                ValueType.DOUBLE -> "__fixunsdfsi"
+                ValueType.LONG_DOUBLE -> "__fixunsxfsi"
+                else -> null
+            }
+            ValueType.LONG_LONG -> when (source) {
+                ValueType.FLOAT -> "__fixsfdi"
+                ValueType.DOUBLE -> "__fixdfdi"
+                ValueType.LONG_DOUBLE -> "__fixxfdi"
+                else -> null
+            }
+            else -> null
+        }
+        return ConversionPlan(helper = helper, integerResultHighRegister = if (target == ValueType.LONG_LONG) TREG_R1 else null)
+    }
+
+    fun convertFloatPrecision(source: ValueType, target: ValueType, register: Int, vfp: Boolean): ConversionPlan {
+        if (!vfp || (source == ValueType.FLOAT) == (target == ValueType.FLOAT)) return ConversionPlan()
+        val fpRegister = floatingRegister(register, true)
+        val sourceDouble = if (source == ValueType.FLOAT) 0 else 0x100
+        return ConversionPlan(listOf(0xeeb70ac0.toInt() or (fpRegister shl 12) or fpRegister or sourceDouble))
     }
 
     /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
