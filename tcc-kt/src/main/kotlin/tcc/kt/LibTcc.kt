@@ -146,6 +146,7 @@ class LibTcc(
     private var nextAllocationId = 1L
     private var currentMemoryBytes = 0L
     private var maximumMemoryBytes = 0L
+    private var liveStateCount = 0
     private val allocations = linkedMapOf<Long, Allocation>()
     var sourceFile: BufferedSource? = null
         private set
@@ -693,6 +694,19 @@ class LibTcc(
     fun memoryStats(): MemoryStats = MemoryStats(currentMemoryBytes, maximumMemoryBytes, allocations.size)
     fun memoryCheck() {
         if (allocations.isNotEmpty()) output("MEM_DEBUG: mem_leak= $currentMemoryBytes bytes, mem_max_size= $maximumMemoryBytes bytes\n")
+    }
+
+    fun memoryCheck(stateDelta: Int) {
+        liveStateCount += stateDelta
+        if (liveStateCount == 0 && currentMemoryBytes != 0L) {
+            output("MEM_DEBUG: mem_leak= $currentMemoryBytes bytes, mem_max_size= $maximumMemoryBytes bytes\n")
+            allocations.values.forEach { allocation ->
+                output("${allocation.sourceFile ?: "<unknown>"}:${allocation.sourceLine}: error: ${allocation.bytes.size} bytes leaked\n")
+            }
+            currentMemoryBytes = 0
+            maximumMemoryBytes = 0
+            allocations.clear()
+        }
     }
 
     fun normalizedPathCompare(first: String, second: String, pathCompare: (String, String) -> Boolean = { a, b -> a == b }): Boolean =
