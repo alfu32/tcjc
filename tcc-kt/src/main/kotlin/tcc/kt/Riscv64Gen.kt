@@ -72,6 +72,7 @@ class Riscv64Gen(
         var variadicRegisterCount: Int = 0,
         var variadicListOffset: Int = 0,
     )
+    enum class IntegerOperation { ADD, SUBTRACT, SHIFT_LEFT, SHIFT_RIGHT, SHIFT_ARITHMETIC, MULTIPLY, DIVIDE, DIVIDE_UNSIGNED, REMAINDER, REMAINDER_UNSIGNED, AND, OR, XOR, LESS_THAN, LESS_THAN_UNSIGNED }
 
     private var bytes = ByteArray(256)
     val relocations = mutableListOf<Relocation>()
@@ -449,6 +450,52 @@ class Riscv64Gen(
     }
 
     fun vaListOffset(frame: FunctionFrame): Int = frame.variadicListOffset
+
+    /** Emits the register-register integer operation table from gen_opil(). */
+    fun integerOperation(operation: IntegerOperation, left: Int, right: Int, destination: Int, word: Boolean = false) {
+        val opcode = when (operation) {
+            IntegerOperation.REMAINDER -> if (word) 0x3b else 0x33
+            else -> 0x33
+        } or if (word && operation != IntegerOperation.AND && operation != IntegerOperation.OR && operation != IntegerOperation.XOR) 8 else 0
+        val (function3, function7) = when (operation) {
+            IntegerOperation.ADD -> 0 to 0
+            IntegerOperation.SUBTRACT -> 0 to 0x20
+            IntegerOperation.SHIFT_LEFT -> 1 to 0
+            IntegerOperation.SHIFT_RIGHT -> 5 to 0
+            IntegerOperation.SHIFT_ARITHMETIC -> 5 to 0x20
+            IntegerOperation.MULTIPLY -> 0 to 1
+            IntegerOperation.DIVIDE -> 4 to 1
+            IntegerOperation.DIVIDE_UNSIGNED -> 5 to 1
+            IntegerOperation.REMAINDER -> 6 to 1
+            IntegerOperation.REMAINDER_UNSIGNED -> 7 to 1
+            IntegerOperation.AND -> 7 to 0
+            IntegerOperation.OR -> 6 to 0
+            IntegerOperation.XOR -> 4 to 0
+            IntegerOperation.LESS_THAN -> 2 to 0
+            IntegerOperation.LESS_THAN_UNSIGNED -> 3 to 0
+        }
+        emitRegister(opcode, function3, integerRegister(destination), integerRegister(left), integerRegister(right), function7)
+    }
+
+    /** Emits the immediate arithmetic and comparison forms used by gen_opil(). */
+    fun integerImmediate(operation: IntegerOperation, source: Int, destination: Int, immediate: Int, word: Boolean = false) {
+        val opcode = 0x13 or if (word && operation in setOf(IntegerOperation.ADD, IntegerOperation.SHIFT_LEFT, IntegerOperation.SHIFT_RIGHT, IntegerOperation.SHIFT_ARITHMETIC)) 8 else 0
+        val encoding: Pair<Int, Int> = when (operation) {
+            IntegerOperation.ADD -> 0 to immediate
+            IntegerOperation.SUBTRACT -> 0 to -immediate
+            IntegerOperation.SHIFT_LEFT -> 1 to (immediate and if (word) 31 else 63)
+            IntegerOperation.SHIFT_RIGHT -> 5 to (immediate and if (word) 31 else 63)
+            IntegerOperation.SHIFT_ARITHMETIC -> 5 to (0x400 or (immediate and if (word) 31 else 63))
+            IntegerOperation.LESS_THAN -> 2 to immediate
+            IntegerOperation.LESS_THAN_UNSIGNED -> 3 to immediate
+            IntegerOperation.AND -> 7 to immediate
+            IntegerOperation.OR -> 6 to immediate
+            IntegerOperation.XOR -> 4 to immediate
+            else -> throw IllegalArgumentException("operation has no immediate form: $operation")
+        }
+        val (function3, encodedImmediate) = encoding
+        emitImmediateUnsigned(opcode, function3, integerRegister(destination), integerRegister(source), encodedImmediate)
+    }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
     fun patchBranchChain(chain: Int, target: Int) {
