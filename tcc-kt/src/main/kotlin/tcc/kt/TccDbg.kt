@@ -140,6 +140,7 @@ object TccDbg {
         val session: DebugSession,
         val unit: DwarfUnitState?,
         val ehFrame: EhFrameState?,
+        val forwardTypes: MutableList<ForwardTypeEntry> = mutableListOf(),
     )
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
@@ -513,6 +514,13 @@ object TccDbg {
 
     /** Completes the translation unit records used by tcc_debug_end and tcc_eh_frame_end. */
     fun finishDebugUnit(debugUnit: DebugUnit, textSize: Int): DebugSections {
+        debugUnit.unit?.let { unit ->
+            finalizeForwardTypes(
+                debugUnit.session.sections.sections.getValue(".debug_info"), debugUnit.forwardTypes,
+                unit.infoStart, debugUnit.session.line.currentFile, debugUnit.session.line.lastSourceLine,
+                debugUnit.session.sections, unit.refs, unit.pointerSize,
+            )
+        }
         debugUnit.unit?.let { finishDwarfCompilationUnit(debugUnit.session.sections, it, textSize) }
         endEhFrame(debugUnit.ehFrame)
         if (!debugUnit.session.sections.dwarfEnabled) {
