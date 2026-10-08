@@ -387,9 +387,10 @@ class I386Asm(private val emit: (Int) -> Unit) {
                 else -> throw IllegalArgumentException("unknown register %$name")
             }
             var fullType = type
-            if (name == "eax") fullType = fullType or OP_EAX
+            if (register == 0 && type and (OP_REG8 or OP_REG16 or OP_REG32) != 0) fullType = fullType or OP_EAX
             if (name == "cl") fullType = fullType or OP_CL
             if (name == "dx") fullType = fullType or OP_DX
+            if (type == OP_ST && register == 0) fullType = fullType or OP_ST0
             return Operand(fullType or if (indirect) OP_INDIR else 0, register)
         }
         if (text.startsWith('$')) {
