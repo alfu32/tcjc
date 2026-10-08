@@ -1766,8 +1766,8 @@ object TccElf {
 
     /** Runs the common ELF output sizing, ordering, layout, and serialization passes. */
     fun buildElfOutput(state: ElfState, request: ElfOutputRequest): ByteArray {
-        allocateSectionNames(state, request.objectOutput)
         setSectionSizes(state, request.dynamicOutput, request.includeDebug, request.prepareDynamicRelocations)
+        allocateSectionNames(state, request.objectOutput)
         val layoutRequest = request.layout.copy(dynamicOutput = request.dynamicOutput)
         val sorted = sortSections(state, layoutRequest.elfOutput, request.bsdTarget, request.interpreter)
         val layout = layoutSections(
