@@ -66,6 +66,8 @@ object TccDbg {
         val sourceLine: Int,
         val startAddress: Long,
         val typeOffset: Int,
+        val frameBaseOpcode: Int = 0x9c,
+        val unitStart: Int = 0,
         val lineState: DwarfLineState,
     )
     data class DebugTypeEntry(val identity: Long, val offset: Int)
@@ -845,7 +847,9 @@ object TccDbg {
         sourceLine: Int,
         address: Long,
         typeOffset: Int,
-    ): DebugFunctionState = DebugFunctionState(name, external, sourceFile, sourceLine, address, typeOffset, line)
+        frameBaseOpcode: Int = 0x9c,
+        unitStart: Int = 0,
+    ): DebugFunctionState = DebugFunctionState(name, external, sourceFile, sourceLine, address, typeOffset, frameBaseOpcode, unitStart, line)
 
     /** Emits the function DIE and line markers after the function body has been generated. */
     fun finishDebugFunction(
@@ -864,21 +868,23 @@ object TccDbg {
             if (function.external) writeData1(info, 1)
             writeStringReference(state, info, function.name, refs.strings, pointerSize = pointerSize)
             writeUleb(info, function.sourceFile.toLong()); writeUleb(info, function.sourceLine.toLong())
+            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
+            writeData4(info, function.typeOffset - function.unitStart)
             state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_PTR", refs.text)
             val length = endAddress - function.startAddress
             if (pointerSize == 4) { writeData4(info, function.startAddress.toInt()); writeData4(info, length.toInt()) }
             else { writeData8(info, function.startAddress); writeData8(info, length) }
-            state.relocations.getOrPut(info.name) { mutableListOf() } += Relocation(info.size, "R_DATA_32DW", refs.info)
-            writeData4(info, function.typeOffset)
-            writeData1(info, 0) // DW_AT_frame_base expression: DW_OP_call_frame_cfa
-            writeData1(info, 1); writeData1(info, 0x9c)
+            val siblingOffset = info.size
+            writeData4(info, 0)
+            writeData1(info, 1); writeData1(info, function.frameBaseOpcode)
             if (backtrace) {
                 val payload = function.name.toByteArray(Charsets.UTF_8) + byteArrayOf(0)
                 lineOperation(line, 0); lineOperationUleb(line, (payload.size + 1).toLong()); lineOperation(line, 0x80)
                 payload.forEach { line.operations += it }
             }
             scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
-            if (scope != null) writeData1(info, 0)
+            writeData1(info, 0)
+            patch32(info, siblingOffset, info.size - function.unitStart)
         } else {
             putStabs(state, "${function.name}:${if (function.external) 'F' else 'f'}", N_FUN, 0, function.sourceLine, function.startAddress)
             scope?.let { finishDebugScope(state, it, pointerSize, function.startAddress, refs) }
