@@ -270,6 +270,79 @@ object TccDbg {
         return EhFrameState(section, start, target)
     }
 
+    /** Emits one target's FDE state machine and patches the record length. */
+    fun emitEhFrameFde(
+        frame: EhFrameState,
+        functionOffset: Int,
+        functionSize: Int,
+        textSectionSymbol: Int,
+        localStackSize: Int = 0,
+        code: ByteArray = byteArrayOf(),
+    ): Relocation {
+        val section = frame.section
+        val start = section.size
+        writeData4(section, 0)
+        writeData4(section, start - frame.startOffset + 4)
+        val relocation = Relocation(section.size, when (frame.target) {
+            EhTarget.I386 -> "R_386_PC32"; EhTarget.X86_64 -> "R_X86_64_PC32"; EhTarget.ARM -> "R_ARM_REL32"
+            EhTarget.ARM64 -> "R_AARCH64_PREL32"; EhTarget.RISCV64 -> "R_RISCV_32_PCREL"
+        }, textSectionSymbol)
+        writeData4(section, functionOffset)
+        writeData4(section, functionSize)
+        writeData1(section, 0)
+        when (frame.target) {
+            EhTarget.I386 -> {
+                writeData1(section, 0x41); writeData1(section, 0x0e); writeUleb(section, 8)
+                writeData1(section, 0x85); writeUleb(section, 2)
+                writeData1(section, 0x42); writeData1(section, 0x0d); writeUleb(section, 5)
+                writeData1(section, 0x04); writeData4(section, functionSize - 5)
+                writeData1(section, 0xc5); writeData1(section, 0x0c); writeUleb(section, 4); writeUleb(section, 4)
+            }
+            EhTarget.X86_64 -> {
+                writeData1(section, 0x41); writeData1(section, 0x0e); writeUleb(section, 16)
+                writeData1(section, 0x86); writeUleb(section, 2)
+                writeData1(section, 0x43); writeData1(section, 0x0d); writeUleb(section, 6)
+                writeData1(section, 0x04); writeData4(section, functionSize - 5)
+                writeData1(section, 0x0c); writeUleb(section, 7); writeUleb(section, 8)
+            }
+            EhTarget.ARM -> {
+                writeData1(section, 0x42); writeData1(section, 0x0e); writeUleb(section, 8)
+                writeData1(section, 0x8e); writeUleb(section, 1)
+                writeData1(section, 0x8b); writeUleb(section, 2)
+                writeData1(section, 0x04); writeData4(section, functionSize / 2 - 5)
+                writeData1(section, 0x0d); writeUleb(section, 11)
+            }
+            EhTarget.ARM64 -> {
+                writeData1(section, 0x41); writeData1(section, 0x0e); writeUleb(section, 224)
+                writeData1(section, 0x9d); writeUleb(section, 28); writeData1(section, 0x9e); writeUleb(section, 27)
+                writeData1(section, 0x43); writeData1(section, 0x0e); writeUleb(section, (224 + localStackSize).toLong())
+                writeData1(section, 0x04); writeData4(section, functionSize / 4 - 5)
+                writeData1(section, 0xde); writeData1(section, 0xdd); writeData1(section, 0x0e); writeUleb(section, 0)
+            }
+            EhTarget.RISCV64 -> {
+                writeData1(section, 0x44); writeData1(section, 0x0e); writeUleb(section, 16)
+                writeData1(section, 0x48); writeData1(section, 0x81); writeUleb(section, 2); writeData1(section, 0x88); writeUleb(section, 4)
+                writeData1(section, 0x48); writeData1(section, 0x0c); writeUleb(section, 8); writeUleb(section, 0)
+                writeData1(section, 0x04)
+                var bodySize = functionSize
+                while (bodySize >= 4 && bodySize <= code.size && read32(code, bodySize - 4) != 0x00008067) bodySize -= 4
+                writeData4(section, bodySize - 36)
+                writeData1(section, 0x0c); writeUleb(section, 2); writeUleb(section, 16)
+                writeData1(section, 0x44); writeData1(section, 0xc1); writeData1(section, 0x44); writeData1(section, 0xc8)
+                writeData1(section, 0x44); writeData1(section, 0x0e); writeUleb(section, 0)
+            }
+        }
+        while ((section.size - start) and 3 != 0) writeData1(section, 0)
+        patch32(section, start, section.size - start - 4)
+        return relocation
+    }
+
+    fun endEhFrame(frame: EhFrameState?) { if (frame != null) writeData4(frame.section, 0) }
+
+    private fun read32(data: ByteArray, offset: Int): Int =
+        (data[offset].toInt() and 0xff) or ((data[offset + 1].toInt() and 0xff) shl 8) or
+            ((data[offset + 2].toInt() and 0xff) shl 16) or (data[offset + 3].toInt() shl 24)
+
     private fun patch32(section: DwarfSection, offset: Int, value: Int) {
         repeat(4) { byte -> section.bytes[offset + byte] = (value ushr (byte * 8)).toByte() }
     }
