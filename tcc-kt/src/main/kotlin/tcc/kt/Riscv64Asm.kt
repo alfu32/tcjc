@@ -93,4 +93,70 @@ class Riscv64Asm(
         val type = if (expression.value in -0x1000..0x0fff) OP_IM12S else OP_IM32
         return Operand(type = type, expression = expression)
     }
+
+    private fun requireRegister(operand: Operand, description: String): Boolean {
+        if (operand.type == OP_REG) return true
+        error("Expected $description to be a register")
+        return false
+    }
+
+    fun emitR(opcode: Int, rd: Operand, rs1: Operand, rs2: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand") || !requireRegister(rs1, "first source operand") ||
+            !requireRegister(rs2, "second source operand")) return false
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register) or encodeRs2(rs2.register))
+        return true
+    }
+
+    fun emitFloating(opcode: Int, rd: Operand, rs1: Operand, rs2: Operand): Boolean {
+        if (!requireFloatRegister(rd, "destination operand") || !requireFloatRegister(rs1, "first source operand") ||
+            !requireFloatRegister(rs2, "second source operand")) return false
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register) or encodeRs2(rs2.register))
+        return true
+    }
+
+    fun emitFloatingUnary(opcode: Int, rd: Operand, rs: Operand): Boolean {
+        if (!requireFloatRegister(rd, "destination operand") || !requireFloatRegister(rs, "source operand")) return false
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs.register))
+        return true
+    }
+
+    fun emitFloatingQuaternary(opcode: Int, rd: Operand, rs1: Operand, rs2: Operand, rs3: Operand): Boolean {
+        if (!requireFloatRegister(rd, "destination operand") || !requireFloatRegister(rs1, "first source operand") ||
+            !requireFloatRegister(rs2, "second source operand") || !requireFloatRegister(rs3, "third source operand")) return false
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register) or encodeRs2(rs2.register) or (registerValue(rs3.register) shl 27))
+        return true
+    }
+
+    private fun requireFloatRegister(operand: Operand, description: String): Boolean {
+        if (operand.type == OP_REG && isFloatRegister(operand.register)) return true
+        error("Expected $description to be a floating-point register")
+        return false
+    }
+
+    fun emitI(opcode: Int, rd: Operand, rs1: Operand, immediate: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand") || !requireRegister(rs1, "first source operand")) return false
+        if (immediate.type != OP_IM12S) { error("Expected second source operand to be an immediate value between 0 and 8191"); return false }
+        emitOpcode(opcode or encodeRd(rd.register) or encodeRs1(rs1.register) or (immediate.expression.value.toInt() shl 20))
+        return true
+    }
+
+    fun emitU(opcode: Int, rd: Operand, immediate: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand")) return false
+        if (immediate.type != OP_IM12S && immediate.type != OP_IM32) { error("Expected source operand to be an immediate value"); return false }
+        if (immediate.expression.value >= 0x100000) { error("Expected source operand immediate between 0 and 0xfffff"); return false }
+        emitOpcode(opcode or encodeRd(rd.register) or (immediate.expression.value.toInt() shl 12))
+        return true
+    }
+
+    fun emitJ(opcode: Int, rd: Operand, offset: Operand): Boolean {
+        if (!requireRegister(rd, "destination operand")) return false
+        if (offset.type != OP_IM12S && offset.type != OP_IM32) { error("Expected jump offset immediate"); return false }
+        val immediate = offset.expression.value.toInt()
+        if (immediate > (1 shl 20) - 1 || immediate <= -((1 shl 20) - 1)) { error("Expected jump offset in range"); return false }
+        if (immediate and 1 != 0) { error("Expected an even jump offset"); return false }
+        val encoded = (((immediate ushr 20) and 1) shl 31) or (((immediate ushr 1) and 0x3ff) shl 21) or
+            (((immediate ushr 11) and 1) shl 20) or (((immediate ushr 12) and 0xff) shl 12)
+        emitOpcode(opcode or encodeRd(rd.register) or encoded)
+        return true
+    }
 }
