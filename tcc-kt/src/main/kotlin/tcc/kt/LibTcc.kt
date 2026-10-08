@@ -458,7 +458,7 @@ class LibTcc(
                 "std" -> if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112
                 "debug" -> compilerState.debug = true
                 "linker" -> if (setLinker(optionArgument) < 0) return ParsedArguments(-1, argv.drop(index), argv.toList())
-                "preprocessor" -> argv.addAll(index - 1, splitArguments(optionArgument, ','))
+                "preprocessor" -> { argv.addAll(index - 1, splitArguments(optionArgument, ',')); index-- }
                 "run" -> {
                     if (!nativeRun) return fail("-run is not available in a cross compiler")
                     compilerState.runCommand = optionArgument
