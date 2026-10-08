@@ -660,6 +660,10 @@ class LibTcc(
             }
             empty = false
         }
+        if (compilerState.linkerArgumentIndex < compilerState.linkerArguments.size) {
+            val pending = compilerState.linkerArguments[compilerState.linkerArgumentIndex]
+            return fail("argument to '-Wl,$pending' is missing")
+        }
         if (compilerState.runCommand != null) return ParsedArguments(0, argv.drop(index), argv.toList())
         if (!empty) return ParsedArguments(0, argv.drop(index), argv.toList())
         return ParsedArguments(if (compilerState.verbose == 2) OPTION_PRINT_DIRS else if (compilerState.verbose != 0) OPTION_V else OPTION_HELP, argv.drop(index), argv.toList())
