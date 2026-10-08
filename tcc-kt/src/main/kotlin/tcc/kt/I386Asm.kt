@@ -515,6 +515,17 @@ class I386Asm(
             val dwordRegs = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
             val qwordRegs = listOf("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi")
             val segments = listOf("es", "cs", "ss", "ds", "fs", "gs")
+            Regex("^mm([0-7])$").matchEntire(name)?.let { return Operand(OP_MMX or if (indirect) OP_INDIR else 0, it.groupValues[1].toInt()) }
+            Regex("^xmm([0-7]|1[0-5])$").matchEntire(name)?.let {
+                val number = it.groupValues[1].toInt()
+                if (!x64Target && number > 7) throw IllegalArgumentException("unknown register %$name")
+                return Operand(OP_SSE or if (indirect) OP_INDIR else 0, number)
+            }
+            Regex("^([dt]r)([0-7])$").matchEntire(name)?.let {
+                val type = if (it.groupValues[1] == "dr") OP_DB else OP_TR
+                return Operand(type or if (indirect) OP_INDIR else 0, it.groupValues[2].toInt())
+            }
+            Regex("^cr([0-7])$").matchEntire(name)?.let { return Operand(OP_CR or if (indirect) OP_INDIR else 0, it.groupValues[1].toInt()) }
             if (name == "rip") return Operand(X64_REG or X64_RIP or if (indirect) OP_INDIR else 0, -2)
             if (name in qwordRegs) return Operand(X64_REG or if (indirect) OP_INDIR else 0, qwordRegs.indexOf(name))
             if (name in listOf("spl", "bpl", "sil", "dil"))
