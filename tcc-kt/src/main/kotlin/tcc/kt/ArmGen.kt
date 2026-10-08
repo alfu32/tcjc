@@ -200,6 +200,10 @@ object ArmGen {
     data class Parameter(val type: ParameterType, val size: Int, val alignment: Int, val homogeneousFloatAggregate: Boolean = false)
     data class ParameterPlan(val parameterIndex: Int, val parameterClass: ParameterClass, val start: Int, val end: Int)
     data class RegisterAssignment(val plans: List<ParameterPlan>, val stackBytes: Int, val coreRegisterTodo: Int)
+    enum class ParameterCopyOperation { ALLOCATE_STACK, COPY_STRUCT, SAVE_VFP_SCRATCH, RESTORE_VFP_SCRATCH, POP_VFP_RANGE, PUSH_FLOAT, PUSH_LONG_HIGH, PUSH_LONG_LOW, PUSH_VALUE, ADD_STACK_PADDING, MOVE_VFP, MOVE_VFP_UPPER, MOVE_CORE, POP_CORE_STRUCT, SYNTHESIZE_CORE_VALUE }
+    data class ParameterCopyAction(val operation: ParameterCopyOperation, val parameterIndex: Int = -1,
+        val start: Int = 0, val end: Int = 0, val amount: Int = 0)
+    data class ParameterCopyPlan(val actions: List<ParameterCopyAction>, val extraStackValues: Int)
 
     data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
@@ -534,6 +538,71 @@ object ArmGen {
             }
         }
         return RegisterAssignment(plans, nextStack, coreTodo)
+    }
+
+    /** Reproduces copy_params class ordering and emits compiler-independent copy actions. */
+    fun copyParameterPlan(parameters: List<Parameter>, assignment: RegisterAssignment,
+        coreValuesNeedingSecondPass: Set<Int> = emptySet()): ParameterCopyPlan {
+        val actions = mutableListOf<ParameterCopyAction>()
+        val classOrder = listOf(ParameterClass.STACK, ParameterClass.CORE_STRUCT, ParameterClass.VFP,
+            ParameterClass.VFP_STRUCT, ParameterClass.CORE)
+        var passes = 0
+        do {
+            classOrder.forEach { cls ->
+                val classPlans = assignment.plans.filter { it.parameterClass == cls }
+                classPlans.forEachIndexed { index, plan ->
+                    if (passes > 0 && (cls != ParameterClass.CORE || plan.parameterIndex !in coreValuesNeedingSecondPass)) return@forEachIndexed
+                    val parameter = parameters[plan.parameterIndex]
+                    if (cls in setOf(ParameterClass.STACK, ParameterClass.CORE_STRUCT, ParameterClass.VFP_STRUCT)) {
+                        if (parameter.type == ParameterType.STRUCT) {
+                            val padding = if (cls == ParameterClass.STACK && index + 1 < classPlans.size)
+                                plan.start - classPlans[index + 1].end else 0
+                            val structureSize = (parameter.size + 3) and -4
+                            actions += ParameterCopyAction(ParameterCopyOperation.ALLOCATE_STACK, plan.parameterIndex, amount = -structureSize - padding)
+                            actions += ParameterCopyAction(ParameterCopyOperation.SAVE_VFP_SCRATCH, plan.parameterIndex)
+                            actions += ParameterCopyAction(ParameterCopyOperation.COPY_STRUCT, plan.parameterIndex, amount = padding)
+                            actions += ParameterCopyAction(ParameterCopyOperation.RESTORE_VFP_SCRATCH, plan.parameterIndex)
+                            if (cls == ParameterClass.VFP_STRUCT)
+                                actions += ParameterCopyAction(ParameterCopyOperation.POP_VFP_RANGE, plan.parameterIndex, plan.start, plan.end)
+                        } else if (parameter.type in setOf(ParameterType.FLOAT, ParameterType.DOUBLE, ParameterType.LONG_DOUBLE)) {
+                            actions += ParameterCopyAction(ParameterCopyOperation.PUSH_FLOAT, plan.parameterIndex, amount = parameter.size)
+                            if (cls == ParameterClass.STACK && index + 1 < classPlans.size)
+                                actions += ParameterCopyAction(ParameterCopyOperation.ADD_STACK_PADDING, plan.parameterIndex,
+                                    amount = plan.start - classPlans[index + 1].end)
+                        } else if (parameter.type == ParameterType.LONG_LONG) {
+                            actions += ParameterCopyAction(ParameterCopyOperation.PUSH_LONG_HIGH, plan.parameterIndex)
+                            actions += ParameterCopyAction(ParameterCopyOperation.PUSH_LONG_LOW, plan.parameterIndex)
+                        } else {
+                            actions += ParameterCopyAction(ParameterCopyOperation.PUSH_VALUE, plan.parameterIndex)
+                            if (cls == ParameterClass.STACK && index + 1 < classPlans.size)
+                                actions += ParameterCopyAction(ParameterCopyOperation.ADD_STACK_PADDING, plan.parameterIndex,
+                                    amount = plan.start - classPlans[index + 1].end)
+                        }
+                    } else if (cls == ParameterClass.VFP) {
+                        actions += ParameterCopyAction(ParameterCopyOperation.MOVE_VFP, plan.parameterIndex, plan.start, plan.end)
+                        if (plan.start and 1 != 0) actions += ParameterCopyAction(ParameterCopyOperation.MOVE_VFP_UPPER, plan.parameterIndex, plan.start - 1, plan.start)
+                    } else if (cls == ParameterClass.CORE) {
+                        if (parameter.type == ParameterType.LONG_LONG) actions += ParameterCopyAction(ParameterCopyOperation.MOVE_CORE, plan.parameterIndex, plan.end, plan.end)
+                        actions += ParameterCopyAction(ParameterCopyOperation.MOVE_CORE, plan.parameterIndex, plan.start, plan.start)
+                    }
+                }
+            }
+        } while (++passes < 2)
+        var extraValues = 0
+        if (assignment.coreRegisterTodo != 0) {
+            actions += ParameterCopyAction(ParameterCopyOperation.POP_CORE_STRUCT, amount = assignment.coreRegisterTodo)
+            assignment.plans.filter { it.parameterClass == ParameterClass.CORE_STRUCT }.forEach { plan ->
+                var register = plan.start + 1
+                while (register <= plan.end) {
+                    if (assignment.coreRegisterTodo and (1 shl register) != 0) {
+                        actions += ParameterCopyAction(ParameterCopyOperation.SYNTHESIZE_CORE_VALUE, plan.parameterIndex, start = register)
+                        extraValues++
+                    }
+                    register++
+                }
+            }
+        }
+        return ParameterCopyPlan(actions, extraValues)
     }
 
     /** Plans ABI selection, argument placement, stack alignment, and soft-float return moves for a call. */
