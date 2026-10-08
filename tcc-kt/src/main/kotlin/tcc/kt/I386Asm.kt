@@ -334,9 +334,9 @@ class I386Asm(
         } else {
             operands.take(outputCount).forEach { operand ->
                 if (operand.register >= 0) {
-                    if (operand.isMemory) Unit
+                    if (operand.isLocalPointer && operand.isMemory) Unit
                     else {
-                        materializeOutputAddress(operand, outputScratch)
+                        if (operand.isLocalPointer) materializeOutputAddress(operand, outputScratch)
                         store(operand, operand.register)
                     }
                     if (operand.isLongLong) storeHigh(operand, operand.register + 1)
@@ -346,7 +346,10 @@ class I386Asm(
         }
     }
 
-    data class InlineOperand(val register: Int, val readWrite: Boolean = false, val isMemory: Boolean = false, val isLongLong: Boolean = false)
+    data class InlineOperand(
+        val register: Int, val readWrite: Boolean = false, val isMemory: Boolean = false,
+        val isLongLong: Boolean = false, val isLocalPointer: Boolean = false,
+    )
 
     data class ConstraintOperand(
         val alternatives: String, val id: String = "", val isConstant: Boolean = false,
