@@ -17,6 +17,7 @@ object TccElf {
     const val SHF_WRITE = 1
     const val SHF_ALLOC = 2
     const val SHF_EXECINSTR = 4
+    const val SHF_TLS = 0x400
     const val SHF_PRIVATE = -0x80000000
     const val SHF_DYNSYM = 0x40000000
     const val SHN_UNDEF = 0
@@ -99,6 +100,15 @@ object TccElf {
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
+    data class SectionSortResult(
+        val order: List<Int>,
+        val classes: List<Int>,
+        val sectionCount: Int,
+        val loadSegmentCount: Int,
+        val tls: Boolean,
+        val relro: Boolean,
+        val notes: Boolean,
+    )
     const val NO_GOTPLT_ENTRY = 0
     const val BUILD_GOT_ONLY = 1
     const val AUTO_GOTPLT_ENTRY = 2
@@ -267,6 +277,103 @@ object TccElf {
             }
         }
         return textRelocations
+    }
+
+    fun sortSections(
+        state: ElfState,
+        elfOutput: Boolean = true,
+        bsdTarget: Boolean = false,
+        interpreter: ElfSection? = null,
+    ): SectionSortResult {
+        val sections = state.sections
+        val order = sections.indices.drop(1).toMutableList()
+        val classes = MutableList(sections.size) { 0 }
+        var tlsAlignment = 0
+        fun sectionClass(section: ElfSection): Int {
+            var fileClass = when {
+                section.nameOffset == 0 -> 0x900
+                section.flags and SHF_ALLOC != 0 -> if (section.flags and SHF_WRITE != 0 && section.flags and SHF_TLS == 0) 0x200 else 0x100
+                else -> 0x700
+            }
+            if (fileClass >= 0x700 && !elfOutput) {
+                section.outputSize = 0
+                fileClass = 0x900
+            }
+            var sortClass = when {
+                section.type == SHT_SYMTAB || section.type == SHT_DYNSYM -> 0x10
+                section.type == SHT_STRTAB && section.name != ".stabstr" -> if (section.index == sections.lastIndex) 0xff else 0x11
+                section.type == SHT_HASH || section.type == 0x6ffffff6 -> 0x12
+                section.type in setOf(0x6fffffff, 0x6ffffffe, 0x6ffffffd) -> 0x13
+                section.type == SHT_REL || section.type == SHT_RELA -> if (section.name == state.namedSections[".plt"]?.relocation?.name) 0x21 else 0x20
+                section.flags and SHF_EXECINSTR != 0 -> 0x60
+                section.flags and SHF_TLS != 0 -> {
+                    tlsAlignment = maxOf(tlsAlignment, section.alignment)
+                    0x40 + if (section.type == SHT_NOBITS) 1 else 0
+                }
+                section.type == 0x6ffffffa -> 0x42
+                section.type == SHT_INIT_ARRAY -> 0x43
+                section.type == SHT_FINI_ARRAY -> 0x44
+                section.type == SHT_DYNAMIC -> 0x48
+                section.name == ".got" -> 0x49
+                section.relocation?.flags?.and(SHF_ALLOC) != 0 && fileClass == 0x100 -> 0x45
+                section.type == 7 -> 0x08
+                section.type == SHT_NOBITS -> 0x70
+                section === interpreter -> 0x00
+                else -> 0x50
+            }
+            sortClass += fileClass
+            if (section.index <= (state.namedSections[".bss"]?.index ?: 0)) sortClass++
+            if (sortClass and 0xfff0 == 0x140) {
+                sortClass += 0x100
+                section.flags = section.flags or SHF_WRITE
+            }
+            return sortClass
+        }
+        order.forEach { index -> classes[index] = sectionClass(requireNotNull(sections[index])) }
+        for (i in 1 until order.size) {
+            val index = order[i]
+            val key = classes[index]
+            var j = i
+            while (j > 0 && key < classes[order[j - 1]]) {
+                order[j] = order[j - 1]
+                j--
+            }
+            order[j] = index
+        }
+        var sectionCount = 1
+        var loadSegments = 0
+        var previousFlags = 0
+        var hasTls = false
+        var hasRelro = false
+        var hasNotes = false
+        order.forEach { index ->
+            val section = requireNotNull(sections[index])
+            val sortClass = classes[index]
+            if (sortClass < 0x900) sectionCount++
+            var programFlags = 0
+            if (sortClass < 0x700) {
+                programFlags = section.flags and (SHF_ALLOC or SHF_WRITE or SHF_EXECINSTR)
+                var adjustedClass = sortClass
+                if (bsdTarget) {
+                    if (programFlags and SHF_WRITE == 0) programFlags = programFlags or SHF_EXECINSTR
+                    adjustedClass = 0
+                }
+                if (adjustedClass and 0xfff0 == 0x240) { hasRelro = true; programFlags = programFlags or (1 shl 5) }
+                if (programFlags != previousFlags && section.outputSize != 0L) {
+                    previousFlags = programFlags
+                    loadSegments++
+                    programFlags = programFlags or (1 shl 4)
+                }
+                if (section.flags and SHF_TLS != 0 && section.outputSize != 0L) {
+                    section.alignment = tlsAlignment
+                    hasTls = true
+                    programFlags = programFlags or SHF_TLS
+                }
+            }
+            if (section.type == 7) hasNotes = true
+            classes[index] = programFlags
+        }
+        return SectionSortResult(listOf(0) + order, classes, sectionCount, loadSegments, hasTls, hasRelro, hasNotes)
     }
 
     fun initializeSymbolTable(symbols: ElfSection) {
