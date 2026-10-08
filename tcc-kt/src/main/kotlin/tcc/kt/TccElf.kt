@@ -380,12 +380,21 @@ object TccElf {
     private fun isBss(state: ElfState, sectionIndex: Int): Boolean =
         sectionIndex == SHN_COMMON || (sectionIndex >= 0 && sectionIndex < state.sections.size && state.sections[sectionIndex]?.type == SHT_NOBITS)
 
-    fun symbolAddress(state: ElfState, name: String, reportMissing: (String) -> Unit = {}): Long? {
+    fun symbolAddress(
+        state: ElfState,
+        name: String,
+        errorOnMissing: Boolean = false,
+        forceUnderscore: Boolean = false,
+        leadingUnderscore: Boolean = false,
+        peTarget: Boolean = false,
+        reportMissing: (String) -> Unit = {},
+    ): Long? {
         val symbols = state.symbolTable ?: return null
-        val index = findElfSymbol(symbols, name)
+        val lookupName = if (forceUnderscore && leadingUnderscore && !(peTarget && '@' in name)) "_$name" else name
+        val index = findElfSymbol(symbols, lookupName)
         val symbol = symbols.symbols.getOrNull(index)
         if (index == 0 || symbol == null || symbol.sectionIndex == SHN_UNDEF) {
-            reportMissing("$name not defined")
+            if (errorOnMissing) reportMissing("$lookupName not defined")
             return null
         }
         return symbol.value
