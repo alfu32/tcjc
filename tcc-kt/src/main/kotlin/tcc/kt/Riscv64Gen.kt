@@ -34,7 +34,15 @@ class Riscv64Gen(
     }
 
     data class CodePosition(var offset: Int = 0)
-    data class Value(val value: Long = 0, val symbol: String? = null, val isExternal: Boolean = false, val isStatic: Boolean = false, val isTls: Boolean = false)
+    enum class ValueKind { CONSTANT, LOCAL, LOCAL_LVALUE, REGISTER, OTHER }
+    data class Value(
+        val value: Long = 0, val symbol: String? = null, val isExternal: Boolean = false,
+        val isStatic: Boolean = false, val isTls: Boolean = false, val kind: ValueKind = ValueKind.CONSTANT,
+        val isLValue: Boolean = false, val isFloating: Boolean = false, val isDouble: Boolean = false,
+        val isUnsigned: Boolean = false, val isLongLong: Boolean = false, val register: Int = -1,
+        val baseType: Int = 0, val typeSize: Int = 8, val alignment: Int = 8,
+    )
+    data class AddressOffset(val register: Int, val offset: Int)
     data class Relocation(val symbol: String, val type: String, val offset: Int, val addend: Long = 0)
 
     private var bytes = ByteArray(256)
@@ -93,6 +101,64 @@ class Riscv64Gen(
 
     fun addRelocation(symbol: String, type: String, offset: Int = position, addend: Long = 0) {
         relocations += Relocation(symbol, type, offset, addend)
+    }
+
+    /** Resolves the base register and low displacement for a symbol/local address. */
+    fun loadSymbolOffset(register: Int, value: Value, forStore: Boolean, initialOffset: Int = value.value.toInt()): AddressOffset {
+        var offset = initialOffset
+        if (value.symbol != null) {
+            val symbol = value.symbol
+            if (value.isTls) {
+                val target = if (isIntegerRegister(register)) integerRegister(register) else 5
+                addRelocation(symbol, "TPREL_HI20", position, value.value)
+                emitInstruction(0x37 or (target shl 7))
+                addRelocation(symbol, "TPREL_LO12_I", position, value.value)
+                emitImmediate(0x13, 0, target, target, 0)
+                emitRegister(0x33, 0, target, target, 4, 0)
+                return AddressOffset(target, 0)
+            }
+            val loadFromGot = !value.isStatic
+            val largeAddend = loadFromGot && lowOverflow(offset) != 0
+            if (value.isStatic) addRelocation(symbol, "PCREL_HI20", position, value.value)
+            else addRelocation(symbol, "GOT_HI20", position)
+            val label = "$symbol@pcrel${position}"
+            val target = if (isIntegerRegister(register)) integerRegister(register) else 5
+            emitInstruction(0x17 or (target shl 7))
+            addRelocation(label, if (loadFromGot || !forStore) "PCREL_LO12_I" else "PCREL_LO12_S", position)
+            if (loadFromGot) {
+                emitImmediate(0x03, 3, target, target, 0)
+                if (largeAddend) {
+                    emitInstruction(0x37 or (6 shl 7) or lowOverflow(offset))
+                    emitRegister(0x33, 0, target, target, 6, 0)
+                    offset = sign11(offset)
+                }
+            } else offset = 0
+            return AddressOffset(target, offset)
+        }
+        if (value.kind == ValueKind.LOCAL || value.kind == ValueKind.LOCAL_LVALUE) {
+            var target = 8 // s0
+            if (lowOverflow(offset) != 0) {
+                target = if (isIntegerRegister(register)) integerRegister(register) else 5
+                emitInstruction(0x37 or (target shl 7) or lowOverflow(offset))
+                emitRegister(0x33, 0, target, target, 8, 0)
+                offset = sign11(offset)
+            }
+            return AddressOffset(target, offset)
+        }
+        error("invalid symbol offset value")
+        return AddressOffset(0, offset)
+    }
+
+    fun loadLargeConstant(register: Int, low: Int, upperPart: Int) {
+        var upper = upperPart
+        if (low < 0) upper++
+        emitInstruction(0x37 or (register shl 7) or lowOverflow(upper))
+        emitImmediate(0x13, 0, register, register, sign11(upper))
+        emitImmediate(0x13, 1, register, register, 12)
+        emitImmediate(0x13, 0, register, register, sign11((low.toUInt() + (1 shl 19).toUInt()).toInt() ushr 20))
+        emitImmediate(0x13, 1, register, register, 12)
+        emitImmediate(0x13, 0, register, register, sign11((low shl 12 shr 12) shr 8))
+        emitImmediate(0x13, 1, register, register, 8)
     }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
