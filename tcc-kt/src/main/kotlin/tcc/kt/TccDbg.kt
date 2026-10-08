@@ -93,6 +93,15 @@ object TccDbg {
         var instruction: Int = 0,
         var counterOffset: Int = 0,
     )
+    data class DebugSession(
+        val sections: DebugSections,
+        val line: DwarfLineState,
+        val minimumInstructionLength: Int = 1,
+        var enabled: Boolean = true,
+        var codeSection: Boolean = true,
+        var suppressCode: Boolean = false,
+        var functionAddress: Long? = null,
+    )
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -521,6 +530,28 @@ object TccDbg {
         putStabs(state, null, N_SLINE, 0, sourceLine, value)
         return true
     }
+
+    /** Port of tcc_debug_line's filtering and DWARF/STABS dispatch. */
+    fun debugLine(session: DebugSession, sourceLine: Int, address: Int): Boolean {
+        if (!session.enabled || !session.codeSection || session.suppressCode) return false
+        val line = session.line
+        if (line.newFile) line.newFile = false
+        if (line.lastSourceLine == sourceLine) return false
+        return if (session.sections.dwarfEnabled) {
+            emitDwarfLine(line, address, sourceLine, session.minimumInstructionLength)
+        } else {
+            emitStabsSourceLine(session.sections, line, sourceLine, address.toLong(), session.functionAddress)
+        }
+    }
+
+    fun debugNewFile(session: DebugSession, filename: String): Int =
+        if (session.enabled) debugNewFile(session.sections, session.line, filename) else session.line.currentFile
+
+    fun debugIncludeBegin(session: DebugSession, filename: String): Int =
+        if (session.enabled) debugIncludeBegin(session.sections, session.line, filename) else session.line.currentFile
+
+    fun debugIncludeEnd(session: DebugSession, filename: String = ""): Int =
+        if (session.enabled) debugIncludeEnd(session.sections, session.line, filename) else session.line.currentFile
 
     /** Opens a lexical debug scope while retaining the type-table checkpoints to restore at close. */
     fun openDebugScope(scopes: MutableList<DebugScope>, start: Int, typeCount: Int, forwardTypeCount: Int): DebugScope {
