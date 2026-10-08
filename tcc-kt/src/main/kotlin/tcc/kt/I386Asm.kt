@@ -322,6 +322,14 @@ class I386Asm(private val emit: (Int) -> Unit) {
         return Operand(OP_EA or if (indirect) OP_INDIR else 0, base, index, shift, expression)
     }
 
+    /** Accepts an optional-percent spelling of an i386 integer register variable. */
+    fun parseRegisterVariable(identifier: String): Int? = try {
+        val operand = parseOperand(if (identifier.startsWith('%')) identifier else "%$identifier")
+        if (operand.type and (OP_REG8 or OP_REG16 or OP_REG32) != 0) operand.register else null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
     private fun parseExpression(text: String, evaluate: (String) -> Expression): Operand {
         val expression = evaluate(text.trim().ifEmpty { "0" })
         return Operand(expression = expression)
