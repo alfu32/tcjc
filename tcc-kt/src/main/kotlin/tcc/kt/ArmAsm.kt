@@ -22,6 +22,7 @@ class ArmAsm(
     private val error: (String) -> Unit = { throw IllegalArgumentException(it) },
     private val warning: (String) -> Unit = {},
     private val expression: (String) -> Expression = { Expression(parseArmInteger(it)) },
+    private val relocation: (String, Int, String, Int) -> Unit = { _, _, _, _ -> },
 ) {
     enum class Kind { REG32, REGSET32, IMM8, IMM8N, IMM32, VREG32, VREG64 }
     data class Expression(val value: Int, val symbol: String? = null)
@@ -408,5 +409,34 @@ class ArmAsm(
         if (writeback) opcode = opcode or (1 shl 21)
         opcode = opcode or (operands[0].register shl 16) or operands[1].registerSet
         emitOpcode(token, firstConditionToken, opcode)
+    }
+
+    /** Encodes branches and records R_ARM_PC24 relocations for external targets. */
+    fun emitBranch(
+        group: String, token: Int, firstConditionToken: Int, position: Int,
+        target: Expression? = null, register: Operand? = null,
+        sameSectionAddress: (String) -> Int? = { null },
+    ) {
+        when (group) {
+            "b", "bl" -> {
+                val expression = target ?: run { expect("branch target"); return }
+                val symbolAddress = expression.symbol?.let(sameSectionAddress)
+                val base = if (expression.symbol != null && symbolAddress == null) {
+                    relocation(expression.symbol, position, "R_ARM_PC24", 0)
+                    position
+                } else symbolAddress ?: 0
+                var displacement = expression.value + base - position - 8
+                if (displacement and 3 != 0) { error("branch target is not word aligned"); return }
+                displacement /= 4
+                if (displacement >= 0x7fffff || displacement < -0x800000) { error("branch offset is too far"); return }
+                emitOpcode(token, firstConditionToken, ((if (group == "bl") 0xb else 0xa) shl 24) or (displacement and 0xffffff))
+            }
+            "bx", "blx" -> {
+                val operand = register ?: run { expect("register"); return }
+                if (operand.kind != Kind.REG32) { expect("register"); return }
+                emitOpcode(token, firstConditionToken, ((if (group == "blx") 0x12fff3 else 0x12fff1) shl 4) or operand.register)
+            }
+            else -> expect("branch instruction")
+        }
     }
 }
