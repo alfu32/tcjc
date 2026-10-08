@@ -318,4 +318,68 @@ class ArmAsm(
         }
         emitOpcode(token, firstConditionToken, opcode or encoded)
     }
+
+    /** Encodes ARM single data transfers and exclusive loads/stores. */
+    fun emitSingleDataTransfer(
+        group: String, token: Int, firstConditionToken: Int,
+        destination: Operand, base: Operand, offset: Operand? = null,
+        preIndexed: Boolean = true, writeback: Boolean = false,
+        subtractOffset: Boolean = false, shiftMode: Int = 0,
+        shift: Operand? = null, statusRegister: Operand? = null,
+    ) {
+        if (destination.kind != Kind.REG32 || base.kind != Kind.REG32) { expect("register operands"); return }
+        var opcode = (destination.register shl 12) or (base.register shl 16)
+        if (preIndexed) opcode = opcode or (1 shl 24)
+        if (writeback) opcode = opcode or (1 shl 21)
+        val transferOffset = offset ?: Operand(Kind.IMM8, value = Expression(0))
+        when (transferOffset.kind) {
+            Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
+                if (subtractOffset && transferOffset.value.value < 0) { error("minus before immediate is unsupported"); return }
+                val value = transferOffset.value.value
+                val magnitude = if (value < 0) -value else value
+                if (magnitude >= 0x1000) { error("offset out of range for '$group'"); return }
+                if ((value >= 0) xor subtractOffset) opcode = opcode or (1 shl 23)
+                opcode = opcode or magnitude
+            }
+            Kind.REG32 -> {
+                if (transferOffset.register == 15) { error("pc register offset is unsupported for '$group'"); return }
+                if (!subtractOffset) opcode = opcode or (1 shl 23)
+                opcode = opcode or (1 shl 25) or transferOffset.register or shiftMode
+                if (shift != null) opcode = opcode or encodeShift(shift)
+            }
+            else -> { expect("register or immediate offset"); return }
+        }
+        val exclusive = group.startsWith("strex") || group.startsWith("ldrex")
+        when {
+            group == "str" || group == "strb" -> {
+                if (group == "strb") opcode = opcode or (1 shl 22)
+                opcode = opcode or (1 shl 26)
+            }
+            group == "ldr" || group == "ldrb" -> {
+                if (group == "ldrb") opcode = opcode or (1 shl 22)
+                opcode = opcode or (1 shl 20) or (1 shl 26)
+            }
+            group.startsWith("strex") -> {
+                val status = statusRegister ?: run { expect("status register"); return }
+                if (status.kind != Kind.REG32) { expect("status register"); return }
+                if (offset != null && (opcode and 0xfff != 0 || shift != null)) { error("neither offset nor shift allowed with '$group'"); return }
+                if (transferOffset.kind == Kind.REG32) { error("offset not allowed with '$group'"); return }
+                if (!preIndexed) { error("adding offset after transfer not allowed with '$group'"); return }
+                if (group == "strexh") opcode = opcode or (1 shl 21)
+                if (group == "strexb") opcode = opcode or (1 shl 22)
+                opcode = (opcode or 0xf90) or status.register
+            }
+            group.startsWith("ldrex") -> {
+                if (offset != null && (opcode and 0xfff != 0 || shift != null)) { error("neither offset nor shift allowed with '$group'"); return }
+                if (transferOffset.kind == Kind.REG32) { error("offset not allowed with '$group'"); return }
+                if (!preIndexed) { error("adding offset after transfer not allowed with '$group'"); return }
+                if (group == "ldrexh") opcode = opcode or (1 shl 21)
+                if (group == "ldrexb") opcode = opcode or (1 shl 22)
+                opcode = opcode or (1 shl 20) or 0xf90 or 0x0f
+            }
+            else -> { expect("data transfer instruction"); return }
+        }
+        if (exclusive && shift != null) { error("shift not allowed with exclusive transfer"); return }
+        emitOpcode(token, firstConditionToken, opcode)
+    }
 }
