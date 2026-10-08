@@ -44,6 +44,8 @@ class LibTcc(
         var includeSystemDependencies: Boolean = false, var generatePhonyDependencies: Boolean = false,
         var dependencyOutputFile: String? = null, var runCommand: String? = null,
         val files: MutableList<FileSpec> = mutableListOf(), var libraryCount: Int = 0,
+        var debugFlags: Int = 0, var preprocessLineControl: Int = 1, var languageStandard: String? = null,
+        var targetTriple: String? = null, var compilerVersion: String? = null,
     )
     data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
     data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
@@ -117,7 +119,8 @@ class LibTcc(
             TccOption("I", "includePath", true), TccOption("D", "define", true), TccOption("U", "undefine", true),
             TccOption("P", "P", true, true), TccOption("L", "libraryPath", true), TccOption("B", "libPath", true),
             TccOption("l", "library", true), TccOption("bench", "bench"), TccOption("g", "debug", true, true),
-            TccOption("c", "object"), TccOption("d", "d", true, true), TccOption("static", "static"),
+            TccOption("c", "object"), TccOption("dumpmachine", "dumpmachine"), TccOption("dumpversion", "dumpversion"),
+            TccOption("d", "d", true, true), TccOption("static", "static"),
             TccOption("std", "std", true, true), TccOption("shared", "shared"), TccOption("soname", "soname", true),
             TccOption("o", "output", true), TccOption("pthread", "pthread"), TccOption("run", "run", true, true),
             TccOption("rdynamic", "rdynamic"), TccOption("r", "relocatable"), TccOption("Wl,", "linker", true, true),
@@ -426,6 +429,8 @@ class LibTcc(
                 "help" -> return ParsedArguments(OPTION_HELP, argv.drop(index - 1), argv.toList())
                 "help2" -> return ParsedArguments(OPTION_HELP2, argv.drop(index - 1), argv.toList())
                 "printDirs" -> return ParsedArguments(OPTION_PRINT_DIRS, argv.drop(index - 1), argv.toList())
+                "dumpmachine" -> { output("${compilerState.targetTriple ?: "unknown-pc-unknown"}\n"); return ParsedArguments(0, argv.drop(index), argv.toList()) }
+                "dumpversion" -> { output("${compilerState.compilerVersion ?: "unknown"}\n"); return ParsedArguments(0, argv.drop(index), argv.toList()) }
                 "includePath" -> addIncludePath(compilerState, optionArgument)
                 "systemInclude" -> addSystemIncludePath(compilerState, optionArgument)
                 "libraryPath" -> addLibraryPath(compilerState, optionArgument)
@@ -455,8 +460,15 @@ class LibTcc(
                     } else if (optionArgument != "ms-bitfields" && optionArgument != "sse") return fail("unsupported option '$raw'")
                 }
                 "optimize" -> compilerState.optimize = optionArgument.firstOrNull()?.digitToIntOrNull() ?: if (optionArgument == "s") 2 else 1
-                "std" -> if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112
+                "std" -> { compilerState.languageStandard = optionArgument; if (optionArgument == "=c11" || optionArgument == "=gnu11") compilerState.cVersion = 201112 }
                 "debug" -> compilerState.debug = true
+                "d" -> when (optionArgument.firstOrNull()) {
+                    'D' -> compilerState.debugFlags = 3
+                    'M' -> compilerState.debugFlags = 7
+                    't' -> compilerState.debugFlags = 16
+                    else -> optionArgument.toIntOrNull()?.let { compilerState.debugLevel = it } ?: return fail("unsupported option '$raw'")
+                }
+                "P" -> compilerState.preprocessLineControl = (optionArgument.toIntOrNull() ?: 0) + 1
                 "linker" -> if (setLinker(optionArgument) < 0) return ParsedArguments(-1, argv.drop(index), argv.toList())
                 "preprocessor" -> { argv.addAll(index - 1, splitArguments(optionArgument, ',')); index-- }
                 "run" -> {
@@ -476,7 +488,6 @@ class LibTcc(
                 }
                 "language" -> compilerState.fileType = when (optionArgument.firstOrNull()) { 'c' -> TYPE_C; 'a' -> TYPE_ASM_PREPROCESSED; 'b' -> TYPE_BINARY; 'n' -> 0; else -> compilerState.fileType }
                 "ignored", "ignoredArg" -> Unit
-                "P", "d" -> Unit
                 "ar" -> return ParsedArguments(OPTION_AR, argv.drop(index - 1), argv.toList())
                 "rdynamic" -> compilerState.exportDynamic = true
             }
