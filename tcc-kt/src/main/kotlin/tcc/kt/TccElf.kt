@@ -631,7 +631,7 @@ object TccElf {
         val bucketsStart = bloomStart + bloomSize * state.wordSize
         val chainsStart = bucketsStart + bucketCount * 4
         for (bucket in 0 until bucketCount) {
-            val members = defined.filter { hashes.getValue(it) % bucketCount == bucket }
+            val members = defined.filter { hashes.getValue(it).toUInt() % bucketCount.toUInt() == bucket.toUInt() }
             if (members.isEmpty()) continue
             writeInt32(gnuHash.data, bucketsStart + bucket * 4, ordered.size)
             members.forEachIndexed { memberIndex, oldIndex ->
@@ -643,8 +643,8 @@ object TccElf {
                 if (memberIndex == members.lastIndex) chainValue = chainValue or 1
                 writeInt32(gnuHash.data, chainsStart + chainIndex * 4, chainValue)
                 val bits = state.wordSize * 8
-                val bloomIndex = (hash / bits) % bloomSize
-                val firstBit = hash % bits
+                val bloomIndex = ((hash.toUInt() / bits.toUInt()) % bloomSize.toUInt()).toInt()
+                val firstBit = (hash.toUInt() % bits.toUInt()).toInt()
                 val secondBit = (hash ushr bloomShift) % bits
                 val wordOffset = bloomStart + bloomIndex * state.wordSize
                 val bloom = if (state.wordSize == 8) readInt64(gnuHash.data, wordOffset) else readInt32(gnuHash.data, wordOffset).toLong()
