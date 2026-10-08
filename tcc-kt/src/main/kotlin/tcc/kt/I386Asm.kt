@@ -1,7 +1,7 @@
 package tcc.kt
 
 /** Operand representation and encoding primitives from i386-asm.c. */
-class I386Asm(private val emit: (Int) -> Unit) {
+class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -> Int = { 0 }) {
     companion object {
         const val OP_REG8 = 1 shl 0
         const val OP_REG16 = 1 shl 1
@@ -129,6 +129,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
         mnemonic: String, operands: List<Operand>, operandSize16: Boolean = false,
         segmentPrefix: Int = 0, addressSize16: Boolean = false,
         emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
+        sameSectionAddress: (String) -> Int? = { null },
     ): Boolean {
         val instruction = selectMnemonic(mnemonic, operands) ?: return false
         if (mnemonic == "int" && operands.size == 1 && operands[0].expression.symbol == null && operands[0].expression.value == 3) {
@@ -144,7 +145,12 @@ class I386Asm(private val emit: (Int) -> Unit) {
             return true
         }
         val group = groupForMnemonic(instruction, mnemonic)
-        emitInstruction(instruction, operands, opcodeForMnemonic(instruction, mnemonic, opcode), groupOverride = group, emitExpression = emitExpression)
+        val finalOpcode = opcodeForMnemonic(instruction, mnemonic, opcode)
+        if (operands.size == 1 && instruction.operandTypes.firstOrNull()?.and(0x1f) == 26) {
+            branch(finalOpcode, operands[0].expression, currentPosition(), sameSectionAddress)
+            return true
+        }
+        emitInstruction(instruction, operands, finalOpcode, groupOverride = group, emitExpression = emitExpression)
         return true
     }
 
