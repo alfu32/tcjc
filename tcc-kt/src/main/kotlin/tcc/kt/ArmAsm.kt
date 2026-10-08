@@ -115,4 +115,45 @@ class ArmAsm(
         if (operand.kind != Kind.IMM8) { expect("immediate 8-bit unsigned integer"); return }
         emitOpcode(token, firstConditionToken, (0xf shl 24) or operand.value.value)
     }
+
+    /** Encodes ARM register-pair operations and immediate movw/movt forms. */
+    fun emitBinary(
+        group: String, token: Int, firstConditionToken: Int,
+        destination: Operand, source: Operand, rotation: Int? = null,
+    ) {
+        if (destination.kind != Kind.REG32) { expect("(destination operand) register"); return }
+        if (destination.register == 15) error("'$group' does not support 'pc' as operand")
+        if (destination.register == 13) warning("Using 'sp' as operand with '$group' is deprecated by ARM")
+        if (group == "movt" || group == "movw") {
+            if (source.kind !in setOf(Kind.IMM8, Kind.IMM8N, Kind.IMM32) || source.value.value !in 0..0xffff) {
+                expect("(source operand) immediate 16 bit value"); return
+            }
+            val opcode = (if (group == "movt") 0x03400000 else 0x03000000) or
+                (destination.register shl 12) or ((source.value.value and 0xf000) shl 4) or (source.value.value and 0xfff)
+            emitOpcode(token, firstConditionToken, opcode)
+            return
+        }
+        if (source.kind != Kind.REG32) { expect("(source operand) register"); return }
+        if (source.register == 15) error("'$group' does not support 'pc' as operand")
+        if (source.register == 13) warning("Using 'sp' as operand with '$group' is deprecated by ARM")
+        val rotateBits = when (rotation) {
+            null -> 0
+            8 -> 1 shl 10
+            16 -> 2 shl 10
+            24 -> 3 shl 10
+            else -> { expect("'8', '16' or '24'"); 0 }
+        }
+        val opcode = when (group) {
+            "clz" -> {
+                if (rotateBits != 0) error("clz does not support rotation")
+                0x016f0f10 or (destination.register shl 12) or source.register
+            }
+            "sxtb" -> 0x06af0070 or (destination.register shl 12) or source.register or rotateBits
+            "sxth" -> 0x06bf0070 or (destination.register shl 12) or source.register or rotateBits
+            "uxtb" -> 0x06ef0070 or (destination.register shl 12) or source.register or rotateBits
+            "uxth" -> 0x06ff0070 or (destination.register shl 12) or source.register or rotateBits
+            else -> { expect("binary instruction"); return }
+        }
+        emitOpcode(token, firstConditionToken, opcode)
+    }
 }
