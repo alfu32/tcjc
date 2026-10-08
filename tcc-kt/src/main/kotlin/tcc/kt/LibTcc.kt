@@ -50,6 +50,9 @@ class LibTcc(
         val files: MutableList<FileSpec> = mutableListOf(), var libraryCount: Int = 0,
         var debugFlags: Int = 0, var preprocessLineControl: Int = 1, var languageStandard: String? = null,
         var targetTriple: String? = null, var compilerVersion: String? = null,
+        var installName: String? = null, var compatibilityVersion: Int = 0, var currentVersion: Int = 0,
+        var armFloatAbi: String? = null, var runtimeStdin: String? = null, var backtraceCallers: Int = 0,
+        var doBacktrace: Boolean = false, var boundsChecking: Boolean = false,
     )
     data class TccOption(val name: String, val index: String, val hasArgument: Boolean = false, val noSeparateArgument: Boolean = false)
     data class ParsedArguments(val action: Int, val remaining: List<String>, val expandedArguments: List<String>)
@@ -137,13 +140,19 @@ class LibTcc(
             TccOption("I", "includePath", true), TccOption("D", "define", true), TccOption("U", "undefine", true),
             TccOption("P", "P", true, true), TccOption("L", "libraryPath", true), TccOption("B", "libPath", true),
             TccOption("l", "library", true), TccOption("bench", "bench"), TccOption("g", "debug", true, true),
+            TccOption("compatibility_version", "compatibilityVersion", true), TccOption("current_version", "currentVersion", true),
+            TccOption("dynamiclib", "dynamiclib"), TccOption("flat_namespace", "flatNamespace"),
+            TccOption("install_name", "installName", true), TccOption("two_levelnamespace", "twoLevelNamespace"),
+            TccOption("undefined", "undefined", true),
+            TccOption("rstdin", "rstdin", true), TccOption("bt", "backtrace", true, true), TccOption("b", "bounds"),
             TccOption("c", "object"), TccOption("dumpmachine", "dumpmachine"), TccOption("dumpversion", "dumpversion"),
             TccOption("d", "d", true, true), TccOption("static", "static"),
             TccOption("std", "std", true, true), TccOption("shared", "shared"), TccOption("soname", "soname", true),
             TccOption("o", "output", true), TccOption("pthread", "pthread"), TccOption("run", "run", true, true),
             TccOption("rdynamic", "rdynamic"), TccOption("r", "relocatable"), TccOption("Wl,", "linker", true, true),
             TccOption("Wp,", "preprocessor", true, true), TccOption("W", "warning", true, true),
-            TccOption("O", "optimize", true, true), TccOption("m", "machine", true, true), TccOption("f", "feature", true, true),
+            TccOption("O", "optimize", true, true), TccOption("mfloat-abi", "armFloatAbi", true),
+            TccOption("m", "machine", true, true), TccOption("f", "feature", true, true),
             TccOption("isystem", "systemInclude", true), TccOption("include", "include", true),
             TccOption("nostdinc", "nostdinc"), TccOption("nostdlib", "nostdlib"),
             TccOption("print-search-dirs", "printDirs"), TccOption("w", "warnNone"), TccOption("E", "preprocess"),
@@ -477,7 +486,7 @@ class LibTcc(
 
     /** Option-table matcher and common command line actions from tcc_parse_args. */
     fun parseArguments(compilerState: CompilerState, arguments: List<String>, readListFile: (String) -> String? = { null },
-        setLinker: (String) -> Int = { 0 }, pointerBits: Int = 64, nativeRun: Boolean = true): ParsedArguments {
+        setLinker: (String) -> Int = { 0 }, pointerBits: Int = 64, nativeRun: Boolean = true, targetPlatform: String = "unix"): ParsedArguments {
         val argv = arguments.toMutableList()
         var index = if (argv.isNotEmpty()) 1 else 0
         var empty = true
@@ -518,6 +527,8 @@ class LibTcc(
                 break
             }
             if (selected == null) return fail("invalid option -- '$raw'")
+            if (selected.index in setOf("compatibilityVersion", "currentVersion", "dynamiclib", "flatNamespace", "installName", "twoLevelNamespace", "undefined") && targetPlatform != "macho") return fail("invalid option -- '$raw'")
+            if (selected.index == "armFloatAbi" && targetPlatform != "arm") return fail("invalid option -- '$raw'")
             when (selected.index) {
                 "help" -> return ParsedArguments(OPTION_HELP, argv.drop(index - 1), argv.toList())
                 "help2" -> return ParsedArguments(OPTION_HELP2, argv.drop(index - 1), argv.toList())
@@ -535,6 +546,15 @@ class LibTcc(
                 "soname" -> compilerState.soname = optionArgument
                 "object" -> compilerState.outputType = OUTPUT_OBJECT
                 "shared" -> compilerState.outputType = 5
+                "dynamiclib" -> compilerState.outputType = 5
+                "flatNamespace", "twoLevelNamespace", "undefined" -> Unit
+                "installName" -> compilerState.installName = optionArgument
+                "compatibilityVersion" -> compilerState.compatibilityVersion = parseVersion(compilerState, optionArgument)
+                "currentVersion" -> compilerState.currentVersion = parseVersion(compilerState, optionArgument)
+                "armFloatAbi" -> if (optionArgument == "softfp" || optionArgument == "hard") compilerState.armFloatAbi = optionArgument else return fail("unsupported float abi '$optionArgument'")
+                "rstdin" -> compilerState.runtimeStdin = optionArgument
+                "backtrace" -> { compilerState.backtraceCallers = optionArgument.toIntOrNull() ?: 0; compilerState.doBacktrace = true; compilerState.debug = true }
+                "bounds" -> { compilerState.boundsChecking = true; compilerState.doBacktrace = true; compilerState.debug = true }
                 "relocatable" -> { compilerState.optionR = true; compilerState.outputType = OUTPUT_OBJECT }
                 "preprocess" -> compilerState.outputType = OUTPUT_PREPROCESS
                 "nostdinc" -> compilerState.noStandardIncludes = true
@@ -594,6 +614,11 @@ class LibTcc(
         if (!empty) return ParsedArguments(0, argv.drop(index), argv.toList())
         return ParsedArguments(if (compilerState.verbose == 2) OPTION_PRINT_DIRS else if (compilerState.verbose != 0) OPTION_V else OPTION_HELP, argv.drop(index), argv.toList())
     }
+
+    fun setOptions(compilerState: CompilerState, optionText: String, setLinker: (String) -> Int = { 0 },
+        pointerBits: Int = 64, nativeRun: Boolean = true, targetPlatform: String = "unix"): Int =
+        parseArguments(compilerState, listOf("") + splitArguments(optionText), setLinker = setLinker,
+            pointerBits = pointerBits, nativeRun = nativeRun, targetPlatform = targetPlatform).action
 
     private fun setFeatureFlag(s: CompilerState, flag: String): Boolean {
         val enabled = !flag.startsWith("no-")
