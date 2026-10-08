@@ -111,21 +111,24 @@ class LibTcc(
         const val ERROR_FATAL = 2
         const val DEFAULT_IO_BUFFER_SIZE = 4096
         const val CH_EOB = 0x1a
-        const val OUTPUT_PREPROCESS = 1
-        const val OUTPUT_OBJECT = 2
-        const val OUTPUT_MEMORY = 3
-        const val OUTPUT_EXECUTABLE = 4
+        const val OUTPUT_MEMORY = 1
+        const val OUTPUT_EXECUTABLE = 2
+        const val OUTPUT_OBJECT = 3
+        const val OUTPUT_DLL = 4
+        const val OUTPUT_PREPROCESS = 5
         const val FORMAT_ELF = 1
-        const val TYPE_ASM = 1
-        const val TYPE_ASM_PREPROCESSED = 2
-        const val TYPE_C = 4
-        const val TYPE_BINARY = 8
+        const val TYPE_C = 1
+        const val TYPE_ASM = 2
+        const val TYPE_ASM_PREPROCESSED = 4
+        const val TYPE_LIBRARY = 8
         const val TYPE_PRINT_ERROR = 16
-        const val TYPE_WHOLE_ARCHIVE = 32
-        const val TYPE_LIBRARY = 64
+        const val TYPE_REFERENCED_DLL = 32
+        const val TYPE_BINARY = 64
+        const val TYPE_WHOLE_ARCHIVE = 128
+        const val TYPE_MASK = 71
         const val BINARY_RELOCATABLE = 1
-        const val BINARY_ARCHIVE = 2
-        const val BINARY_DYNAMIC = 3
+        const val BINARY_DYNAMIC = 2
+        const val BINARY_ARCHIVE = 3
         const val BINARY_C67 = 4
         const val BINARY_TBD = 5
         const val FILE_NOT_FOUND = -2
@@ -554,11 +557,14 @@ class LibTcc(
                 "define" -> defineSymbol(compilerState, optionArgument)
                 "undefine" -> undefineSymbol(compilerState, optionArgument)
                 "library" -> { compilerState.inputFiles += optionArgument; addArgumentFile(compilerState, optionArgument, TYPE_LIBRARY or compilerState.fileType); compilerState.linkerArguments += "-l$optionArgument" }
-                "output" -> compilerState.outputFile = optionArgument
+                "output" -> {
+                    if (compilerState.outputFile != null) reportError(compilerState, ERROR_WARNING, "multiple -o option")
+                    compilerState.outputFile = optionArgument
+                }
                 "soname" -> compilerState.soname = optionArgument
                 "object" -> compilerState.outputType = OUTPUT_OBJECT
-                "shared" -> compilerState.outputType = 5
-                "dynamiclib" -> compilerState.outputType = 5
+                "shared" -> compilerState.outputType = OUTPUT_DLL
+                "dynamiclib" -> compilerState.outputType = OUTPUT_DLL
                 "flatNamespace", "twoLevelNamespace", "undefined" -> Unit
                 "installName" -> compilerState.installName = optionArgument
                 "compatibilityVersion" -> compilerState.compatibilityVersion = parseVersion(compilerState, optionArgument)
@@ -568,14 +574,14 @@ class LibTcc(
                 "backtrace" -> { compilerState.backtraceCallers = optionArgument.toIntOrNull() ?: 0; compilerState.doBacktrace = true; compilerState.debug = true }
                 "bounds" -> { compilerState.boundsChecking = true; compilerState.doBacktrace = true; compilerState.debug = true }
                 "relocatable" -> { compilerState.optionR = true; compilerState.outputType = OUTPUT_OBJECT }
-                "preprocess" -> compilerState.outputType = OUTPUT_PREPROCESS
+                "preprocess" -> { compilerState.outputType = OUTPUT_PREPROCESS; compilerState.debug = false }
                 "nostdinc" -> compilerState.noStandardIncludes = true
                 "nostdlib" -> compilerState.noStandardLibrary = true
                 "static" -> compilerState.staticLink = true
                 "pthread" -> compilerState.optionPthread = true
                 "bench" -> compilerState.doBench = true
                 "verbose" -> compilerState.verbose += if (selected.name == "v") optionArgument.length.coerceAtLeast(1) else 1
-                "warnNone" -> compilerState.warnNoneMode = true
+                "warnNone" -> { compilerState.warnNoneMode = true; compilerState.warnNone = true }
                 "feature" -> if (!setFeatureFlag(compilerState, optionArgument)) return fail("unsupported option '$raw'")
                 "warning" -> if (optionArgument.isNotEmpty() && !setWarningFlag(compilerState, optionArgument)) return fail("unsupported option '$raw'")
                 "machine" -> {
@@ -621,13 +627,13 @@ class LibTcc(
                     when (selected.index) {
                         "M" -> { compilerState.includeSystemDependencies = true; compilerState.justDependencies = true; compilerState.generateDependencies = true; compilerState.dependencyOutputFile = "-" }
                         "MM" -> { compilerState.justDependencies = true; compilerState.generateDependencies = true; compilerState.dependencyOutputFile = "-" }
-                        "MD" -> { compilerState.includeSystemDependencies = true; compilerState.generateDependencies = true; if (optionArgument.isNotEmpty()) compilerState.dependencyOutputFile = optionArgument }
-                        "MMD" -> { compilerState.generateDependencies = true; if (optionArgument.isNotEmpty()) compilerState.dependencyOutputFile = optionArgument }
+                        "MD" -> { compilerState.includeSystemDependencies = true; compilerState.generateDependencies = true; if (optionArgument.startsWith(',')) compilerState.dependencyOutputFile = optionArgument.drop(1) }
+                        "MMD" -> { compilerState.generateDependencies = true; if (optionArgument.startsWith(',')) compilerState.dependencyOutputFile = optionArgument.drop(1) }
                         "MF" -> compilerState.dependencyOutputFile = optionArgument
                         "MP" -> compilerState.generatePhonyDependencies = true
                     }
                 }
-                "language" -> compilerState.fileType = when (optionArgument.firstOrNull()) { 'c' -> TYPE_C; 'a' -> TYPE_ASM_PREPROCESSED; 'b' -> TYPE_BINARY; 'n' -> 0; else -> compilerState.fileType }
+                "language" -> compilerState.fileType = (compilerState.fileType and TYPE_MASK.inv()) or when (optionArgument.firstOrNull()) { 'c' -> TYPE_C; 'a' -> TYPE_ASM_PREPROCESSED; 'b' -> TYPE_BINARY; 'n' -> 0; else -> compilerState.fileType and TYPE_MASK }
                 "ignored", "ignoredArg" -> Unit
                 "ar" -> return ParsedArguments(OPTION_AR, argv.drop(index - 1), argv.toList())
                 "impdef" -> return ParsedArguments(OPTION_IMPDEF, argv.drop(index - 1), argv.toList())
