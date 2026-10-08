@@ -19,7 +19,7 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | `arm-link.c` | DONE |
 | `arm64-asm.c` | TODO |
 | `arm64-gen.c` | TODO |
-| `arm64-link.c` | TODO |
+| `arm64-link.c` | DOING |
 | `c67-gen.c` | TODO |
 | `c67-link.c` | DONE |
 | `conftest.c` | DONE |
