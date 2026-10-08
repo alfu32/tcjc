@@ -2833,7 +2833,7 @@ object TccElf {
     }
 
     fun addInitArrayDefines(state: ElfState, sectionName: String): Pair<Int, Int> {
-        val candidate = state.namedSections[sectionName]
+        val candidate = state.sections.drop(1).filterNotNull().firstOrNull { it.name == sectionName }
         val section = if (candidate != null && candidate.flags and SHF_ALLOC != 0) candidate
             else state.namedSections[".text"] ?: return 0 to 0
         val endOffset = if (section === candidate) section.dataOffset.toLong() else 0L
@@ -2854,13 +2854,13 @@ object TccElf {
         executableStart: Long = 0,
         riscv64Target: Boolean = false,
     ) {
+        if (outputSharedLibrary) return
         setLinkerSymbol(state, "_etext", text, 0)
         setLinkerSymbol(state, "_edata", data, 0)
         setLinkerSymbol(state, "_end", bss, 0)
         if (openBsd) setGlobalSymbol(state, requireNotNull(state.symbolTable), "__executable_start", null, executableStart)
         if (riscv64Target) setGlobalSymbol(state, requireNotNull(state.symbolTable), "__global_pointer$", data, 0x800)
         listOf(".preinit_array", ".init_array", ".fini_array").forEach { addInitArrayDefines(state, it) }
-        if (outputSharedLibrary) return
         val table = state.symbolTable ?: return
         state.sections.drop(1).filterNotNull().forEach { section ->
             if (section.flags and SHF_ALLOC == 0 || section.type !in setOf(SHT_PROGBITS, SHT_NOBITS, SHT_STRTAB)) return@forEach
