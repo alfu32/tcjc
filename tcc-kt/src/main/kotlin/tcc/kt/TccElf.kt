@@ -378,6 +378,13 @@ object TccElf {
         return addDirectFile(filename, true)
     }
 
+    fun hasNewUndefinedSymbol(symbolTable: ElfSection, symbolByteOffset: Int): Boolean {
+        if (symbolTable.entrySize <= 0) return false
+        val first = (symbolByteOffset / symbolTable.entrySize).coerceAtLeast(0)
+        val end = minOf(symbolTable.symbols.size, symbolTable.dataOffset / symbolTable.entrySize)
+        return (first until end).any { symbolTable.symbols[it].sectionIndex == SHN_UNDEF }
+    }
+
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
