@@ -214,7 +214,7 @@ object BoundCheck {
     private val frameRegions = mutableMapOf<Long, MutableList<Long>>()
 
 
-    data class Allocation internal constructor(
+    data class Allocation(
         val address: Long,
         val bytes: ByteArray,
         val type: Int,
