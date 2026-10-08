@@ -387,6 +387,18 @@ object ArmGen {
         repeat(bytes / 4) { output(0xe1a00000.toInt()) }
     }
 
+    fun adjustStackPointer(byteCount: Int, output: (Int) -> Unit) {
+        stuffConstantHarder(0xe28dd000.toInt(), byteCount).forEach(output)
+    }
+
+    data class BoundsPrologue(val sectionOffset: Long, val instructionOffset: Int, val addEpilog: Boolean = false)
+
+    /** Reserves the five ARM instructions patched by bounds-check epilogue generation. */
+    fun emitBoundsPrologue(sectionOffset: Long, instructionOffset: Int, output: (Int) -> Unit): BoundsPrologue {
+        repeat(5) { output(0xe1a00000.toInt()) }
+        return BoundsPrologue(sectionOffset, instructionOffset)
+    }
+
     fun generateJump(position: Int, target: Int, noCode: Boolean = false, output: (Int) -> Unit = {}): Int {
         if (noCode) return target
         output(jumpWord(position, target))
