@@ -30,6 +30,7 @@ object TccGen {
     const val VT_QFLOAT = 14
     const val VT_UNSIGNED = 0x0010
     const val VT_FUNC = 6
+    const val VT_STRUCT = 7
     const val VT_BTYPE = 0x000f
     const val VT_VOID = 0
     const val VT_STATIC = 0x00004000
@@ -552,6 +553,95 @@ object TccGen {
         mergeSymbolAttributes(symbol.attributes, attributes.symbol)
         if (attributes.assemblyLabel != 0) symbol.assemblyLabel = attributes.assemblyLabel
         updateStorage(symbol, elfState, peTarget)
+    }
+
+    fun copySymbolToStack(symbol: Sym, state: CompilerState, local: Boolean): Sym {
+        val copy = copySymbol(symbol)
+        if (local) {
+            copy.previous = state.localStack
+            state.localStack = copy
+        } else {
+            copy.previous = state.globalStack
+            state.globalStack = copy
+        }
+        if ((copy.token and SYM_STRUCT.inv()) < SYM_FIRST_ANOM) linkSymbol(state, copy, true)
+        return copy
+    }
+
+    private fun copySymbol(source: Sym): Sym = Sym(
+        token = source.token,
+        register = source.register,
+        attributes = source.attributes.copy(),
+        number = source.number,
+        enumValue = source.enumValue,
+        type = source.type.copy(),
+        next = source.next,
+        previous = source.previous,
+        previousToken = source.previousToken,
+        scope = source.scope,
+        jumpNext = source.jumpNext,
+        jumpIndex = source.jumpIndex,
+        assemblyLabel = source.assemblyLabel,
+        value = source.value,
+        function = source.function.copy(),
+    )
+
+    fun moveReferencedTypesToGlobal(state: CompilerState, root: Sym) {
+        val baseType = root.type.type and VT_BTYPE
+        if (baseType != VT_PTR && baseType != VT_FUNC && baseType != VT_STRUCT && root.type.type and VT_STRUCT_MASK != VT_ENUM_VAL) return
+        var typeSymbol = root.type.reference
+        var foundNonPointer = false
+        while (typeSymbol != null) {
+            var previous: Sym? = null
+            var candidate = state.localStack
+            while (candidate != null && candidate !== typeSymbol) {
+                previous = candidate
+                candidate = candidate.previous
+            }
+            if (candidate != null) {
+                if (previous == null) state.localStack = candidate.previous else previous.previous = candidate.previous
+                candidate.previous = state.globalStack
+                state.globalStack = candidate
+                if (foundNonPointer || baseType == VT_PTR || baseType == VT_FUNC) {
+                    moveReferencedTypesToGlobal(state, candidate)
+                } else if ((candidate.token and SYM_STRUCT.inv()) < SYM_FIRST_ANOM) {
+                    candidate.token = candidate.token or SYM_FIELD
+                    val localCopy = copySymbolToStack(candidate, state, local = true)
+                    localCopy.token = localCopy.token and SYM_FIELD.inv()
+                }
+                if (baseType != VT_PTR) foundNonPointer = true
+            }
+            if (!foundNonPointer) break
+            typeSymbol = typeSymbol.next
+        }
+    }
+
+    fun externalSymbol(
+        state: CompilerState,
+        token: Int,
+        type: CType,
+        register: Int,
+        attributes: AttributeDefinition,
+        elfState: TccElf.ElfState,
+        peTarget: Boolean = false,
+        hooks: TypePatchHooks,
+    ): Sym {
+        var symbol = symbolFind(state, token)
+        while (symbol != null && symbol.scope != 0) symbol = symbol.previousToken
+        if (symbol == null) {
+            symbol = globalIdentifierPush(state, token, type.type, 0)
+            symbol.register = symbol.register or register
+            symbol.attributes = attributes.symbol.copy()
+            symbol.assemblyLabel = attributes.assemblyLabel
+            symbol.type.reference = type.reference
+        } else {
+            patchSymbolStorage(symbol, attributes, type, elfState, peTarget, hooks)
+        }
+        if (state.localStack != null) {
+            moveReferencedTypesToGlobal(state, symbol)
+            copySymbolToStack(symbol, state, local = true)
+        }
+        return symbol
     }
 
     fun pushLongLong(state: RuntimeState, value: Long) =
