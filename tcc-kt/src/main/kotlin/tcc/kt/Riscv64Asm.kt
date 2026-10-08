@@ -18,6 +18,14 @@ class Riscv64Asm(
         val isExternalOrStatic: (String) -> Boolean = { false }, val isStaticSymbol: (String) -> Boolean = { false },
         val relocateSymbol: (String, String) -> Unit = { _, _ -> },
     )
+    enum class InlineValueKind { CONSTANT, LOCAL, LOCAL_LVALUE, REGISTER, OTHER }
+    data class InlineOperand(
+        val constraint: String, var valueKind: InlineValueKind = InlineValueKind.OTHER,
+        var fixedRegister: Int = -1, var register: Int = -1, var inputIndex: Int = -1,
+        var referenceIndex: Int = -1, var priority: Int = 0, var isMemory: Boolean = false,
+        var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
+    )
+    data class ConstraintResult(val outputRegister: Int, val allocationMasks: IntArray, val sortedOperands: List<Int>)
 
     companion object {
         const val REGISTER_COUNT = 64
@@ -28,6 +36,8 @@ class Riscv64Asm(
         const val OP_REG = 1 shl OPT_REG
         const val OP_IM12S = 1 shl OPT_IM12S
         const val OP_IM32 = 1 shl OPT_IM32
+        const val REG_OUT_MASK = 1
+        const val REG_IN_MASK = 2
 
         fun isFloatRegister(register: Int): Boolean = register and REG_FLOAT_MASK != 0
         fun registerValue(register: Int): Int = register and (REG_FLOAT_MASK - 1)
@@ -157,6 +167,112 @@ class Riscv64Asm(
         if (register < 0 || register >= clobbers.size) { error("invalid clobber register '$name'"); return false }
         clobbers[register] = true
         return true
+    }
+
+    fun skipConstraintModifiers(constraint: String): String = constraint.dropWhile { it == '=' || it == '&' || it == '+' || it == '%' }
+
+    fun constraintPriority(constraint: String): Int {
+        var priority = 0
+        for (character in constraint) {
+            val rank = when (character) {
+                'A', 'S', 'f', 'r', 'p' -> 3
+                'I', 'i', 'm', 'g' -> 4
+                'v' -> { error("unimp: constraint '$character'"); return -1 }
+                else -> { error("unknown constraint '$character'"); return -1 }
+            }
+            priority = maxOf(priority, rank)
+        }
+        return priority
+    }
+
+    fun computeConstraints(operands: MutableList<InlineOperand>, outputCount: Int, clobbered: BooleanArray,
+        findReference: (String) -> Int? = { it.toIntOrNull() }): ConstraintResult? {
+        if (clobbered.size < REGISTER_COUNT || outputCount !in 0..operands.size) { error("invalid inline assembly operand state"); return null }
+        operands.forEach { it.inputIndex = -1; it.referenceIndex = -1; it.register = -1; it.isMemory = false; it.isReadWrite = false }
+        operands.forEachIndexed { index, operand ->
+            val constraint = skipConstraintModifiers(operand.constraint)
+            if (constraint.firstOrNull()?.isDigit() == true || constraint.startsWith('[')) {
+                val reference = findReference(constraint)
+                if (reference == null || reference >= index || index < outputCount) { error("invalid reference in constraint $index ('$constraint')"); return null }
+                if (operands[reference].inputIndex >= 0) { error("cannot reference twice the same operand"); return null }
+                operand.referenceIndex = reference
+                operands[reference].inputIndex = index
+                operand.priority = 5
+            } else if (operand.valueKind == InlineValueKind.LOCAL && operand.fixedRegister >= 0) {
+                operand.priority = 1
+                operand.register = operand.fixedRegister
+            } else {
+                operand.priority = constraintPriority(constraint)
+                if (operand.priority < 0) return null
+            }
+        }
+        val sorted = operands.indices.sortedBy { operands[it].priority }
+        val masks = IntArray(REGISTER_COUNT) { if (clobbered[it]) REG_IN_MASK or REG_OUT_MASK else 0 }
+        for (index in sorted) {
+            val operand = operands[index]
+            if (operand.referenceIndex >= 0) continue
+            var registerMask = when {
+                operand.inputIndex >= 0 -> REG_IN_MASK or REG_OUT_MASK
+                index < outputCount -> REG_OUT_MASK
+                else -> REG_IN_MASK
+            }
+            var selected = operand.register
+            val chars = operand.constraint.iterator()
+            var allocated = false
+            while (chars.hasNext()) {
+                when (val character = chars.nextChar()) {
+                    '=', '%' -> Unit
+                    '+', '&' -> {
+                        if (index >= outputCount) { error("'$character' modifier can only be applied to outputs"); return null }
+                        if (character == '+') operand.isReadWrite = true
+                        registerMask = REG_IN_MASK or REG_OUT_MASK
+                    }
+                    'r', 'p', 'f' -> {
+                        val range = if (character == 'f') 42..50 else 10..18
+                        if (selected < 0) selected = range.firstOrNull { masks[it] == 0 } ?: -1
+                        if (selected < 0) continue
+                        if (selected !in masks.indices || masks[selected] and registerMask != 0) {
+                            error("asm register is already allocated"); return null
+                        }
+                        operand.isLongLong = false
+                        operand.register = selected
+                        masks[selected] = masks[selected] or registerMask
+                        allocated = true
+                        break
+                    }
+                    'I', 'i' -> if (operand.valueKind != InlineValueKind.CONSTANT) continue else { allocated = true; break }
+                    'm', 'g' -> {
+                        if (index < outputCount || character == 'm') {
+                            if (operand.valueKind == InlineValueKind.LOCAL_LVALUE) {
+                                selected = (10..18).firstOrNull { masks[it] and REG_IN_MASK == 0 } ?: -1
+                                if (selected < 0) continue
+                                masks[selected] = masks[selected] or REG_IN_MASK
+                                operand.register = selected
+                                operand.isMemory = true
+                            }
+                        }
+                        allocated = true
+                        break
+                    }
+                    else -> { error("asm constraint $index ('${operand.constraint}') could not be satisfied"); return null }
+                }
+            }
+            if (!allocated) { error("asm constraint $index ('${operand.constraint}') could not be satisfied"); return null }
+            if (operand.inputIndex >= 0) {
+                operands[operand.inputIndex].register = operand.register
+                operands[operand.inputIndex].isLongLong = operand.isLongLong
+            }
+        }
+        var outputRegister = -1
+        for (operand in operands) {
+            if (operand.register >= 0 && operand.valueKind == InlineValueKind.LOCAL_LVALUE && !operand.isMemory) {
+                val candidates = if (isFloatRegister(operand.register)) 42..50 else 10..18
+                outputRegister = candidates.firstOrNull { masks[it] and REG_OUT_MASK == 0 } ?: -1
+                if (outputRegister < 0) { error("could not find free output register for reloading"); return null }
+                break
+            }
+        }
+        return ConstraintResult(outputRegister, masks, sorted)
     }
 
     fun substituteAssemblyOperand(value: AsmValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false): String {
