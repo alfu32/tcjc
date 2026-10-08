@@ -42,6 +42,8 @@ class I386Asm(
         const val X64_REG = 1 shl 20
         const val X64_LOW8 = 1 shl 21
         const val X64_RIP = 1 shl 22
+        const val X64_EA32 = 1 shl 24
+        const val OPC_48 = 0x200
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
         val conditionCodes = intArrayOf(
@@ -118,8 +120,8 @@ class I386Asm(
     private fun acceptsMnemonic(instruction: Instruction, requested: String): Boolean {
         if (instruction.mnemonic == requested) return true
         val template = instruction.mnemonic
-        val templateRoot = template.dropLastWhile { it in "bwl" }
-        val requestedRoot = requested.dropLastWhile { it in "bwl" }
+        val templateRoot = template.dropLastWhile { it in "bwlq" }
+        val requestedRoot = requested.dropLastWhile { it in "bwlq" }
         if (templateRoot != requestedRoot) return false
         val requestedSuffix = requested.lastOrNull()?.takeIf { it in "bwlq" }
         val widths = instruction.instructionType and 3
@@ -144,7 +146,23 @@ class I386Asm(
             emit(0xcc)
             return true
         }
-        var opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16)
+        var opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16 || operands.any { it.type and X64_EA32 != 0 })
+        if (x64Target) {
+            val modrmIndex = if (instruction.instructionType and OPC_MODRM != 0)
+                operands.indices.firstOrNull { operands[it].type and OP_EA != 0 }
+                    ?: operands.indices.firstOrNull { operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE or OP_INDIR) != 0 }
+                    ?: -1 else -1
+            val registerIndex = if (modrmIndex >= 0) operands.indices.firstOrNull { it != modrmIndex && operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or X64_REG or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0 } ?: -1 else -1
+            val direct64 = mnemonic.endsWith('q') || instruction.instructionType and OPC_48 != 0
+            val implicit64 = operands.any { it.type and X64_REG != 0 } && instruction.operandTypes.none { it == 3 } &&
+                mnemonic !in setOf("push", "pop", "pushq", "popq", "call", "jmp")
+            val rexOperands = operands.map { RexOperand(it.type, it.register, it.index) }
+            rexPrefix(direct64 || implicit64, rexOperands, registerIndex, modrmIndex)
+            operands.forEachIndexed { index, operand ->
+                operand.register = rexOperands[index].register
+                operand.index = rexOperands[index].index
+            }
+        }
         if (operands.size == 1 && operands[0].type and OP_SEG != 0 && (opcode == 0x06 || opcode == 0x07)) {
             val segment = operands[0].register
             opcode = if (segment >= 4) 0x0fa0 + (opcode - 0x06) + ((segment - 4) shl 3) else opcode + (segment shl 3)
@@ -179,7 +197,7 @@ class I386Asm(
 
     private fun opcodeForMnemonic(instruction: Instruction, mnemonic: String, baseOpcode: Int): Int {
         val kind = instruction.instructionType and 0x70
-        val root = mnemonic.dropLastWhile { it in "bwl" }
+        val root = mnemonic.dropLastWhile { it in "bwlq" }
         val group = when (kind) {
             0x30 -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
             0x40 -> groupForMnemonic(instruction, mnemonic)
@@ -188,12 +206,12 @@ class I386Asm(
         if (group != null && kind != OPC_SHIFT) return baseOpcode + (group shl 3)
         if (kind == OPC_0F01) return baseOpcode or 0x0f0100
         if (kind == OPC_TEST) return baseOpcode + (groupForMnemonic(instruction, mnemonic) ?: 0)
-        val width = when (mnemonic.lastOrNull()) { 'b' -> 0; 'w' -> 1; 'l' -> 2; else -> 0 }
+        val width = when (mnemonic.lastOrNull()) { 'b' -> 0; 'w' -> 1; 'l' -> 2; 'q' -> 3; else -> 0 }
         return if (instruction.instructionType and 1 != 0 && width > 0) baseOpcode + 1 else baseOpcode
     }
 
     private fun groupForMnemonic(instruction: Instruction, mnemonic: String): Int? {
-        val root = mnemonic.dropLastWhile { it in "bwl" }
+        val root = mnemonic.dropLastWhile { it in "bwlq" }
         return when (instruction.instructionType and 0x70) {
             OPC_ARITH -> mapOf("add" to 0, "or" to 1, "adc" to 2, "sbb" to 3, "and" to 4, "sub" to 5, "xor" to 6, "cmp" to 7)[root]
             OPC_SHIFT -> mapOf("rol" to 0, "ror" to 1, "rcl" to 2, "rcr" to 3, "shl" to 4, "sal" to 4, "shr" to 5, "sar" to 7)[root]
@@ -524,10 +542,12 @@ class I386Asm(
         val expression = parseExpression(displacement, evaluate).expression
         if (memory == null) return Operand(OP_ADDR or if (indirect) OP_INDIR else 0, expression = expression)
         val pieces = memory.groupValues[2].split(',').map { it.trim() }
-        val base = pieces.getOrNull(0)?.takeIf { it.isNotEmpty() }?.let { parseOperand(it, evaluate).register } ?: -1
+        val baseOperand = pieces.getOrNull(0)?.takeIf { it.isNotEmpty() }?.let { parseOperand(it, evaluate) }
+        val base = baseOperand?.register ?: -1
         val index = pieces.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { parseOperand(it, evaluate).register } ?: -1
         val shift = pieces.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { registerShift(it.toInt()) } ?: 0
-        return Operand(OP_EA or if (indirect) OP_INDIR else 0, base, index, shift, expression)
+        val addressSize = if (x64Target && baseOperand?.let { it.type and OP_REG32 != 0 } == true) X64_EA32 else 0
+        return Operand(OP_EA or addressSize or if (indirect) OP_INDIR else 0, base, index, shift, expression)
     }
 
     /** Accepts an optional-percent spelling of an i386 integer register variable. */
@@ -676,6 +696,7 @@ class I386Asm(
         val prefix = (opcode ushr 8) and 0xff
         when (prefix) {
             0, 0xd4, 0xd5, in 0xd8..0xdf -> Unit
+            0x48 -> opcode = opcode and 0xff
             0x66, 0x67, 0xf2, 0xf3 -> { emit(prefix); opcode = opcode and 0xff }
             else -> throw IllegalArgumentException("bad i386 opcode prefix 0x${prefix.toString(16)}")
         }
