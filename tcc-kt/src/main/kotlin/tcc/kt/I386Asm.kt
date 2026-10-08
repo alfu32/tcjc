@@ -160,6 +160,50 @@ class I386Asm(private val emit: (Int) -> Unit) {
         var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
     )
 
+    data class InlineValue(
+        val register: Int = -1, val constant: Int = 0, val symbol: String? = null,
+        val isConstant: Boolean = false, val isLValue: Boolean = false,
+        val isLocal: Boolean = false, val kind: String = "int",
+    )
+
+    /** Renders an extended-asm operand using the target register spelling. */
+    fun substituteOperand(value: InlineValue, modifier: Char = '\u0000', leadingUnderscore: Boolean = false): String {
+        if (value.isConstant) {
+            val out = StringBuilder()
+            if (!value.isLValue && modifier !in setOf('c', 'n', 'P')) out.append('$')
+            value.symbol?.let { symbol ->
+                if (leadingUnderscore) out.append('_')
+                out.append(symbol)
+                if (value.constant != 0) out.append('+')
+            }
+            val number = if (modifier == 'n') -value.constant else value.constant
+            if (value.symbol == null || value.constant != 0) out.append(number)
+            return out.toString()
+        }
+        if (value.isLocal) return "${value.constant}(%ebp)"
+        require(value.register in 0..7) { "invalid i386 inline-asm register ${value.register}" }
+        if (value.isLValue) return "(%${registerName(value.register, 4)})"
+        var size = when (value.kind) { "byte", "bool" -> 1; "short" -> 2; else -> 4 }
+        if (size == 1 && value.register >= 4) size = 4
+        when (modifier) {
+            'b' -> { require(value.register < 4) { "cannot use byte register" }; size = 1 }
+            'h' -> { require(value.register < 4) { "cannot use byte register" }; size = -1 }
+            'w' -> size = 2
+            'k' -> size = 4
+        }
+        return "%${registerName(value.register, size)}"
+    }
+
+    private fun registerName(register: Int, size: Int): String {
+        val names = when (size) {
+            -1 -> listOf("ah", "ch", "dh", "bh", "ah", "ch", "dh", "bh")
+            1 -> listOf("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")
+            2 -> listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+            else -> listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+        }
+        return names[register]
+    }
+
     /** Performs the i386 register and tied-operand allocation phase. */
     fun allocateConstraints(
         operands: MutableList<ConstraintOperand>, outputCount: Int,
