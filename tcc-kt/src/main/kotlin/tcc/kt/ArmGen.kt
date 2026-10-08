@@ -205,6 +205,7 @@ object ArmGen {
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
     data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
+    data class FloatingOperationPlan(val words: List<Int>, val comparison: Condition? = null, val consumedOperands: Int = 1)
     enum class FloatAbi { SOFT, HARD }
     data class FunctionCallPlan(val effectiveFloatAbi: FloatAbi, val argumentRegisters: RegisterAssignment,
         val stackBytesBeforeAlignment: Int, val alignmentPadding: Int, val stackBytesAfterAlignment: Int,
@@ -346,6 +347,55 @@ object ArmGen {
         val fpRegister = floatingRegister(register, true)
         val sourceDouble = if (source == ValueType.FLOAT) 0 else 0x100
         return ConversionPlan(listOf(0xeeb70ac0.toInt() or (fpRegister shl 12) or fpRegister or sourceDouble))
+    }
+
+    /** Encodes the VFP arithmetic, unary, and compare instructions selected by gen_opf. */
+    fun vfpFloatingOperation(operation: String, type: ValueType, destination: Int, left: Int, right: Int,
+        leftIsZero: Boolean = false, rightIsZero: Boolean = false, condition: Condition? = null): FloatingOperationPlan {
+        val single = type == ValueType.FLOAT
+        val precision = if (single) 0 else 0x100
+        var lhs = floatingRegister(left, true)
+        var rhs = floatingRegister(right, true)
+        val dest = floatingRegister(destination, true)
+        var opcode = 0xee000a00.toInt() or precision
+        when (operation) {
+            "+" -> {
+                if (leftIsZero) { val swap = lhs; lhs = rhs; rhs = swap }
+                if (rightIsZero) return FloatingOperationPlan(emptyList(), consumedOperands = 2)
+                opcode = opcode or 0x300000
+            }
+            "-" -> {
+                opcode = opcode or 0x300040
+                if (rightIsZero) return FloatingOperationPlan(emptyList(), consumedOperands = 2)
+                if (leftIsZero) {
+                    opcode = opcode or 0x810000
+                    val swap = lhs; lhs = rhs; rhs = swap
+                }
+            }
+            "*" -> opcode = opcode or 0x200000
+            "/" -> opcode = opcode or 0x800000
+            "compare" -> {
+                var cmp = condition ?: throw IllegalArgumentException("floating compare requires a condition")
+                if (leftIsZero) {
+                    val swap = lhs; lhs = rhs; rhs = swap
+                    cmp = when (cmp) { Condition.LT -> Condition.GT; Condition.GE -> Condition.ULE; Condition.LE -> Condition.GE; Condition.GT -> Condition.ULT; else -> cmp }
+                }
+                opcode = opcode or 0xb40040
+                if (cmp !in setOf(Condition.EQ, Condition.NE)) opcode = opcode or 0x80
+                val compareWord = if (rightIsZero) opcode or 0x10000 or (lhs shl 12)
+                    else opcode or rhs or (lhs shl 12)
+                val result = when (cmp) {
+                    Condition.LE -> Condition.ULE; Condition.LT -> Condition.ULT
+                    Condition.UGE -> Condition.GE; Condition.UGT -> Condition.GT
+                    else -> cmp
+                }
+                return FloatingOperationPlan(listOf(compareWord, 0xeef1fa10.toInt()), result)
+            }
+            else -> throw IllegalArgumentException("unknown floating operation $operation")
+        }
+        val word = if (operation == "-" && leftIsZero) opcode or (dest shl 12) or lhs
+            else opcode or (dest shl 12) or (lhs shl 16) or rhs
+        return FloatingOperationPlan(listOf(word), consumedOperands = if (operation in setOf("abs", "sqrt") || operation == "-" && leftIsZero) 1 else 2)
     }
 
     /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
