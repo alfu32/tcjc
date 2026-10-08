@@ -489,4 +489,104 @@ class TccAsm(
             else -> clean.toLong(10)
         }
     }
+
+    /** Parses GAS source lines; architecture instruction encoding is supplied by the target backend. */
+    fun assemble(
+        source: String,
+        instruction: (mnemonic: String, operands: String) -> Unit,
+        global: Boolean = true,
+        preprocess: ((String) -> String)? = null,
+        hashComments: Boolean = true,
+    ): Int {
+        val lines = splitLines(preprocess?.invoke(source) ?: source, hashComments)
+        var emitted = 0
+        var index = 0
+        while (index < lines.size) {
+            val line = lines[index].trim()
+            if (line.isEmpty()) { index++; continue }
+            if (line.startsWith(".rept ")) {
+                val count = asmIntExpression(line.substringAfter(' ')).coerceAtLeast(0)
+                var depth = 1
+                val start = ++index
+                while (index < lines.size && depth > 0) {
+                    if (lines[index].trim().startsWith(".rept ")) depth++
+                    if (lines[index].trim() == ".endr") depth--
+                    index++
+                }
+                require(depth == 0) { "we are at end of file, .endr not found" }
+                val body = lines.subList(start, index - 1).joinToString("\n")
+                repeat(count) { emitted += assemble(body, instruction, global, null, hashComments) }
+                continue
+            }
+            require(line != ".endr") { "unexpected .endr" }
+            var rest = line
+            while (true) {
+                val colon = findOutsideQuotes(rest, ':')
+                val equals = findOutsideQuotes(rest, '=')
+                if (colon > 0 && (equals < 0 || colon < equals) &&
+                    rest.substring(0, colon).trim().matches(Regex("[A-Za-z_.$][A-Za-z0-9_.$]*|[0-9]+"))) {
+                    val label = rest.substring(0, colon).trim()
+                    defineLabel(label, label.all(Char::isDigit))
+                    rest = rest.substring(colon + 1).trim()
+                    if (rest.isEmpty()) break
+                } else if (equals > 0 && (colon < 0 || equals < colon)) {
+                    setAsmSymbol(rest.substring(0, equals).trim(), rest.substring(equals + 1).trim())
+                    break
+                } else break
+            }
+            if (rest.isNotEmpty()) {
+                if (rest.startsWith('.')) {
+                    val split = rest.indexOfFirst(Char::isWhitespace)
+                    val directive = if (split < 0) rest else rest.substring(0, split)
+                    val operands = if (split < 0) "" else rest.substring(split + 1).trim()
+                    parseDirective(directive, operands)
+                } else {
+                    val split = rest.indexOfFirst(Char::isWhitespace)
+                    val mnemonic = if (split < 0) rest else rest.substring(0, split)
+                    val operands = if (split < 0) "" else rest.substring(split + 1).trim()
+                    instruction(mnemonic, operands)
+                    emitted++
+                }
+            }
+            index++
+        }
+        return emitted
+    }
+
+    private fun splitLines(source: String, hashComments: Boolean): List<String> {
+        val lines = mutableListOf<String>()
+        val current = StringBuilder()
+        var quoted = false
+        var escaped = false
+        var comment = false
+        fun flush() { lines += current.toString(); current.setLength(0) }
+        for (char in source) {
+            if (comment) {
+                if (char == '\n') { flush(); comment = false }
+                continue
+            }
+            if (escaped) { current.append(char); escaped = false; continue }
+            if (quoted && char == '\\') { current.append(char); escaped = true; continue }
+            if (char == '"') quoted = !quoted
+            if (!quoted && hashComments && char == '#') {
+                comment = true
+                continue
+            }
+            if (!quoted && (char == '\n' || char == ';')) flush() else current.append(char)
+        }
+        if (current.isNotEmpty()) flush()
+        return lines
+    }
+
+    private fun findOutsideQuotes(source: String, wanted: Char): Int {
+        var quoted = false
+        var escaped = false
+        source.forEachIndexed { index, char ->
+            if (escaped) escaped = false
+            else if (quoted && char == '\\') escaped = true
+            else if (char == '"') quoted = !quoted
+            else if (!quoted && char == wanted) return index
+        }
+        return -1
+    }
 }
