@@ -12,6 +12,8 @@ object TccElf {
     const val SHT_NOBITS = 8
     const val SHT_REL = 9
     const val SHT_DYNSYM = 11
+    const val SHT_INIT_ARRAY = 14
+    const val SHT_FINI_ARRAY = 15
     const val SHF_WRITE = 1
     const val SHF_ALLOC = 2
     const val SHF_EXECINSTR = 4
@@ -715,6 +717,87 @@ object TccElf {
         while (section.data.size < size) section.data += 0
         section.dataOffset = maxOf(section.dataOffset, size)
         section.allocatedSize = maxOf(section.allocatedSize, section.data.size)
+    }
+
+    fun addArray(state: ElfState, sectionName: String, symbolIndex: Int, relocationType: Int): ElfSection {
+        val section = findSection(state, sectionName)
+        section.flags = SHF_ALLOC
+        section.type = if (sectionName.getOrNull(1) == 'i') SHT_INIT_ARRAY else SHT_FINI_ARRAY
+        val offset = section.dataOffset
+        val symbols = requireNotNull(state.symbolTable)
+        putElfRelocation(state, symbols, section, offset.toLong(), relocationType, symbolIndex)
+        sectionAdd(section, state.wordSize, 1)
+        return section
+    }
+
+    fun addBoundsCheckEntry(state: ElfState, boundsName: String = ".bounds") {
+        val bounds = state.namedSections[boundsName] ?: return
+        sectionAdd(bounds, state.wordSize, 1)
+    }
+
+    fun setLinkerSymbol(
+        state: ElfState,
+        name: String,
+        section: ElfSection,
+        mode: Int,
+        warn: (String) -> Unit = {},
+    ): Int {
+        val table = state.symbolTable ?: return 0
+        val existingIndex = findElfSymbol(table, name)
+        val existing = table.symbols.getOrNull(existingIndex)
+        val dynamicIndex = state.dynamicSymbolTable?.let { findElfSymbol(it, name) } ?: 0
+        val dynamic = state.dynamicSymbolTable?.symbols?.getOrNull(dynamicIndex)
+        val defined = existing?.sectionIndex?.let { it != SHN_UNDEF } == true ||
+            (dynamic?.sectionIndex != SHN_UNDEF && (dynamic?.size ?: 0L) != 0L)
+        var result = existingIndex
+        when (mode) {
+            1 -> if ((existingIndex != 0 || dynamicIndex != 0) && !defined) {
+                result = setGlobalSymbol(state, table, name, section, -1)
+                getSymbolAttributes(state, result, true)?.linkerSymbol = true
+            }
+            0 -> if (defined) warn("linker symbol '$name' already defined") else {
+                result = setGlobalSymbol(state, table, name, section, -1)
+                getSymbolAttributes(state, result, true)?.linkerSymbol = true
+            }
+            else -> if (getSymbolAttributes(state, existingIndex, false)?.linkerSymbol == true && existing != null) {
+                existing.value = section.dataOffset.toLong()
+            }
+        }
+        if (name.startsWith('_')) setLinkerSymbol(state, name.drop(1), section, mode, warn)
+        return result
+    }
+
+    fun resolveCommonSymbols(
+        state: ElfState,
+        sharedLibraryOutput: Boolean,
+        warn: (String) -> Unit = {},
+    ) {
+        val symbols = state.symbolTable ?: return
+        val bss = state.namedSections[".bss"] ?: return
+        symbols.symbols.drop(1).forEach { symbol ->
+            if (symbol.sectionIndex == SHN_COMMON && symbol.size != 0L) {
+                symbol.value = sectionAdd(bss, symbol.size.toInt(), symbol.value.toInt()).toLong()
+                symbol.sectionIndex = bss.index
+            }
+        }
+        if (sharedLibraryOutput) return
+        setLinkerSymbol(state, "_etext", state.namedSections[".text"] ?: return, 0, warn)
+        setLinkerSymbol(state, "_edata", state.namedSections[".data"] ?: return, 0, warn)
+        setLinkerSymbol(state, "_end", bss, 0, warn)
+        listOf(".preinit_array", ".init_array", ".fini_array").forEach { arrayName ->
+            val found = state.sections.drop(1).filterNotNull().firstOrNull { it.name == arrayName && it.flags and SHF_ALLOC != 0 }
+            val target = found ?: (state.namedSections[".text"] ?: return@forEach)
+            val suffix = arrayName.substring(1)
+            setGlobalSymbol(state, symbols, "__${suffix}_start", target, 0)
+            setGlobalSymbol(state, symbols, "__${suffix}_end", target, found?.dataOffset?.toLong() ?: 0L)
+        }
+        state.sections.drop(1).filterNotNull().forEach { target ->
+            if (target.flags and SHF_ALLOC == 0 || target.type !in setOf(SHT_PROGBITS, SHT_NOBITS, SHT_STRTAB)) return@forEach
+            val stem = target.name.removePrefix(".")
+            if (stem.any { !(it == '_' || it.isLetterOrDigit()) }) return@forEach
+            setGlobalSymbol(state, symbols, "__start_$stem", target, 0)
+            setGlobalSymbol(state, symbols, "__stop_$stem", target, -1)
+        }
     }
 
     fun relocateSection(
