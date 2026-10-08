@@ -202,6 +202,58 @@ object TccElf {
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class ObjectMergeResult(val sections: List<SectionMergeInfo>, val symbolIndexes: IntArray)
     data class LoadedLibrary(val soname: String, val level: Int, val symbolIndexes: IntArray)
+    data class LinkerScriptToken(val type: Int, val text: String)
+
+    class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
+        private var position = 0
+        private fun input(): Int = if (position >= source.length) -1 else source[position++].code
+        private fun unget(character: Int) { if (character >= 0) position-- }
+        private fun isNameStart(character: Int): Boolean = character == '\\'.code || character in 'a'.code..'z'.code ||
+            character in 'A'.code..'Z'.code || character in "-_.$~".map(Char::code)
+        private fun isNameCharacter(character: Int): Boolean = character in 'a'.code..'z'.code ||
+            character in 'A'.code..'Z'.code || character in '0'.code..'9'.code || character in "/.-_+=$:\\,~".map(Char::code)
+
+        fun next(): LinkerScriptToken {
+            val token = StringBuilder()
+            while (true) {
+                val character = input()
+                if (character < 0) return LinkerScriptToken(-1, "")
+                if (character.toChar() !in charArrayOf(' ', '\t', '\u000c', '\u000b', '\r', '\n')) {
+                    if (character == '/'.code) {
+                        val next = input()
+                        if (next == '*'.code) {
+                            var previous = 0
+                            while (true) {
+                                val commentCharacter = input()
+                                if (commentCharacter < 0 || (commentCharacter == '/'.code && previous == '*'.code)) break
+                                previous = commentCharacter
+                            }
+                            continue
+                        }
+                        unget(next)
+                    }
+                    token.append(character.toChar())
+                    if (isNameStart(character) || character == '/'.code) {
+                        while (true) {
+                            val next = input()
+                            if (character == '/'.code && token.length == 1 || isNameCharacter(next)) {
+                                if (next < 0 || !isNameCharacter(next)) {
+                                    unget(next)
+                                    break
+                                }
+                                if (token.length < maxNameLength) token.append(next.toChar())
+                            } else {
+                                unget(next)
+                                break
+                            }
+                        }
+                        return LinkerScriptToken(-2, token.toString())
+                    }
+                    return LinkerScriptToken(character, token.toString())
+                }
+            }
+        }
+    }
     data class DynamicTableLayout(
         val dynamic: ElfSection,
         val dynamicStrings: ElfSection,
