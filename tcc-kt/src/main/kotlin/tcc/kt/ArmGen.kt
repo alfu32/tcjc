@@ -587,6 +587,34 @@ object ArmGen {
         return words
     }
 
+    /** Stores a core or VFP register into an ARM compiler lvalue. */
+    fun storeRegister(source: Int, destination: CodeValue, vfp: Boolean, output: (Int) -> Unit,
+        currentPosition: () -> Int = { 0 }, relocate: (Symbol, Int, String) -> Unit = { _, _, _ -> }) : List<Int> {
+        val words = mutableListOf<Int>()
+        fun emit(word: Int) { words += word; output(word) }
+        val sourceCore = integerRegister(source)
+        if (destination.tls && destination.symbol != null) {
+            emit(0xee1d0fe0.toInt())
+            relocate(destination.symbol, currentPosition(), "R_ARM_TLS_LE32")
+            emit(0xe500e000.toInt() or (sourceCore shl 12))
+            return words
+        }
+        val base: Int
+        val offset: Int
+        when (destination.location) {
+            ValueLocation.LOCAL, ValueLocation.LOCAL_LVALUE -> { base = 11; offset = destination.value }
+            ValueLocation.CONSTANT_LVALUE -> {
+                loadRegister(CodeValue(ValueLocation.CONSTANT, ValueType.INT, destination.value, symbol = destination.symbol), TREG_LR,
+                    vfp, output = ::emit, currentPosition = currentPosition, relocate = relocate)
+                base = 14; offset = 0
+            }
+            ValueLocation.REGISTER_LVALUE -> { base = integerRegister(destination.register); offset = 0 }
+            else -> throw IllegalArgumentException("store unimplemented")
+        }
+        memoryStore(source, base, offset, destination.type, vfp).words.forEach(::emit)
+        return words
+    }
+
     fun vlaAllocation(register: Int, alignment: Int, eabi: Boolean, boundsCheck: Boolean): VlaAllocationPlan {
         var aligned = alignment
         val minimum = if (eabi) 8 else 4
