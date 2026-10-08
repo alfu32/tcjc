@@ -419,7 +419,7 @@ object TccElf {
                 val name = elfString(strings, symbol.nameOffset)
                 if (resolveUndefined != 0 && !peTarget) {
                     val undecorated = if (leadingUnderscore) name.drop(1) else name
-                    val address = if (noStandardLibraries) null else dynamicLookup(undecorated)
+                    val address = (if (noStandardLibraries) null else dynamicLookup(undecorated))
                         ?: loadedLibraryLookup(undecorated)
                     if (address != null) { symbol.value = address; return@forEach }
                 } else if (resolveUndefined == 0 && state.dynamicSymbolTable?.let { findElfSymbol(it, name) != 0 } == true) {
