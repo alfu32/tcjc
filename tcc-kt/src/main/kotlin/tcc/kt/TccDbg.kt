@@ -55,6 +55,16 @@ object TccDbg {
     )
     data class DebugTypeEntry(val identity: Long, val offset: Int)
     data class ForwardTypeEntry(val identity: Long, val pendingOffsets: MutableList<Int> = mutableListOf())
+    sealed interface DebugType {
+        data class Base(val code: Int) : DebugType
+        data class Pointer(val target: DebugType) : DebugType
+        data class ArrayType(val element: DebugType, val upperBound: Int) : DebugType
+        data class Function(val result: DebugType, val parameters: List<DebugType>) : DebugType
+        data class Aggregate(val name: String, val isUnion: Boolean, val byteSize: Int, val members: List<DebugMember>, val identity: Long = 0) : DebugType
+        data class Enumeration(val name: String, val unsigned: Boolean, val values: List<Pair<String, Long>>, val identity: Long = 0) : DebugType
+    }
+    data class DebugMember(val name: String, val type: DebugType, val bitOffset: Int, val bitSize: Int = 0)
+    data class StabsTypeContext(var nextId: Int = 0, val aggregateIds: MutableMap<Long, Int> = mutableMapOf(), val definedAggregates: MutableSet<Long> = mutableSetOf())
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -517,6 +527,37 @@ object TccDbg {
     }
 
     fun addScopeSymbol(scope: DebugScope, symbol: DebugSymbol) { scope.symbols += symbol }
+
+    /** Serializes one C type in the compact STABS notation used by tcc_get_debug_info. */
+    fun stabsType(type: DebugType, context: StabsTypeContext): String {
+        fun next(): Int = ++context.nextId
+        fun render(current: DebugType): String = when (current) {
+            is DebugType.Base -> current.code.toString()
+            is DebugType.Pointer -> "${next()}=*${render(current.target)}"
+            is DebugType.ArrayType -> "${next()}=ar1;0;${current.upperBound};${render(current.element)}"
+            is DebugType.Function -> "${next()}=f${render(current.result)}"
+            is DebugType.Aggregate -> {
+                val id = context.aggregateIds.getOrPut(current.identity) { next() }
+                if (!context.definedAggregates.add(current.identity)) id.toString() else buildString {
+                    append(current.name).append(":T").append(id).append('=').append(if (current.isUnion) 'u' else 's').append(current.byteSize)
+                    current.members.forEach { member ->
+                        append(member.name).append(':').append(render(member.type)).append(',').append(member.bitOffset).append(',')
+                        append(if (member.bitSize > 0) member.bitSize else 0).append(';')
+                    }
+                    append(';')
+                }
+            }
+            is DebugType.Enumeration -> {
+                val id = context.aggregateIds.getOrPut(current.identity) { next() }
+                if (!context.definedAggregates.add(current.identity)) id.toString() else buildString {
+                    append(current.name).append(":T").append(id).append("=e")
+                    current.values.forEach { (name, value) -> append(name).append(':').append(value).append(',') }
+                    append(';')
+                }
+            }
+        }
+        return render(type)
+    }
 
     fun writeData1(section: DwarfSection, value: Int) = section.append(value)
     fun writeData2(section: DwarfSection, value: Int) { writeData1(section, value); writeData1(section, value ushr 8) }
