@@ -360,6 +360,20 @@ object TccGen {
     fun pushInteger(state: RuntimeState, value: Int) =
         setValue(state, CType(VT_INT), VT_CONST, value.toLong())
 
+    fun pushLongLong(state: RuntimeState, value: Long) =
+        setValue(state, CType(VT_LLONG), VT_CONST, value)
+
+    fun pushPointerSized(state: RuntimeState, value: Long, sizeType: Int) =
+        setValue(state, CType(sizeType), VT_CONST, value)
+
+    fun setIntegerValue(state: RuntimeState, register: Int, value: Int) =
+        setValue(state, CType(VT_INT), register, value.toLong())
+
+    fun duplicateTopValue(state: RuntimeState) {
+        val value = state.values.lastOrNull() ?: run { state.hooks.error("value stack underflow"); return }
+        pushValue(state, value)
+    }
+
     fun pushValue(state: RuntimeState, value: Value) {
         if (state.values.size >= VALUE_STACK_SIZE) {
             state.hooks.error("memory full (vstack)")
