@@ -33,6 +33,7 @@ object ArmGen {
     const val TREG_F7 = 12
     const val TREG_SP = 13
     const val TREG_LR = 14
+    const val TREG_FP = 11
 
     fun targetMachineDefinitions(eabi: Boolean): List<String> = buildList {
         addAll(listOf("__arm__", "__arm", "arm", "__arm_elf__", "__arm_elf", "arm_elf",
@@ -697,6 +698,17 @@ object ArmGen {
         instructions += 0xe04d0000.toInt() or (armRegister shl 12) or armRegister
         instructions += stuffConstant(0xe3c0d000.toInt() or (armRegister shl 16), aligned - 1)
         return VlaAllocationPlan(aligned, instructions, boundsCheck)
+    }
+
+    fun saveVlaStackPointer(frameOffset: Int): List<Int> =
+        memoryStore(TREG_SP, TREG_FP, frameOffset, ValueType.INT, vfp = false).words
+
+    fun restoreVlaStackPointer(frameOffset: Int): List<Int> =
+        memoryLoad(TREG_SP, TREG_FP, frameOffset, ValueType.INT, unsigned = false, vfp = false).words
+
+    fun computedGoto(target: CallTarget, position: () -> Int, output: (Int) -> Unit,
+        relocate: (Symbol, Int, String) -> Unit, allocateIntegerRegister: () -> Int = { TREG_R0 }) {
+        emitCallOrJump(target, jump = true, position, output, relocate, allocateIntegerRegister)
     }
 
     /** Applies ARM EABI structure and homogeneous-float aggregate return rules. */
