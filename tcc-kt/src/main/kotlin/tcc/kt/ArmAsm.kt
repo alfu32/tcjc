@@ -760,4 +760,108 @@ class ArmAsm(
             register, offset, preincrement = pre, writeback = writeback || group == "vpush" || group == "vpop",
             longTransfer = extraBit != 0, load = !store)
     }
+
+    data class ConstraintOperand(
+        val constraint: String, val id: String = "", val constant: Boolean = false,
+        val symbolic: Boolean = false, val localPointer: Boolean = false,
+        var reference: Int = -1, var register: Int = -1,
+        var memory: Boolean = false, var readWrite: Boolean = false,
+    )
+    data class ConstraintAllocation(val operands: List<ConstraintOperand>, val outputScratch: Int)
+
+    /** Matches ARM extended-asm constraint ordering and register allocation. */
+    fun allocateConstraints(operands: MutableList<ConstraintOperand>, outputs: Int, clobbers: BooleanArray): ConstraintAllocation {
+        val occupied = IntArray(16)
+        clobbers.indices.take(16).forEach { if (clobbers[it]) occupied[it] = 3 }
+        occupied[13] = 3 // sp
+        occupied[11] = 3 // fp
+        val references = mutableSetOf<Int>()
+        val priorities = operands.mapIndexed { index, operand ->
+            val constraint = skipConstraintModifiers(operand.constraint)
+            val reference = when {
+                constraint.startsWith('[') && ']' in constraint -> operands.indexOfFirst { it.id == constraint.substringAfter('[').substringBefore(']') }
+                else -> Regex("^\\d+").find(constraint)?.value?.toIntOrNull() ?: -1
+            }
+            if (reference >= 0) {
+                require(reference < index && index >= outputs) { "invalid ARM asm constraint reference" }
+                require(references.add(reference)) { "cannot reference twice the same ARM asm operand" }
+                operand.reference = reference
+                5
+            } else if (operand.localPointer) 1 else armConstraintPriority(constraint)
+        }
+        val tiedOutputs = operands.filter { it.reference >= 0 }.map { it.reference }.toSet()
+        val order = operands.indices.sortedBy { priorities[it] }
+        order.forEach { index ->
+            val operand = operands[index]
+            if (operand.reference >= 0) return@forEach
+            val isOutput = index < outputs
+            if (operand.constraint.startsWith('+')) operand.readWrite = true
+            val earlyClobber = operand.constraint.startsWith('&')
+            require((!operand.readWrite && !earlyClobber) || isOutput) { "asm modifier can only be applied to outputs" }
+            val mask = if (operand.readWrite || earlyClobber || index in tiedOutputs) 3 else if (isOutput) 1 else 2
+            val choices = skipConstraintModifiers(operand.constraint)
+            var assigned = false
+            for (choice in choices) {
+                when (choice) {
+                    'l', 'r', 'p' -> {
+                        val register = (0..8).firstOrNull { candidate ->
+                            val fixed = when (choice) { 'l' -> candidate; else -> -1 }
+                            (operand.register >= 0 && candidate == operand.register || operand.register < 0 && candidate == fixed || operand.register < 0 && choice != 'l') && occupied[candidate] and mask == 0
+                        }
+                        if (register != null) {
+                            operand.register = register
+                            occupied[register] = occupied[register] or mask
+                            assigned = true
+                            break
+                        }
+                    }
+                    'I', 'J', 'K', 'L', 'i' -> if (operand.constant) { assigned = true; break }
+                    'M' -> if (operand.constant && !operand.symbolic) { assigned = true; break }
+                    'm', 'g' -> {
+                        if (operand.localPointer && (isOutput || choice == 'm')) {
+                            val register = (0..8).firstOrNull { occupied[it] and 2 == 0 }
+                            if (register != null) {
+                                operand.register = register
+                                operand.memory = true
+                                occupied[register] = occupied[register] or 2
+                            }
+                        }
+                        if (choice == 'm' && operand.constant) continue
+                        assigned = true
+                        break
+                    }
+                }
+            }
+            require(assigned) { "ARM asm constraint $index ('${operand.constraint}') could not be satisfied" }
+        }
+        operands.forEach { operand ->
+            if (operand.reference >= 0) operand.register = operands[operand.reference].register
+        }
+        val scratch = if (operands.any { it.localPointer && !it.memory && it.register >= 0 })
+            (0..8).firstOrNull { occupied[it] and 1 == 0 } ?: -1 else -1
+        return ConstraintAllocation(operands, scratch)
+    }
+
+    fun armConstraintPriority(constraint: String): Int {
+        var priority = 0
+        constraint.forEach { code ->
+            val rank = when (code) {
+                'l', 'r', 'p' -> 3
+                'M', 'I', 'J', 'i', 'm', 'g' -> 4
+                else -> throw IllegalArgumentException("unknown ARM constraint '$code'")
+            }
+            priority = maxOf(priority, rank)
+        }
+        return priority
+    }
+
+    fun skipConstraintModifiers(constraint: String): String =
+        constraint.dropWhile { it == '=' || it == '&' || it == '+' || it == '%' }
+
+    fun markClobber(name: String, registers: BooleanArray) {
+        if (name in setOf("memory", "cc", "flags")) return
+        val register = coreRegister(name)
+        require(register in registers.indices) { "invalid clobber register '$name'" }
+        registers[register] = true
+    }
 }
