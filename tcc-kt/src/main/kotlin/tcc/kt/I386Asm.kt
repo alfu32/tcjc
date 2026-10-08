@@ -75,7 +75,18 @@ class I386Asm(private val emit: (Int) -> Unit) {
         emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
     ): Boolean {
         val instruction = selectMnemonic(mnemonic, operands) ?: return false
-        val opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16)
+        if (mnemonic == "int" && operands.size == 1 && operands[0].expression.symbol == null && operands[0].expression.value == 3) {
+            emit(0xcc)
+            return true
+        }
+        var opcode = emitPrefixes(instruction, operandSize16, segmentPrefix, addressSize16)
+        if (operands.size == 1 && operands[0].type and OP_SEG != 0 && (opcode == 0x06 || opcode == 0x07)) {
+            val segment = operands[0].register
+            opcode = if (segment >= 4) 0x0fa0 + (opcode - 0x06) + ((segment - 4) shl 3) else opcode + (segment shl 3)
+            if (opcode ushr 8 != 0) emit(opcode ushr 8)
+            emit(opcode)
+            return true
+        }
         emitInstruction(instruction, operands, opcodeForMnemonic(instruction, mnemonic, opcode), emitExpression = emitExpression)
         return true
     }
@@ -324,11 +335,13 @@ class I386Asm(private val emit: (Int) -> Unit) {
             val byteRegs = listOf("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh")
             val wordRegs = listOf("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
             val dwordRegs = listOf("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+            val segments = listOf("es", "cs", "ss", "ds", "fs", "gs")
             val st = Regex("st(?:\\(([0-7])\\))?").matchEntire(name)
             val (type, register) = when {
                 name in byteRegs -> OP_REG8 to byteRegs.indexOf(name)
                 name in wordRegs -> OP_REG16 to wordRegs.indexOf(name)
                 name in dwordRegs -> OP_REG32 to dwordRegs.indexOf(name)
+                name in segments -> OP_SEG to segments.indexOf(name)
                 st != null -> OP_ST to (st.groupValues[1].ifEmpty { "0" }.toInt())
                 else -> throw IllegalArgumentException("unknown register %$name")
             }
@@ -451,7 +464,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
         if (instruction.instructionType and OPC_MODRM != 0) {
             modRmIndex = operands.indices.firstOrNull { operands[it].type and OP_EA != 0 }
                 ?: operands.indices.firstOrNull { operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_INDIR) != 0 }
-                ?: if (operands.isEmpty()) 0 else throw IllegalArgumentException("instruction has no ModRM operand")
+                ?: if (operands.isEmpty()) -2 else throw IllegalArgumentException("instruction has no ModRM operand")
         }
         if (instruction.instructionType and OPC_REG != 0) {
             val registerOperand = operands.firstOrNull { it.type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_ST) != 0 }
@@ -461,7 +474,11 @@ class I386Asm(private val emit: (Int) -> Unit) {
         if (op ushr 16 != 0) emit(op ushr 16)
         if ((op ushr 8) and 0xff != 0) emit(op ushr 8)
         emit(op)
-        if (modRmIndex >= 0) {
+        if (modRmIndex == -2) {
+            val group = (instruction.instructionType ushr OPC_GROUP_SHIFT) and 7
+            val syntheticRegister = if (instruction.mnemonic == "endbr32") 3 else 0
+            emit(0xc0 or (group shl 3) or syntheticRegister)
+        } else if (modRmIndex >= 0) {
             val otherRegister = operands.indices.firstOrNull { index ->
                 index != modRmIndex && operands[index].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0
             }
