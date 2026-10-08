@@ -81,7 +81,12 @@ object TccDbg {
         data class Enumeration(val name: String, val unsigned: Boolean, val values: List<Pair<String, Long>>, val identity: Long = 0, val baseTypeCode: Int = 0) : DebugType
     }
     data class DebugMember(val name: String, val type: DebugType, val bitOffset: Int, val bitSize: Int = 0)
-    data class StabsTypeContext(var nextId: Int = 0, val aggregateIds: MutableMap<Long, Int> = mutableMapOf(), val definedAggregates: MutableSet<Long> = mutableSetOf())
+    data class StabsTypeContext(
+        var nextId: Int = 0,
+        val aggregateIds: MutableMap<Long, Int> = mutableMapOf(),
+        val definedAggregates: MutableSet<Long> = mutableSetOf(),
+        val identities: java.util.IdentityHashMap<DebugType, Long> = java.util.IdentityHashMap(),
+    )
     data class DwarfTypeContext(
         val section: DwarfSection,
         val strings: DebugSections,
@@ -92,6 +97,7 @@ object TccDbg {
         val line: Int,
         val baseTypes: MutableMap<Int, Int> = mutableMapOf(),
         val typeOffsets: MutableMap<Long, Int> = mutableMapOf(),
+        val identities: java.util.IdentityHashMap<DebugType, Long> = java.util.IdentityHashMap(),
     )
     data class CoverageState(
         val section: DwarfSection = DwarfSection(".tcov", flags = 3),
@@ -664,14 +670,17 @@ object TccDbg {
     /** Serializes one C type in the compact STABS notation used by tcc_get_debug_info. */
     fun stabsType(type: DebugType, context: StabsTypeContext): String {
         fun next(): Int = ++context.nextId
+        fun identity(value: DebugType, declared: Long): Long = if (declared != 0L) declared
+            else context.identities.getOrPut(value) { context.identities.size.toLong() + 1 }
         fun render(current: DebugType): String = when (current) {
             is DebugType.Base -> current.code.toString()
             is DebugType.Pointer -> "${next()}=*${render(current.target)}"
             is DebugType.ArrayType -> "${next()}=ar1;0;${current.upperBound};${render(current.element)}"
             is DebugType.Function -> "${next()}=f${render(current.result)}"
             is DebugType.Aggregate -> {
-                val id = context.aggregateIds.getOrPut(current.identity) { next() }
-                if (!context.definedAggregates.add(current.identity)) id.toString() else buildString {
+                val typeId = identity(current, current.identity)
+                val id = context.aggregateIds.getOrPut(typeId) { next() }
+                if (!context.definedAggregates.add(typeId)) id.toString() else buildString {
                     append(current.name).append(":T").append(id).append('=').append(if (current.isUnion) 'u' else 's').append(current.byteSize)
                     current.members.forEach { member ->
                         append(member.name).append(':').append(render(member.type)).append(',').append(member.bitOffset).append(',')
@@ -681,8 +690,9 @@ object TccDbg {
                 }
             }
             is DebugType.Enumeration -> {
-                val id = context.aggregateIds.getOrPut(current.identity) { next() }
-                if (!context.definedAggregates.add(current.identity)) id.toString() else buildString {
+                val typeId = identity(current, current.identity)
+                val id = context.aggregateIds.getOrPut(typeId) { next() }
+                if (!context.definedAggregates.add(typeId)) id.toString() else buildString {
                     append(current.name).append(":T").append(id).append("=e")
                     current.values.forEach { (name, value) -> append(name).append(':').append(value).append(',') }
                     append(';')
@@ -696,6 +706,8 @@ object TccDbg {
     fun emitDwarfType(type: DebugType, context: DwarfTypeContext): Int {
         fun ref(offset: Int) = offset - context.unitStart
         fun name(value: String) = writeStringReference(context.strings, context.section, value, context.refs.strings, pointerSize = context.pointerSize)
+        fun identity(value: DebugType, declared: Long): Long = if (declared != 0L) declared
+            else context.identities.getOrPut(value) { context.identities.size.toLong() + 1 }
         fun emit(current: DebugType): Int = when (current) {
             is DebugType.Base -> context.baseTypes[current.code] ?: error("missing DWARF base type ${current.code}")
             is DebugType.Pointer -> {
@@ -714,9 +726,10 @@ object TccDbg {
                 writeData1(context.section, 0); patch32(context.section, sibling, ref(context.section.size)); offset
             }
             is DebugType.Aggregate -> {
-                context.typeOffsets[current.identity]?.let { return it }
+                val typeId = identity(current, current.identity)
+                context.typeOffsets[typeId]?.let { return it }
                 val offset = context.section.size
-                context.typeOffsets[current.identity] = offset
+                context.typeOffsets[typeId] = offset
                 val hasMembers = current.members.isNotEmpty()
                 writeData1(context.section, if (current.isUnion) if (hasMembers) 18 else 19 else if (hasMembers) 16 else 17)
                 name(current.name); writeUleb(context.section, current.byteSize.toLong())
@@ -737,10 +750,11 @@ object TccDbg {
                 offset
             }
             is DebugType.Enumeration -> {
-                context.typeOffsets[current.identity]?.let { return it }
+                val typeId = identity(current, current.identity)
+                context.typeOffsets[typeId]?.let { return it }
                 val baseType = context.baseTypes[current.baseTypeCode]
                     ?: error("missing DWARF enum base type ${current.baseTypeCode}")
-                val offset = context.section.size; context.typeOffsets[current.identity] = offset
+                val offset = context.section.size; context.typeOffsets[typeId] = offset
                 writeData1(context.section, 13); name(current.name); writeData1(context.section, if (current.unsigned) 7 else 5); writeData1(context.section, 4)
                 writeData4(context.section, ref(baseType)); writeUleb(context.section, context.file.toLong()); writeUleb(context.section, context.line.toLong())
                 val sibling = context.section.size; writeData4(context.section, 0)
