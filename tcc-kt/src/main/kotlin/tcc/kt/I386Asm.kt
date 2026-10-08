@@ -24,6 +24,9 @@ class I386Asm(private val emit: (Int) -> Unit) {
         const val OP_ADDR = 1 shl 18
         const val OP_INDIR = 1 shl 19
         const val OP_EA = 0x40000000
+        const val OPC_REG = 0x04
+        const val OPC_MODRM = 0x08
+        const val OPC_GROUP_SHIFT = 13
 
         /** x86 condition-code aliases in the order used by TOK_ASM_jcc. */
         val conditionCodes = intArrayOf(
@@ -321,6 +324,54 @@ class I386Asm(private val emit: (Int) -> Unit) {
     fun conditionCode(tokenOffset: Int): Int {
         require(tokenOffset in conditionCodes.indices) { "unknown condition-code token offset $tokenOffset" }
         return conditionCodes[tokenOffset]
+    }
+
+    /** Emits a selected i386 template's opcode, ModRM byte, and immediate operands. */
+    fun emitInstruction(
+        instruction: Instruction, operands: List<Operand>, opcode: Int,
+        suffixOpcodeBits: Int = 0, emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
+    ) {
+        var op = opcode + suffixOpcodeBits
+        var modRmIndex = -1
+        if (instruction.instructionType and OPC_MODRM != 0) {
+            modRmIndex = operands.indices.firstOrNull { operands[it].type and OP_EA != 0 }
+                ?: operands.indices.firstOrNull { operands[it].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_INDIR) != 0 }
+                ?: if (operands.isEmpty()) 0 else throw IllegalArgumentException("instruction has no ModRM operand")
+        }
+        if (instruction.instructionType and OPC_REG != 0) {
+            val registerOperand = operands.firstOrNull { it.type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_ST) != 0 }
+                ?: throw IllegalArgumentException("register opcode has no register operand")
+            op += registerOperand.register
+        }
+        if (op ushr 16 != 0) emit(op ushr 16)
+        if ((op ushr 8) and 0xff != 0) emit(op ushr 8)
+        emit(op)
+        if (modRmIndex >= 0) {
+            val otherRegister = operands.indices.firstOrNull { index ->
+                index != modRmIndex && operands[index].type and (OP_REG8 or OP_REG16 or OP_REG32 or OP_MMX or OP_SSE or OP_CR or OP_TR or OP_DB or OP_SEG) != 0
+            }
+            val group = (instruction.instructionType ushr OPC_GROUP_SHIFT) and 7
+            val field = otherRegister?.let { operands[it].register } ?: group
+            modRm(field, operands[modRmIndex]) { -1 }
+        }
+        operands.forEachIndexed { index, operand ->
+            if (index == modRmIndex) return@forEachIndexed
+            val operandType = instruction.operandTypes[index] and 0x1f
+            if (operandType in 10..13 || operandType == 25 || operandType == 26 || operand.type and (OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32 or OP_ADDR) != 0) {
+                val value = operand.expression
+                when {
+                    operand.type and (OP_IM8 or OP_IM8S) != 0 -> {
+                        if (value.symbol != null) throw IllegalArgumentException("cannot relocate an 8 bit immediate")
+                        emit(value.value)
+                    }
+                    operand.type and OP_IM16 != 0 -> {
+                        if (value.symbol != null) throw IllegalArgumentException("cannot relocate a 16 bit immediate")
+                        emit(value.value); emit(value.value ushr 8)
+                    }
+                    else -> emitExpression(value, operandType == 25 || operandType == 26)
+                }
+            }
+        }
     }
 
     private fun emitExpression32(expression: Expression) {
