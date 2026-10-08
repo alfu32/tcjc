@@ -107,10 +107,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
         }
         if (group != null && kind != OPC_SHIFT) return baseOpcode + (group shl 3)
         if (kind == OPC_0F01) return baseOpcode or 0x0f0100
-        if (kind == 0x50) {
-            val condition = conditionNames.indexOf(root.removePrefix("cmov").removePrefix("set").removePrefix("j"))
-            if (condition >= 0) return baseOpcode + condition
-        }
+        if (kind == OPC_TEST) return baseOpcode + (groupForMnemonic(instruction, mnemonic) ?: 0)
         val width = when (mnemonic.lastOrNull()) { 'b' -> 0; 'w' -> 1; 'l' -> 2; else -> 0 }
         return if (instruction.instructionType and 1 != 0 && width > 0) baseOpcode + 1 else baseOpcode
     }
@@ -123,7 +120,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
             OPC_FARITH -> mapOf("fadd" to 0, "fmul" to 1, "fcom" to 2, "fcomp" to 3, "fsub" to 4, "fsubr" to 5, "fdiv" to 6, "fdivr" to 7)[root.removeSuffix("p")]
             OPC_TEST -> {
                 val cc = root.removePrefix("cmov").removePrefix("set").removePrefix("j")
-                conditionNames.indexOf(cc).takeIf { it >= 0 }
+                conditionNames.indexOf(cc).takeIf { it >= 0 }?.let { conditionCodes[it] }
             }
             else -> null
         }
