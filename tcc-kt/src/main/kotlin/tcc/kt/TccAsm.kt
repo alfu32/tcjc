@@ -9,7 +9,16 @@ class TccAsm(
     private val defineSymbol: (String, Symbol) -> Unit = { _, _ -> },
     private val localLabelName: (Long) -> String = { "L..$it" },
 ) {
-    data class Section(val name: String, val index: Int, var offset: Long = 0, var previous: Section? = null)
+    data class Section(
+        val name: String,
+        val index: Int,
+        var offset: Long = 0,
+        var previous: Section? = null,
+        var alignment: Int = 1,
+        var flags: Int = 2,
+        var noBits: Boolean = false,
+        var bytes: ByteArray = byteArrayOf(),
+    )
     data class Symbol(
         val name: String,
         var value: Long = 0,
@@ -18,13 +27,25 @@ class TccAsm(
         var external: Boolean = true,
         var set: Boolean = false,
         var asmLabel: String? = null,
+        var weak: Boolean = false,
+        var hidden: Boolean = false,
+        var elfType: String? = null,
+        var size: Long = 0,
     )
     data class Expression(var value: Long = 0, var symbol: Symbol? = null, var pcRelative: Boolean = false)
     data class Token(val text: String, val kind: Kind) {
         enum class Kind { NUMBER, IDENTIFIER, CHARACTER, OPERATOR, END }
     }
+    data class AsmRelocation(val section: String, val offset: Long, val symbol: String, val type: String, val addend: Long)
+    data class DirectiveResult(val section: String, val emittedBytes: Int, val relocations: List<AsmRelocation> = emptyList())
 
     private val labels = mutableMapOf<String, Symbol>()
+    private val sections = linkedMapOf(currentSection().name to currentSection())
+    private var activeSection = currentSection()
+    private var previousSection: Section? = null
+    private val sectionStack = mutableListOf<Section>()
+    val relocations = mutableListOf<AsmRelocation>()
+    var nopBytes: (Int) -> ByteArray = { count -> ByteArray(count) { 0x90.toByte() } }
 
     fun asmGetLocalLabelName(number: Long): String = localLabelName(number)
 
@@ -61,11 +82,195 @@ class TccAsm(
         return expression.value.toInt()
     }
 
+    fun section(name: String): Section = sections.getOrPut(name) { Section(name, sections.size + 1) }
+
+    fun useSection(name: String): Section { activeSection = section(name); return activeSection }
+    fun pushSection(name: String): Section { sectionStack += activeSection; return useSection(name) }
+    fun popSection(): Section {
+        require(sectionStack.isNotEmpty()) { ".popsection without .pushsection" }
+        activeSection = sectionStack.removeAt(sectionStack.lastIndex)
+        return activeSection
+    }
+    fun previousSection(): Section {
+        val previous = previousSection ?: error("no previous section referenced")
+        val old = activeSection
+        activeSection = previous
+        previousSection = old
+        return activeSection
+    }
+
+    /** Parses common GAS data, padding, section, and symbol directives. */
+    fun parseDirective(name: String, operandText: String = ""): DirectiveResult {
+        val directive = name.removePrefix(".")
+        val startSection = activeSection
+        val startOffset = activeSection.offset
+        val args = splitOperands(operandText)
+        when (directive) {
+            "align", "balign", "p2align", "skip", "space", "org" -> directivePadding(directive, args)
+            "byte", "short", "word", "long", "int", "quad" -> directiveData(directive, args)
+            "fill" -> directiveFill(args)
+            "ascii", "asciz", "string" -> directiveStrings(directive, args)
+            "text", "data", "bss" -> {
+                val suffix = args.firstOrNull()?.let(::asmIntExpression)?.takeIf { it != 0 }?.toString() ?: ""
+                val sec = useSection(directive + suffix)
+                if (directive == "bss") sec.noBits = true
+            }
+            "section", "pushsection" -> {
+                require(args.isNotEmpty()) { "section name expected" }
+                val sectionName = unquote(args[0])
+                val old = sections[sectionName]
+                val flagsText = args.getOrNull(1)?.let(::unquote).orEmpty()
+                previousSection = activeSection
+                val sec = if (directive == "pushsection") pushSection(sectionName) else useSection(sectionName)
+                if (old == null) {
+                    sec.alignment = 1
+                    sec.flags = 2 or (if ('w' in flagsText) 1 else 0) or
+                        (if ('x' in flagsText || sectionName == ".init" || sectionName == ".fini") 4 else 0)
+                }
+            }
+            "popsection" -> popSection()
+            "previous" -> previousSection()
+            "globl", "global", "weak", "hidden" -> args.forEach { operand ->
+                val symbol = getAsmSymbol(operand.trim())
+                if (directive == "weak") symbol.weak = true
+                if (directive == "hidden") symbol.hidden = true
+                symbol.external = true
+            }
+            "set" -> if (args.size > 1) setAsmSymbol(args[0], args.drop(1).joinToString(","))
+            "type" -> {
+                val symbol = getAsmSymbol(args.firstOrNull()?.trim() ?: error("identifier expected"))
+                val type = args.getOrNull(1)?.trim()?.removePrefix("@").orEmpty()
+                if (type in setOf("function", "STT_FUNC")) symbol.elfType = "STT_FUNC"
+                else if (type in setOf("object", "STT_OBJECT")) symbol.elfType = "STT_OBJECT"
+            }
+            "size" -> {
+                val symbol = findAsmSymbol(args.firstOrNull()?.trim() ?: error("identifier expected")) ?: error("label not found")
+                symbol.size = asmIntExpression(args.getOrElse(1) { "0" }).toLong()
+            }
+            "ident", "file", "symver", "code16", "code32", "code64", "option" -> Unit
+            else -> error("unknown assembler directive '.$directive'")
+        }
+        return DirectiveResult(startSection.name, (startSection.offset - startOffset).toInt(), relocations.toList())
+    }
+
+    private fun setAsmSymbol(name: String, expressionText: String): Symbol {
+        val expression = evaluateExpression(expressionText)
+        return getAsmSymbol(name.trim()).apply {
+            value = expression.value + (expression.symbol?.value ?: 0)
+            sectionIndex = expression.symbol?.sectionIndex ?: -1
+            defined = true
+            external = false
+            set = true
+        }
+    }
+
+    private fun findAsmSymbol(name: String): Symbol? {
+        val transformed = asmToCName(name).first
+        return findSymbol(transformed) ?: labels[transformed]
+    }
+
+    private fun directivePadding(kind: String, args: List<String>) {
+        var count = args.firstOrNull()?.let(::asmIntExpression) ?: 0
+        if (kind == "p2align") { require(count in 0..30) { "invalid p2align" }; count = 1 shl count }
+        if (kind in setOf("align", "balign", "p2align")) {
+            require(count > 0 && count and (count - 1) == 0) { "alignment must be a positive power of two" }
+            val padding = ((activeSection.offset + count - 1) and -count.toLong()) - activeSection.offset
+            activeSection.alignment = maxOf(activeSection.alignment, count)
+            val fill = args.getOrNull(1)?.let(::asmIntExpression) ?: 0
+            if (activeSection.flags and 4 != 0 && args.size < 2) appendBytes(nopBytes(padding.toInt()))
+            else appendRepeated(fill, padding.toInt())
+        } else if (kind == "org") {
+            val expression = evaluateExpression(args.firstOrNull() ?: "0")
+            val symbol = expression.symbol
+            require(symbol == null || symbol.sectionIndex == activeSection.index) { "constant or same-section symbol expected" }
+            val target = expression.value + (symbol?.value ?: 0)
+            require(target >= activeSection.offset) { "attempt to .org backwards" }
+            appendRepeated(0, (target - activeSection.offset).toInt())
+        } else {
+            val size = count.coerceAtLeast(0)
+            val fill = args.getOrNull(1)?.let(::asmIntExpression) ?: 0
+            appendRepeated(fill, size)
+        }
+    }
+
+    private fun directiveData(kind: String, args: List<String>) {
+        val width = when (kind) { "byte" -> 1; "short", "word" -> 2; "long", "int" -> 4; else -> 8 }
+        for (operand in args) {
+            val expression = evaluateExpression(operand)
+            require(expression.symbol == null || width >= 4) { "constant expected" }
+            if (expression.symbol != null) relocations += AsmRelocation(activeSection.name, activeSection.offset,
+                expression.symbol!!.name, if (width == 8) "R_DATA_PTR" else "R_DATA_32", expression.value)
+            val value = if (expression.symbol == null) expression.value else 0L
+            repeat(width) { byte -> appendByte((value ushr (8 * byte)).toInt()) }
+        }
+    }
+
+    private fun directiveFill(args: List<String>) {
+        val repeatCount = asmIntExpression(args.getOrElse(0) { "0" })
+        require(repeatCount >= 0) { "repeat < 0; .fill ignored" }
+        val size = args.getOrNull(1)?.let(::asmIntExpression)?.coerceIn(0, 8) ?: 1
+        val value = args.getOrNull(2)?.let(::asmIntExpression) ?: 0
+        repeat(repeatCount) { repeat(size) { byte -> appendByte(value ushr (8 * byte)) } }
+    }
+
+    private fun directiveStrings(kind: String, args: List<String>) {
+        args.forEach { text ->
+            val bytes = decodeString(unquote(text))
+            val length = if (kind == "ascii") (bytes.size - 1).coerceAtLeast(0) else bytes.size
+            appendBytes(bytes.copyOf(length))
+        }
+    }
+
+    private fun appendByte(value: Int) {
+        if (!activeSection.noBits) activeSection.bytes += value.toByte()
+        activeSection.offset++
+    }
+    private fun appendBytes(bytes: ByteArray) = bytes.forEach { appendByte(it.toInt()) }
+    private fun appendRepeated(value: Int, count: Int) { repeat(count.coerceAtLeast(0)) { appendByte(value) } }
+
+    private fun splitOperands(source: String): List<String> {
+        if (source.isBlank()) return emptyList()
+        val result = mutableListOf<String>()
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        var start = 0
+        source.forEachIndexed { index, ch ->
+            if (escaped) escaped = false
+            else if (quoted && ch == '\\') escaped = true
+            else if (ch == '"') quoted = !quoted
+            else if (!quoted) when (ch) {
+                '(' -> depth++
+                ')' -> depth--
+                ',' -> if (depth == 0) { result += source.substring(start, index).trim(); start = index + 1 }
+            }
+        }
+        result += source.substring(start).trim()
+        return result
+    }
+
+    private fun unquote(text: String): String = text.trim().removeSurrounding("\"", "\"")
+    private fun decodeString(value: String): ByteArray {
+        val result = mutableListOf<Byte>()
+        var index = 0
+        while (index < value.length) {
+            val ch = value[index++]
+            if (ch != '\\' || index == value.length) result += ch.code.toByte()
+            else when (val escaped = value[index++]) {
+                'n' -> result += '\n'.code.toByte(); 'r' -> result += '\r'.code.toByte(); 't' -> result += '\t'.code.toByte()
+                '0' -> result += 0
+                else -> result += escaped.code.toByte()
+            }
+        }
+        result += 0
+        return result.toByteArray()
+    }
+
     private inner class ExpressionParser(source: String) {
         private val tokens = tokenize(source)
         private var index = 0
-        private val section get() = currentSection()
-        private val position get() = currentPosition()
+        private val section get() = activeSection
+        private val position get() = if (activeSection.offset != 0L || currentPosition() == 0L) activeSection.offset else currentPosition()
 
         fun parse(): Expression {
             val result = comparison()
