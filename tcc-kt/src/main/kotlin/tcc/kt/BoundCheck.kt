@@ -13,11 +13,35 @@ object BoundCheck {
 
     private val lock = ReentrantLock()
     private val regions = java.util.TreeMap<Long, Region>()
-    private val checkingDisabled = ThreadLocal.withInitial { false }
+    private val checkingDepth = ThreadLocal.withInitial { 0 }
     @Volatile private var neverFatal = 0
+    @Volatile private var initialized = false
+    @Volatile var warnPointerAdd: Boolean = false
+        private set
+    @Volatile var printCalls: Boolean = false
+        private set
+    @Volatile var printHeap: Boolean = false
+        private set
+    @Volatile var printStatistics: Boolean = false
+        private set
 
-    @JvmStatic fun boundsChecking(noCheck: Boolean) { checkingDisabled.set(noCheck) }
-    @JvmStatic fun neverFatal(value: Int) { neverFatal = value }
+    @JvmStatic fun boundsChecking(delta: Int) { checkingDepth.set(checkingDepth.get() + delta) }
+    @JvmStatic fun boundsChecking(disabled: Boolean) { checkingDepth.set(if (disabled) 1 else 0) }
+    @JvmStatic fun neverFatal(value: Int) { neverFatal += value }
+
+    /** Reads the TCC_BOUNDS_* environment switches used by __bound_init. */
+    @JvmStatic
+    fun initialize(environment: Map<String, String>) {
+        if (initialized) return
+        warnPointerAdd = environment.containsKey("TCC_BOUNDS_WARN_POINTER_ADD")
+        printCalls = environment.containsKey("TCC_BOUNDS_PRINT_CALLS")
+        printHeap = environment.containsKey("TCC_BOUNDS_PRINT_HEAP")
+        printStatistics = environment.containsKey("TCC_BOUNDS_PRINT_STATISTIC")
+        if (environment.containsKey("TCC_BOUNDS_NEVER_FATAL")) neverFatal(1)
+        initialized = true
+    }
+
+    @JvmStatic fun isInitialized(): Boolean = initialized
     @JvmStatic fun lock() = lock.lock()
     @JvmStatic fun unlock() = lock.unlock()
 
@@ -38,7 +62,7 @@ object BoundCheck {
     /** Checks an address addition and returns INVALID_POINTER when it escapes a known region. */
     @JvmStatic
     fun pointerAdd(pointer: Long, offset: Long): Long {
-        if (checkingDisabled.get()) return pointer + offset
+        if (checkingDepth.get() > 0) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
         val next = relative + offset
@@ -51,7 +75,7 @@ object BoundCheck {
     /** Checks access width, matching the generated __bound_ptr_indirN helpers. */
     @JvmStatic
     fun pointerIndir(pointer: Long, offset: Long, width: Int): Long {
-        if (checkingDisabled.get()) return pointer + offset
+        if (checkingDepth.get() > 0) return pointer + offset
         val region = regionFor(pointer) ?: return pointer + offset
         val relative = pointer - region.start
         if (region.invalid || relative + offset + width > region.size) {
