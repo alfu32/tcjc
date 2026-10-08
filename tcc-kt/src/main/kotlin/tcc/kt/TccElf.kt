@@ -1573,6 +1573,23 @@ object TccElf {
         return serializeElf(state, request.fileType, request.machine, request.entry, layout, request.flags)
     }
 
+    /** Lays out and serializes an ELF relocatable object with 16-byte section alignment. */
+    fun buildElfObjectOutput(state: ElfState, machine: Int, flags: Int = 0): ByteArray {
+        allocateSectionNames(state, objectOutput = true)
+        val headerSize = if (state.wordSize == 8) 64 else 52
+        val sectionHeaderSize = if (state.wordSize == 8) 64 else 40
+        var fileOffset = ((headerSize + 3) and -4) + state.sections.size * sectionHeaderSize
+        state.sections.drop(1).filterNotNull().forEach { section ->
+            fileOffset = (fileOffset + 15) and -16
+            section.offset = fileOffset.toLong()
+            if (section.type != SHT_NOBITS) fileOffset += section.outputSize.toInt()
+        }
+        val sectionHeaderOffset = ((headerSize + 3) and -4).toLong()
+        return serializeElf(
+            state, 1, machine, 0, LayoutResult(emptyList(), 0, sectionHeaderOffset, 0, 0), flags,
+        )
+    }
+
     /** Creates the ARM ABI attribute payload emitted by tccelf.c for DLL support. */
     fun createArmAttributeSection(state: ElfState, cpuVersion: Int, hardFloat: Boolean): ElfSection {
         val bytes = byteArrayOf(
