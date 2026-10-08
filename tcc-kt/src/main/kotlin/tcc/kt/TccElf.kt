@@ -1669,6 +1669,38 @@ object TccElf {
         }
     }
 
+    /** Reorders output sections, retains non-output sections privately, and remaps references. */
+    fun reorderSections(state: ElfState, sectionOrder: IntArray? = null) {
+        val oldSections = state.sections.toList()
+        val oldCount = oldSections.size
+        val order = sectionOrder?.toList() ?: oldSections.indices.toList()
+        require(order.size == oldCount && order.toSet() == oldSections.indices.toSet())
+        val backMap = IntArray(oldCount)
+        val reordered = mutableListOf<ElfSection?>()
+        order.forEachIndexed { _, oldIndex ->
+            val section = oldSections[oldIndex]
+            if (section == null || section.nameOffset != 0) {
+                backMap[oldIndex] = reordered.size
+                reordered += section
+            } else {
+                backMap[oldIndex] = 0
+                state.privateSections += section
+            }
+        }
+        reordered.drop(1).filterNotNull().forEachIndexed { index, section ->
+            section.index = index + 1
+            if (section.type == SHT_REL || section.type == SHT_RELA) {
+                section.sectionInfo = backMap.getOrElse(section.sectionInfo) { 0 }
+            } else if (section.type == SHT_SYMTAB || section.type == SHT_DYNSYM) {
+                section.symbols.forEach { symbol ->
+                    if (symbol.sectionIndex in 0 until oldCount) symbol.sectionIndex = backMap[symbol.sectionIndex]
+                }
+            }
+        }
+        state.sections.clear()
+        state.sections.addAll(reordered)
+    }
+
     fun addBoundsCheckEntry(state: ElfState, boundsName: String = ".bounds") {
         val bounds = state.namedSections[boundsName] ?: return
         sectionAdd(bounds, state.wordSize, 1)
