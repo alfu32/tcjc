@@ -1,10 +1,10 @@
 # C to Kotlin port dashboard
 
 - **Translation candidates:** 54
-- **DONE:** 35
+- **DONE:** 36
 - **DOING:** 1
-- **TODO:** 18
-- **Currently doing:** `arm-gen.c` → `src/main/kotlin/tcc/kt/ArmGen.kt`
+- **TODO:** 17
+- **Currently doing:** `arm64-asm.c` → `src/main/kotlin/tcc/kt/Arm64Asm.kt`
 - **C tests retained:** all test case bodies and test programs under `tests/`; `tcctest.c` runner is translated
 - **C examples retained:** all C sources under `examples/` and `win32/examples/`
 
@@ -15,9 +15,9 @@ Statuses: **TODO** = no Kotlin translation started; **DOING** = partial translat
 | C source | Status |
 |---|---|
 | `arm-asm.c` | DONE |
-| `arm-gen.c` | DOING |
+| `arm-gen.c` | DONE |
 | `arm-link.c` | DONE |
-| `arm64-asm.c` | TODO |
+| `arm64-asm.c` | DOING |
 | `arm64-gen.c` | TODO |
 | `arm64-link.c` | DONE |
 | `c67-gen.c` | TODO |
