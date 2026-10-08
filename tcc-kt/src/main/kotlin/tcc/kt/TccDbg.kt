@@ -46,6 +46,14 @@ object TccDbg {
         val file: Int = 0,
         val line: Int = 0,
     )
+    data class LocalDebugInput(
+        val name: String?,
+        val isLocal: Boolean,
+        val value: Long,
+        val type: DebugType,
+        val file: Int,
+        val line: Int,
+    )
     data class DebugScope(
         val start: Int,
         val lastTypeIndex: Int,
@@ -855,6 +863,28 @@ object TccDbg {
 
     fun addDebugVariable(scope: DebugScope, name: String, stabType: Int, value: Long, typeOffset: Int, file: Int, line: Int) {
         scope.symbols += DebugSymbol(name, stabType, value, typeOffset = typeOffset, file = file, line = line)
+    }
+
+    /** Adds local and parameter records from the compiler's reverse symbol stack. */
+    fun addLocalDebugSymbols(
+        scope: DebugScope,
+        symbols: Iterable<LocalDebugInput>,
+        parameters: Boolean,
+        dwarfContext: DwarfTypeContext? = null,
+        stabsContext: StabsTypeContext? = null,
+    ): Int {
+        var added = 0
+        val stabType = if (parameters) 0xa0 else 0x80 // N_PSYM / N_LSYM
+        for (symbol in symbols) {
+            if (symbol.name.isNullOrEmpty() || !symbol.isLocal) continue
+            val typeOffset = if (dwarfContext != null) emitDwarfType(symbol.type, dwarfContext) else 0
+            val name = if (dwarfContext == null && stabsContext != null) {
+                "${symbol.name}:${if (parameters) "p" else ""}${stabsType(symbol.type, stabsContext)}"
+            } else symbol.name
+            scope.symbols += DebugSymbol(name, stabType, symbol.value, typeOffset = typeOffset, file = symbol.file, line = symbol.line)
+            added++
+        }
+        return added
     }
 
     fun beginDebugFunction(
