@@ -808,7 +808,6 @@ object TccElf {
         copyRelocationType: Int,
         unresolved: (String) -> Unit = {},
     ) {
-        if (isPie) return
         val symbols = state.symbolTable ?: return
         val external = state.dynamicSymbolTable ?: return
         val outputDynamic = state.dynamicOutputSymbols ?: return
@@ -819,6 +818,7 @@ object TccElf {
             val externalIndex = findElfSymbol(external, name)
             val dynamic = external.symbols.getOrNull(externalIndex)
             if (externalIndex != 0 && dynamic != null && dynamic.sectionIndex != SHN_UNDEF) {
+                if (isPie) return@forEachIndexed
                 val type = dynamic.info and 0x0f
                 val mainIndex = indexInDrop + 1
                 if (type == STT_FUNC || type == STT_GNU_IFUNC) {
