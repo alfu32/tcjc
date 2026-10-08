@@ -478,4 +478,33 @@ class ArmAsm(
             else -> expect("branch instruction")
         }
     }
+
+    /** Encodes a coprocessor load/store word with its scaled offset. */
+    fun emitCoprocessorDataTransfer(
+        highNibble: Int, coprocessor: Int, crd: Int, base: Operand,
+        offset: Operand, offsetMinus: Boolean = false, preincrement: Boolean = true,
+        writeback: Boolean = false, longTransfer: Boolean = false, load: Boolean = false,
+    ) {
+        if (base.kind != Kind.REG32) { expect("register"); return }
+        var opcode = (1 shl 26) or (1 shl 27) or (coprocessor shl 8) or (crd shl 12) or (base.register shl 16)
+        if (longTransfer) opcode = opcode or (1 shl 22)
+        if (load) opcode = opcode or (1 shl 20)
+        if (preincrement) opcode = opcode or (1 shl 24)
+        if (writeback) opcode = opcode or (1 shl 21)
+        when (offset.kind) {
+            Kind.IMM8, Kind.IMM8N, Kind.IMM32 -> {
+                val value = offset.value.value
+                if (offsetMinus && value < 0) { error("minus before immediate is unsupported"); return }
+                val magnitude = if (value < 0) -value else value
+                if (value >= 0 && !offsetMinus) opcode = opcode or (1 shl 23)
+                if (magnitude and 3 != 0) { error("immediate offset must be a multiple of 4"); return }
+                if (magnitude > 1020) { error("immediate offset must be between -1020 and 1020"); return }
+                opcode = opcode or (magnitude ushr 2)
+            }
+            Kind.REG32 -> { error("register offset is not supported for coprocessor transfer"); return }
+            Kind.VREG64 -> opcode = opcode or 16 or offset.register
+            else -> { expect("immediate or VFP register"); return }
+        }
+        emitUnconditionalOpcode((highNibble shl 28) or opcode)
+    }
 }
