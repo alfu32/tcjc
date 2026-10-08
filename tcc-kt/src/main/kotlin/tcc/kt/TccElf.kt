@@ -65,11 +65,35 @@ object TccElf {
         val wordSize: Int = 8,
         val sections: MutableList<ElfSection?> = mutableListOf(null),
         val privateSections: MutableList<ElfSection> = mutableListOf(),
-        val dynamicSymbolTable: ElfSection? = null,
+        var dynamicSymbolTable: ElfSection? = null,
         var symbolTable: ElfSection? = null,
+        val namedSections: MutableMap<String, ElfSection> = mutableMapOf(),
+        val symbolTables: MutableMap<String, SymbolTablePair> = mutableMapOf(),
     )
 
     data class SymbolTablePair(val symbols: ElfSection, val strings: ElfSection, val hash: ElfSection)
+
+    fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
+        state.namedSections[".text"] = newSection(state, ".text", SHT_PROGBITS, SHF_ALLOC or SHF_EXECINSTR)
+        state.namedSections[".data"] = newSection(state, ".data", SHT_PROGBITS, SHF_ALLOC or SHF_WRITE)
+        val readOnlyDataName = if (peTarget) ".rdata" else ".data.ro"
+        state.namedSections[readOnlyDataName] = newSection(state, readOnlyDataName, SHT_PROGBITS, SHF_ALLOC)
+        state.namedSections[".bss"] = newSection(state, ".bss", SHT_NOBITS, SHF_ALLOC or SHF_WRITE)
+        state.namedSections[".common"] = newSection(state, ".common", SHT_NOBITS, SHF_PRIVATE).also { it.index = SHN_COMMON }
+        val mainTable = newSymbolTable(state, ".symtab", SHT_SYMTAB, 0, ".strtab", ".hashtab", SHF_PRIVATE)
+        state.symbolTables[mainTable.symbols.name] = mainTable
+        state.symbolTable = mainTable.symbols
+        val dynamicTable = newSymbolTable(
+            state, ".dynsymtab", SHT_SYMTAB, SHF_PRIVATE or SHF_DYNSYM,
+            ".dynstrtab", ".dynhashtab", SHF_PRIVATE,
+        )
+        state.symbolTables[dynamicTable.symbols.name] = dynamicTable
+        state.dynamicSymbolTable = dynamicTable.symbols
+        if (boundsChecking) {
+            state.namedSections[".bounds"] = newSection(state, ".bounds", SHT_PROGBITS, SHF_ALLOC)
+            state.namedSections[".lbounds"] = newSection(state, ".lbounds", SHT_PROGBITS, SHF_ALLOC)
+        }
+    }
 
     fun newSection(state: ElfState, name: String, type: Int, flags: Int): ElfSection {
         val section = ElfSection(name, type, flags)
