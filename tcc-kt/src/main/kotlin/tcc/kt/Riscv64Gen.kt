@@ -68,6 +68,7 @@ class Riscv64Gen(
     )
     data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
     data class CallArgument(val type: AbiType, val alignment: Int = 8, val named: Boolean = true)
+    data class CallArgumentValue(val argument: CallArgument, val value: Value)
     data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
     data class ParameterLocation(val stackOffset: Int, val byReference: Boolean, val registerClasses: IntArray, val fieldOffsets: IntArray)
     data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
@@ -444,6 +445,41 @@ class Riscv64Gen(
         adjustOutgoingStack(plan.stackSize, true)
         callOrJump(target, true)
         adjustOutgoingStack(plan.stackSize, false)
+    }
+
+    /** Materializes scalar arguments into their assigned ABI registers or outgoing stack slots. */
+    fun materializeScalarCallArguments(arguments: List<CallArgumentValue>, plan: CallPlan) {
+        require(arguments.size == plan.encodedArguments.size)
+        var stackOffset = 0
+        for (index in arguments.indices) {
+            val item = arguments[index]
+            val encoded = plan.encodedArguments[index]
+            val type = item.argument.type
+            if (type.size == 0) continue
+            if (type.baseType == VT_STRUCT || type.size > 8 || encoded and 64 != 0) {
+                error("aggregate call argument requires value-stack copy lowering")
+                return
+            }
+            if (encoded and 32 != 0) {
+                val alignment = maxOf(item.argument.alignment, 8)
+                stackOffset = (stackOffset + alignment - 1) and -alignment
+                val float = type.isFloat
+                val source = if (item.value.kind == ValueKind.REGISTER) item.value.register else if (float) 15 else 7
+                if (item.value.kind != ValueKind.REGISTER) load(source, item.value)
+                val function3 = when (type.size) { 1 -> 0; 2 -> 1; 4 -> 2; else -> 3 }
+                emitStore(if (float) 0x27 else 0x23, function3, 2, if (float) floatingRegister(source) else integerRegister(source), stackOffset)
+                stackOffset += (type.size + alignment - 1) and -alignment
+                continue
+            }
+            val register = encoded and 15
+            val target = if (type.isFloat) register + 8 else register
+            load(target, item.value)
+            val second = (encoded ushr 7) and 31
+            if (second != 0 && encoded and 16 == 0) {
+                error("split aggregate call argument requires field lowering")
+                return
+            }
+        }
     }
 
     private fun integerRegistersOrFloatRegister(registerClass: Int, integerCount: Int, floatingCount: Int): Int =
