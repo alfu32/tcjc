@@ -653,7 +653,7 @@ object ArmGen {
     data class VlaAllocationPlan(val alignment: Int, val instructions: List<Int>, val boundsCheckEnabled: Boolean)
 
     enum class ValueType { BYTE, BOOL, SHORT, INT, LONG_LONG, FLOAT, DOUBLE, LONG_DOUBLE }
-    enum class ValueLocation { CONSTANT, LOCAL, LOCAL_LVALUE, CONSTANT_LVALUE, REGISTER_LVALUE, REGISTER, COMPARE, JUMP, JUMP_INDIRECT }
+    enum class ValueLocation { CONSTANT, LOCAL, LOCAL_LVALUE, INDIRECT_LOCAL_LVALUE, CONSTANT_LVALUE, REGISTER_LVALUE, REGISTER, COMPARE, JUMP, JUMP_INDIRECT }
     data class CodeValue(
         val location: ValueLocation, val type: ValueType = ValueType.INT, val value: Int = 0,
         val register: Int = -1, val symbol: Symbol? = null, val unsigned: Boolean = false,
@@ -760,7 +760,7 @@ object ArmGen {
                     emit(0xe08b0000.toInt() or (destinationCore() shl 12) or destinationCore())
                 } else emit(opcode)
             }
-            ValueLocation.LOCAL_LVALUE, ValueLocation.CONSTANT_LVALUE, ValueLocation.REGISTER_LVALUE -> {
+            ValueLocation.LOCAL_LVALUE, ValueLocation.INDIRECT_LOCAL_LVALUE, ValueLocation.CONSTANT_LVALUE, ValueLocation.REGISTER_LVALUE -> {
                 val addressBase: Int
                 val offset: Int
                 if (value.tls && value.symbol != null) {
@@ -771,6 +771,10 @@ object ArmGen {
                 }
                 when (value.location) {
                     ValueLocation.LOCAL_LVALUE -> { addressBase = 11; offset = value.value }
+                    ValueLocation.INDIRECT_LOCAL_LVALUE -> {
+                        memoryLoad(TREG_LR, TREG_FP, value.value, ValueType.INT, unsigned = false, vfp = false).words.forEach(::emit)
+                        addressBase = 14; offset = 0
+                    }
                     ValueLocation.CONSTANT_LVALUE -> {
                         loadConstant(value.value, value.symbol, TREG_LR)
                         addressBase = 14; offset = 0
