@@ -73,6 +73,7 @@ class Riscv64Gen(
     data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
     data class CompareState(val comparison: Comparison, val leftRegister: Int, val rightRegister: Int)
     data class StackValue(var register: Int, var constant: Long? = null, var comparison: CompareState? = null)
+    data class BoundsFrame(val tableOffset: Int, val prologOffset: Int, var needsEpilog: Boolean = false)
     data class FunctionFrame(
         val prologPosition: Int,
         var localOffset: Int = -16,
@@ -781,6 +782,49 @@ class Riscv64Gen(
             Comparison.GREATER_UNSIGNED -> 6 to true
         }
         return conditionalJump(function3, integerRegister(comparison.leftRegister), integerRegister(comparison.rightRegister), targetWord, reverse)
+    }
+
+    fun beginBoundsProlog(tableOffset: Int): BoundsFrame {
+        val frame = BoundsFrame(tableOffset, position)
+        fillNops(16)
+        return frame
+    }
+
+    fun emitBoundsHelperCall(helperSymbol: String) {
+        addRelocation(helperSymbol, "CALL_PLT", position)
+        emitInstruction(0x17 or (1 shl 7))
+        emitImmediate(0x67, 0, 1, 1, 0)
+    }
+
+    /** Emits the local bound allocation and release helpers around a function body. */
+    fun finishBoundsFrame(
+        frame: BoundsFrame,
+        tableSymbol: String,
+        currentTableOffset: Int,
+        localNewHelper: String,
+        localDeleteHelper: String,
+    ) {
+        if (frame.tableOffset == currentTableOffset && !frame.needsEpilog) return
+        if (frame.tableOffset != currentTableOffset) {
+            val label = "$tableSymbol@bound${frame.prologOffset}"
+            addRelocation(tableSymbol, "GOT_HI20", frame.prologOffset)
+            write32(frame.prologOffset, 0x17 or (10 shl 7))
+            addRelocation(label, "PCREL_LO12_I", frame.prologOffset + 4)
+            write32(frame.prologOffset + 4, 0x00053503)
+            addRelocation(localNewHelper, "CALL_PLT", frame.prologOffset + 8)
+            write32(frame.prologOffset + 8, 0x17 or (1 shl 7))
+            write32(frame.prologOffset + 12, 0x000080e7)
+        }
+        emitInstruction(0xe02a1101.toInt())
+        emitInstruction(0xa82ae42e.toInt())
+        val epilogLabel = "$tableSymbol@bound${position}"
+        addRelocation(tableSymbol, "GOT_HI20", position)
+        emitInstruction(0x17 or (10 shl 7))
+        addRelocation(epilogLabel, "PCREL_LO12_I", position)
+        emitImmediate(0x03, 3, 10, 10, 0)
+        emitBoundsHelperCall(localDeleteHelper)
+        emitInstruction(0x65a26502)
+        emitInstruction(0x61052542)
     }
 
     /** Patches a linked branch chain, writing a NOP for a branch to the next instruction. */
