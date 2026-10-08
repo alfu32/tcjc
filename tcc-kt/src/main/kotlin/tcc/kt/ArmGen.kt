@@ -228,7 +228,7 @@ object ArmGen {
 
     data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int,
-        val hiddenStructReturn: Boolean, val stackAdjustmentPatchWord: Int)
+        val hiddenStructReturn: Boolean, val stackAdjustmentPatchWord: Int, val structureReturnOffset: Int?)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
     data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null,
         val integerResultHighRegister: Int? = null, val magicLiteralOffset: Int? = null)
@@ -288,7 +288,9 @@ object ArmGen {
             }
             addresses += address + 12
         }
-        return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory, stackAdjustmentPatchWord)
+        val structureReturnOffset = if (structReturnInMemory) 12 + if (eabi && hardFloat) vfpCount * 4 else 0 else null
+        return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory,
+            stackAdjustmentPatchWord, structureReturnOffset)
     }
 
     /** Computes ARM function epilogue instructions and the deferred stack-frame adjustment patch. */
