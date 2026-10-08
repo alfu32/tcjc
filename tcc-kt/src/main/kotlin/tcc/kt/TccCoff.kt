@@ -83,6 +83,8 @@ object TccCoff {
         var mainEntryPoint: Int = 0,
     )
     data class Output(val bytes: ByteArray, val fileHeader: FileHeader, val optionalHeader: OptionalHeader, val sections: List<SectionHeader>)
+    data class LoadedSymbol(val name: String, val value: Long, val type: Int, val storageClass: Int, val sectionNumber: Int)
+    data class LoadedObject(val fileHeader: FileHeader, val optionalHeader: OptionalHeader, val symbols: List<LoadedSymbol>)
 
     fun outputTheSection(section: Section): Boolean = section.name == ".text" || section.name == ".data"
 
@@ -263,6 +265,62 @@ object TccCoff {
         return Output(output, file, optional, headers)
     }
 
+    /** Reads the C67 COFF headers and imports the external symbol kinds accepted by tcc_load_coff(). */
+    fun load(data: ByteArray, addSymbol: (String, Long) -> Unit = { _, _ -> }): LoadedObject {
+        require(data.size >= FILE_HEADER_SIZE + OPTIONAL_HEADER_SIZE) { "error reading .out file for input" }
+        val file = FileHeader(
+            magic = getU16(data, 0), sections = getU16(data, 2), timestamp = getI32(data, 4),
+            symbolOffset = getI32(data, 8), symbolCount = getI32(data, 12), optionalHeaderSize = getU16(data, 16),
+            flags = getU16(data, 18), targetId = getU16(data, 20),
+        )
+        val optionalOffset = FILE_HEADER_SIZE
+        val optional = OptionalHeader(
+            magic = getU16(data, optionalOffset), version = getU16(data, optionalOffset + 2),
+            textSize = getI32(data, optionalOffset + 4), dataSize = getI32(data, optionalOffset + 8),
+            bssSize = getI32(data, optionalOffset + 12), entryPoint = getI32(data, optionalOffset + 16),
+            textStart = getI32(data, optionalOffset + 20), dataStart = getI32(data, optionalOffset + 24),
+        )
+        val stringOffset = file.symbolOffset + file.symbolCount * SYMBOL_SIZE
+        require(stringOffset >= 0 && stringOffset + 4 <= data.size) { "error reading .out file for input" }
+        val stringSize = getI32(data, stringOffset)
+        require(stringSize >= 4 && stringOffset.toLong() + stringSize <= data.size) { "error reading .out file for input" }
+        val strings = data.copyOfRange(stringOffset + 4, stringOffset + stringSize)
+        val result = mutableListOf<LoadedSymbol>()
+        var index = 0
+        while (index < file.symbolCount) {
+            val offset = file.symbolOffset + index * SYMBOL_SIZE
+            require(offset >= 0 && offset + SYMBOL_SIZE <= data.size) { "error reading .out file for input" }
+            val shortName = data.copyOfRange(offset, offset + 8)
+            val name = if (getI32(data, offset) == 0) {
+                val nameOffset = getI32(data, offset + 4) - 4
+                require(nameOffset in strings.indices) { "invalid COFF string table symbol offset" }
+                readCString(strings, nameOffset)
+            } else readCString(shortName, 0)
+            val value = getI32(data, offset + 8).toLong() and 0xffffffffL
+            val section = getI16(data, offset + 12).toInt()
+            val type = getU16(data, offset + 14)
+            val storage = data[offset + 16].toInt() and 0xff
+            val auxCount = data[offset + 17].toInt() and 0xff
+            if (isImportedSymbol(type, storage)) {
+                val importedName = if (name.startsWith('_') && name != "_main") name.drop(1) else name
+                result += LoadedSymbol(importedName, value, type, storage, section)
+                addSymbol(importedName, value)
+            }
+            index += 1 + auxCount
+        }
+        return LoadedObject(file, optional, result)
+    }
+
+    private fun isImportedSymbol(type: Int, storageClass: Int): Boolean = storageClass == 2 &&
+        ((type and 0x30) == 0x20 || (type and 0x30) == 0x30 || type == 0x4 || type == 0x8 ||
+            type == 0x18 || type == 0x7 || type == 0x6)
+
+    private fun readCString(data: ByteArray, start: Int): String {
+        var end = start
+        while (end < data.size && data[end].toInt() != 0) end++
+        return data.copyOfRange(start, end).toString(Charsets.UTF_8)
+    }
+
     private fun coffEntryCount(symbol: ElfSymbol): Int = when (symbol.info) {
         FILE_SYMBOL -> 1
         FUNCTION_SYMBOL -> 6
@@ -374,4 +432,7 @@ object TccCoff {
     private fun put8(data: ByteArray, offset: Int, value: Int) { data[offset] = value.toByte() }
     private fun put16(data: ByteArray, offset: Int, value: Int) { put8(data, offset, value); put8(data, offset + 1, value ushr 8) }
     private fun put32(data: ByteArray, offset: Int, value: Int) { put16(data, offset, value); put16(data, offset + 2, value ushr 16) }
+    private fun getU16(data: ByteArray, offset: Int): Int = (data[offset].toInt() and 0xff) or ((data[offset + 1].toInt() and 0xff) shl 8)
+    private fun getI16(data: ByteArray, offset: Int): Short = getU16(data, offset).toShort()
+    private fun getI32(data: ByteArray, offset: Int): Int = getU16(data, offset) or (getU16(data, offset + 2) shl 16)
 }
