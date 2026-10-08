@@ -564,6 +564,7 @@ object TccElf {
         outputDynamic: Boolean,
         positionIndependentDllPlt: Boolean,
         outputExecutable: Boolean,
+        armTarget: Boolean = false,
         classifyGotPlt: (Int) -> Int,
         classifyCodeRelocation: (Int) -> Int,
         forceLocalPcRelative: (Int, ElfSymbol) -> Int? = { _, _ -> null },
@@ -593,10 +594,10 @@ object TccElf {
                                         ((dynamicSymbol.info and 0x0f) == STT_FUNC ||
                                             ((dynamicSymbol.info and 0x0f) == STT_NOTYPE && (symbol.info and 0x0f) == STT_FUNC))) {
                                         forceJumpSlot = true
-                                    } else return@forEach
-                                } else return@forEach
+                                    }
+                                }
                             }
-                            SHN_ABS -> if (symbol.value == 0L || state.wordSize != 8) return@forEach
+                            SHN_ABS -> if (symbol.value == 0L || (!armTarget && state.wordSize != 8)) return@forEach
                             else -> return@forEach
                         }
                     }
