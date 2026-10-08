@@ -247,4 +247,75 @@ class ArmAsm(
         if (setFlags) opcode = opcode or (1 shl 20)
         emitOpcode(token, firstConditionToken, opcode)
     }
+
+    /** Encodes the ARM data-processing instruction family from a mnemonic opcode number. */
+    fun emitDataProcessing(
+        opcodeNumber: Int, token: Int, firstConditionToken: Int,
+        operands: List<Operand>, setFlags: Boolean = false,
+        shiftMode: Int = 0, shiftAmount: Operand? = null,
+    ) {
+        if (operands.size !in 2..3) { expect("two or three operands"); return }
+        val opcodeNo = opcodeNumber and 15
+        if (operands.size == 3 && opcodeNo in setOf(8, 9, 10, 11, 13, 15)) {
+            error("instruction does not accept three operands"); return
+        }
+        val destination = operands[0]
+        val firstSource = if (operands.size == 2) destination else operands[1]
+        val secondSource = operands.last()
+        if (destination.kind != Kind.REG32) { expect("(destination operand) register"); return }
+        var opcode = opcodeNo shl 21
+        var encoded = 0
+        if (setFlags || opcodeNo in setOf(8, 9, 10, 11)) encoded = encoded or (1 shl 20)
+        if (opcodeNo !in setOf(8, 9, 10, 11)) encoded = encoded or (destination.register shl 12)
+        if (opcodeNo !in setOf(13, 15)) {
+            if (firstSource.kind != Kind.REG32) { expect("(first source operand) register"); return }
+            encoded = encoded or (firstSource.register shl 16)
+        }
+        when (secondSource.kind) {
+            Kind.REG32 -> {
+                encoded = encoded or secondSource.register
+                if (shiftAmount != null) {
+                    when (shiftAmount.kind) {
+                        Kind.REG32 -> {
+                            if (destination.register == 15 || firstSource.register == 15) {
+                                error("Using pc with a register-controlled shift is not implemented by ARM"); return
+                            }
+                            encoded = encoded or (1 shl 4) or (shiftAmount.register shl 8) or shiftMode
+                        }
+                        Kind.IMM8 -> encoded = encoded or encodeShift(shiftAmount) or shiftMode
+                        else -> { expect("register or immediate shift amount"); return }
+                    }
+                } else if (shiftMode != 0) encoded = encoded or shiftMode
+            }
+            Kind.IMM8, Kind.IMM32, Kind.IMM8N -> {
+                var value = secondSource.value.value
+                var operation = opcodeNo
+                if (secondSource.kind == Kind.IMM8N) {
+                    when (opcodeNo) {
+                        0 -> { operation = 14; value = value.inv() }
+                        2 -> { operation = 4; value = -value }
+                        4 -> { operation = 2; value = -value }
+                        5 -> { operation = 6; value = value.inv() }
+                        6 -> { operation = 5; value = value.inv() }
+                        10 -> { operation = 11; value = -value }
+                        11 -> { operation = 10; value = -value }
+                        13 -> { operation = 15; value = value.inv() }
+                        14 -> { operation = 0; value = value.inv() }
+                        else -> { error("negative immediate cannot be encoded by this instruction"); return }
+                    }
+                    opcode = operation shl 21
+                }
+                var rotated = value
+                var rotation = 0
+                while (rotation < 16 && rotated !in 0..255) {
+                    rotated = (rotated shl 2) or (rotated ushr 30)
+                    rotation++
+                }
+                if (rotation >= 16) { error("immediate cannot be encoded as an ARM rotated byte"); return }
+                encoded = encoded or (1 shl 25) or (rotation shl 8) or rotated
+            }
+            else -> { expect("register or immediate operand"); return }
+        }
+        emitOpcode(token, firstConditionToken, opcode or encoded)
+    }
 }
