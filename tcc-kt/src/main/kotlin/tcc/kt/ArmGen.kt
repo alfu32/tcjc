@@ -205,6 +205,10 @@ object ArmGen {
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
     data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
     data class ConversionPlan(val words: List<Int> = emptyList(), val helper: String? = null, val integerResultHighRegister: Int? = null)
+    enum class FloatAbi { SOFT, HARD }
+    data class FunctionCallPlan(val effectiveFloatAbi: FloatAbi, val argumentRegisters: RegisterAssignment,
+        val stackBytesBeforeAlignment: Int, val alignmentPadding: Int, val stackBytesAfterAlignment: Int,
+        val floatingReturnWords: List<Int>)
 
     /** Plans ARM function entry instructions and incoming parameter addresses. */
     fun functionPrologue(parameters: List<FunctionParameter>, structReturnInMemory: Boolean, variadic: Boolean, hardFloat: Boolean, eabi: Boolean): FunctionProloguePlan {
@@ -402,6 +406,19 @@ object ArmGen {
             }
         }
         return RegisterAssignment(plans, nextStack, coreTodo)
+    }
+
+    /** Plans ABI selection, argument placement, stack alignment, and soft-float return moves for a call. */
+    fun functionCall(parameters: List<Parameter>, requestedAbi: FloatAbi, variadic: Boolean,
+        helperUsesCoreFloatRegisters: Boolean, eabi: Boolean, vfp: Boolean, returnsFloat: Boolean, returnsDouble: Boolean): FunctionCallPlan {
+        val effectiveAbi = if (requestedAbi == FloatAbi.HARD && (variadic || helperUsesCoreFloatRegisters)) FloatAbi.SOFT else requestedAbi
+        val assignment = assignParameterRegisters(parameters, effectiveAbi == FloatAbi.HARD)
+        val padding = if (eabi && assignment.stackBytes and 7 != 0) 4 else 0
+        val alignedSize = if (padding == 0) assignment.stackBytes else (assignment.stackBytes + 7) and -8
+        val returnWords = if (eabi && vfp && effectiveAbi == FloatAbi.SOFT && returnsFloat) {
+            if (returnsDouble) listOf(0xee000b10.toInt(), 0xee201b10.toInt()) else listOf(0xee000a10.toInt())
+        } else emptyList()
+        return FunctionCallPlan(effectiveAbi, assignment, assignment.stackBytes, padding, alignedSize, returnWords)
     }
 
     /** Allocates a VFP argument range using the AAPCS hole and alignment rules. */
