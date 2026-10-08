@@ -206,6 +206,8 @@ object TccElf {
 
     class LinkerScriptLexer(private val source: String, private val maxNameLength: Int = 255) {
         private var position = 0
+        fun mark(): Int = position
+        fun restore(mark: Int) { require(mark in 0..source.length); position = mark }
         private fun input(): Int = if (position >= source.length) -1 else source[position++].code
         private fun unget(character: Int) { if (character >= 0) position-- }
         private fun isNameStart(character: Int): Boolean = character == '\\'.code || character in 'a'.code..'z'.code ||
@@ -253,6 +255,59 @@ object TccElf {
                 }
             }
         }
+    }
+
+    fun interpretLinkerScript(
+        source: String,
+        addFile: (String) -> Int,
+        undefinedSymbolMark: () -> Int = { 0 },
+        hasNewUndefinedSymbols: (Int) -> Boolean = { false },
+        reportError: (String) -> Int = { -1 },
+    ): Int {
+        val lexer = LinkerScriptLexer(source, 1024)
+        fun nextName(): LinkerScriptToken = lexer.next()
+        fun addFileList(command: String, depth: Int = 0): Int {
+            if (depth > 64) return reportError("linker script nesting is too deep")
+            val position = lexer.mark()
+            val mark = undefinedSymbolMark()
+            var result = 0
+            var token = nextName()
+            if (token.type != '('.code) return reportError("expected '(' after $command")
+            token = nextName()
+            while (true) {
+                if (token.type == -1) return reportError("unexpected end of file")
+                if (token.type == ')'.code) break
+                if (token.type != -2) return reportError("unexpected token '${token.text}'")
+                if (token.text == "AS_NEEDED") {
+                    result = result or addFileList(token.text, depth + 1)
+                } else if (command.firstOrNull() in listOf('I', 'G', 'A')) {
+                    result = result or if (addFile(token.text) != 0) 1 else 0
+                }
+                if (result < 0) return result
+                token = nextName()
+                if (token.type == ','.code) token = nextName()
+            }
+            if (command.startsWith('G') && result == 0 && hasNewUndefinedSymbols(mark)) {
+                lexer.restore(position)
+                return addFileList(command, depth)
+            }
+            return result
+        }
+        var recognized = false
+        while (true) {
+            val token = nextName()
+            if (token.type == -1) break
+            val command = token.text
+            when (command) {
+                "INPUT", "GROUP", "OUTPUT_FORMAT", "TARGET" -> {
+                    val result = addFileList(command)
+                    if (result < 0) return result
+                }
+                else -> return if (!recognized) -3 else reportError("unexpected '$command'")
+            }
+            recognized = true
+        }
+        return 0
     }
     data class DynamicTableLayout(
         val dynamic: ElfSection,
