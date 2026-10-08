@@ -214,6 +214,48 @@ class I386Gen(
         }
     }
 
+    /** Emits the two-word coverage counter increment used by i386-gen.c. */
+    fun incrementCoverage(symbol: Symbol) {
+        val indirect = if (picEnabled) 0x8300 else 0x0500
+        val relocation = if (picEnabled) RelocType.R386_PC32 else RelocType.R386_32
+        val firstAddend = if (picEnabled) 2 else 0
+        val secondAddend = if (picEnabled) 13 else 4
+        if (picEnabled) getPcThunk(3, false)
+        o(0x0083 + indirect)
+        relocations += Relocation(position, relocation, symbol, firstAddend)
+        genLe32(firstAddend)
+        o(1)
+        o(0x1083 + indirect)
+        relocations += Relocation(position, relocation, symbol, secondAddend)
+        genLe32(secondAddend)
+        g(0)
+    }
+
+    /** Emits an indirect computed goto through the requested register. */
+    fun computedGoto(register: Int) = callOrJump(isJump = true, target = register)
+
+    /** Saves and restores the stack pointer in an EBP relative VLA slot. */
+    fun saveVlaStackPointer(offset: Int) = genModRm(0x89, 4, Address.Local(offset))
+    fun restoreVlaStackPointer(offset: Int) = genModRm(0x8b, 4, Address.Local(offset))
+
+    /** Allocates a VLA stack block and rounds the stack to 16 byte alignment. */
+    fun allocateVla(sizeRegister: Int, useAllocaHelper: Boolean = false) {
+        if (useAllocaHelper) {
+            o(0x50 + (sizeRegister and 7))
+            callOrJump(false, Symbol("alloca", isStatic = true))
+            gaddSp(4)
+        } else {
+            o(0x2b); o(0xe0 or (sizeRegister and 7))
+            o(0xf0e483)
+        }
+    }
+
+    /** Calls the selected libtcc conversion helper and reports the result registers. */
+    fun convertFloatToInteger(source: I386ValueKind, targetIsLongLong: Boolean, invokeHelper: (String) -> Unit): IntegerResult {
+        invokeHelper(floatToIntegerHelper(source))
+        return IntegerResult(0, if (targetIsLongLong) 2 else null)
+    }
+
     /** Selects the runtime helper used for a floating point to integer cast. */
     fun floatToIntegerHelper(source: I386ValueKind): String = when (source) {
         I386ValueKind.FLOAT -> "__fixsfdi"
