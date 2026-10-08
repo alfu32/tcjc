@@ -930,6 +930,48 @@ class Arm64Gen(
         o(condition or d)
     }
 
+    /** Emits the runtime helper call used for AArch64 long-double arithmetic and comparisons. */
+    fun longDoubleOperation(operation: String, emitCall: (String) -> Unit) {
+        val helperAndCondition = when (operation) {
+            "neg" -> "__negtf2" to -1
+            "*" -> "__multf3" to -1
+            "+" -> "__addtf3" to -1
+            "-" -> "__subtf3" to -1
+            "/" -> "__divtf3" to -1
+            "==" -> "__eqtf2" to 1
+            "!=" -> "__netf2" to 0
+            "<" -> "__lttf2" to 10
+            ">=" -> "__getf2" to 11
+            "<=" -> "__letf2" to 12
+            ">" -> "__gttf2" to 13
+            else -> throw IllegalArgumentException("unsupported long-double operation: $operation")
+        }
+        emitCall(helperAndCondition.first)
+        if (helperAndCondition.second >= 0) {
+            o(0x7100001f)
+            o(0x1a9f07e0.toInt() or (helperAndCondition.second shl 12))
+        }
+    }
+
+    fun longDoubleIntToFloatHelper(sourceType: Type, unsigned: Boolean): String = when (sourceType) {
+        Type.LONG_LONG -> if (unsigned) "__floatunditf" else "__floatditf"
+        else -> if (unsigned) "__floatunsitf" else "__floatsitf"
+    }
+
+    fun longDoubleFloatToIntHelper(destinationType: Type, unsigned: Boolean): String = when (destinationType) {
+        Type.LONG_LONG -> if (unsigned) "__fixunstfdi" else "__fixtfdi"
+        else -> if (unsigned) "__fixunstfsi" else "__fixtfsi"
+    }
+
+    fun longDoublePrecisionHelper(from: Type, to: Type): String {
+        require(from in setOf(Type.FLOAT, Type.DOUBLE, Type.LONG_DOUBLE) && to in setOf(Type.FLOAT, Type.DOUBLE, Type.LONG_DOUBLE))
+        return if (to == Type.LONG_DOUBLE) {
+            if (from == Type.FLOAT) "__extendsftf2" else "__extenddftf2"
+        } else if (to == Type.FLOAT) "__trunctfsf2" else "__trunctfdf2"
+    }
+
+    fun structureReturnArgument(): Int = 0
+
     fun signExtendWord(register: Int) { val r = register and 31; o(0x93407c00.toInt() or r or (r shl 5)) }
     fun convertCharShortToInt(register: Int, shortValue: Boolean, unsigned: Boolean) {
         val r = register and 31
