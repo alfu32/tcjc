@@ -68,6 +68,49 @@ class Riscv64Asm(
         return opcode
     }
 
+    fun parseFenceOperand(name: String): Int? {
+        if (name == "iorw") return 0xf
+        var result = 0
+        for (character in name) result = result or when (character) {
+            'i' -> 8; 'o' -> 4; 'r' -> 2; 'w' -> 1; else -> return null
+        }
+        return result
+    }
+
+    fun emitFence(predecessor: Int = 0xf, successor: Int = 0xf): Boolean {
+        if (predecessor !in 0..15 || successor !in 0..15) { error("Expected valid fence predecessor and successor operands"); return false }
+        emitOpcode((3 shl 2) or 3 or (successor shl 20) or (predecessor shl 24))
+        return true
+    }
+
+    fun emitUnaryOpcode(name: String, operand: Operand, relocateCall: (String, Int) -> Unit = { _, _ -> }) : Boolean {
+        if (name in setOf("rdcycle", "rdcycleh", "rdtime", "rdtimeh", "rdinstret", "rdinstreth", "frflags", "frrm", "frcsr")) {
+            if (!requireRegister(operand, "destination operand")) return false
+            val csr = when (name) {
+                "rdcycle" -> 0xc00; "rdcycleh" -> 0xc80; "rdtime" -> 0xc01; "rdtimeh" -> 0xc81
+                "rdinstret" -> 0xc02; "rdinstreth" -> 0xc82; "frflags" -> 1; "frrm" -> 2; else -> 3
+            }
+            emitOpcode((0x1c shl 2) or 3 or (2 shl 12) or (csr shl 20) or encodeRd(operand.register))
+            return true
+        }
+        if (name == "jr") return emitI(0x67, Operand(OP_REG, register = 0), operand, Operand(OP_IM12S))
+        if (name == "call" || name == "tail") {
+            val symbol = operand.expression.symbol
+            if (symbol == null) { error("Expected call target symbol"); return false }
+            val temporary = if (name == "call") 1 else 6
+            relocateCall(symbol, 18) // R_RISCV_CALL
+            emitOpcode(3 or (5 shl 2) or encodeRd(temporary)) // auipc temporary, 0
+            emitOpcode(0x67 or encodeRs1(temporary)) // jalr zero, 0(temporary)
+            return true
+        }
+        if (name in setOf("c.j", "c.jal", "c.jr", "c.jalr")) {
+            error("compressed unary encoder required for '$name'")
+            return false
+        }
+        expect("unary instruction")
+        return false
+    }
+
     fun parseRegister(name: String): Int? {
         val text = name.trim().lowercase()
         if (text == "zero") return 0
