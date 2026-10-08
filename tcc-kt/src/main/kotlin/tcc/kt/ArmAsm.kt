@@ -507,4 +507,63 @@ class ArmAsm(
         }
         emitUnconditionalOpcode((highNibble shl 28) or opcode)
     }
+
+    /** Parses the VFP immediate decimal format with seven fractional digits. */
+    fun parseVmovImmediate(source: String): Int {
+        val text = source.trim()
+        val match = Regex("^([0-9]+)(?:\\.([0-9]{0,7}))?$").matchEntire(text)
+            ?: run { expect("decimal numeral"); return 0 }
+        val integral = match.groupValues[1].toLongOrNull() ?: 32L
+        if (integral >= 32) { error("invalid floating-point immediate value"); return 0 }
+        val fraction = match.groupValues[2].padEnd(7, '0').toIntOrNull() ?: 0
+        return integral.toInt() * 10_000_000 + fraction
+    }
+
+    /** Encodes a decimal VFP immediate into its eight-bit VFPExpandImm form. */
+    fun encodeVmovImmediate(value: Int): Int {
+        var limit = 32 * 10_000_000
+        var end = 0
+        var beginning = 0
+        var range = -1
+        repeat(8) { index ->
+            if (value < limit) {
+                end = limit
+                limit = limit ushr 1
+                beginning = limit
+                range = index
+            } else limit = limit ushr 1
+        }
+        if (range < 0 || value < beginning || value > end) { error("invalid decimal number for vmov: $value"); return 0 }
+        val step = (end - beginning) / 16
+        val fraction = if (step == 0) -1 else (0 until 16).firstOrNull { beginning + it * step == value } ?: -1
+        if (fraction < 0) { error("invalid decimal number for vmov: $value"); return 0 }
+        return fraction or (((3 - range) and 7) shl 4)
+    }
+
+    /** Emits VFP compare-zero and immediate move encodings. */
+    fun emitVfpImmediate(
+        group: String, token: Int, firstConditionToken: Int,
+        coprocessor: Int, destination: Int, value: Int, negative: Boolean = false,
+    ) {
+        var opcode1 = 11
+        var opcode2 = 0
+        val operands = intArrayOf(destination, 0, 0)
+        when (group) {
+            "vcmp" -> { opcode2 = 2; operands[1] = 5; if (value != 0) { expect("immediate value 0"); return } }
+            "vcmpe" -> { opcode2 = 6; operands[1] = 5; if (value != 0) { expect("immediate value 0"); return } }
+            "vmov" -> {
+                if (negative) operands[1] = 8
+                val code = encodeVmovImmediate(value)
+                operands[1] = operands[1] or (code ushr 4)
+                operands[2] = code and 15
+            }
+            else -> { expect("known floating point immediate instruction"); return }
+        }
+        if (coprocessor == 10) {
+            if (operands[0] and 1 != 0) opcode1 = opcode1 or 4
+            operands[0] = operands[0] ushr 1
+        }
+        emitCoprocessorOpcode(conditionCode(token, firstConditionToken), coprocessor, opcode1,
+            operands[0], operands[1], operands[2], opcode2, false)
+    }
 }
