@@ -1,7 +1,11 @@
 package tcc.kt
 
 /** Operand representation and encoding primitives from i386-asm.c. */
-class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -> Int = { 0 }) {
+class I386Asm(
+    private val emit: (Int) -> Unit,
+    private val currentPosition: () -> Int = { 0 },
+    private val x64Target: Boolean = false,
+) {
     companion object {
         const val OP_REG8 = 1 shl 0
         const val OP_REG16 = 1 shl 1
@@ -23,6 +27,7 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         const val OP_DX = 1 shl 17
         const val OP_ADDR = 1 shl 18
         const val OP_INDIR = 1 shl 19
+        const val OP_IM64 = 1 shl 23
         const val OP_EA = 0x40000000
         const val OPC_REG = 0x04
         const val OPC_MODRM = 0x08
@@ -59,7 +64,7 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
 
     data class Instruction(
         val token: Int, val opcode: Int, val instructionType: Int,
-        val operandTypes: List<Int>, val mnemonic: String = "",
+        val operandTypes: List<Int>, val mnemonic: String = "", val x64: Boolean = false,
     )
 
     data class RexOperand(var type: Int, var register: Int, var index: Int = -1)
@@ -100,14 +105,15 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         return instructions.firstOrNull { instruction ->
             instruction.token == token && instruction.operandTypes.size == operands.size &&
                 instruction.operandTypes.indices.all { index ->
-                    val accepted = expandOperandType(instruction.operandTypes[index])
+                    val accepted = expandOperandType(instruction.operandTypes[index], instruction.x64)
                     operands[index].type and accepted != 0
                 }
         }
     }
 
-    fun selectMnemonic(mnemonic: String, operands: List<Operand>): Instruction? =
-        selectInstruction(I386AsmInstructionTable.entries.filter { acceptsMnemonic(it, mnemonic) }, 0, operands)
+    fun selectMnemonic(mnemonic: String, operands: List<Operand>, x64Target: Boolean = false): Instruction? =
+        selectInstruction((if (x64Target) X8664AsmInstructionTable.entries else I386AsmInstructionTable.entries)
+            .filter { acceptsMnemonic(it, mnemonic) }, 0, operands)
 
     private fun acceptsMnemonic(instruction: Instruction, requested: String): Boolean {
         if (instruction.mnemonic == requested) return true
@@ -115,11 +121,13 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         val templateRoot = template.dropLastWhile { it in "bwl" }
         val requestedRoot = requested.dropLastWhile { it in "bwl" }
         if (templateRoot != requestedRoot) return false
-        val requestedSuffix = requested.lastOrNull()?.takeIf { it in "bwl" }
+        val requestedSuffix = requested.lastOrNull()?.takeIf { it in "bwlq" }
         val widths = instruction.instructionType and 3
+        val qword = instruction.instructionType and 0x1000 != 0
         return when (widths) {
-            1, 3 -> requestedSuffix == null || requestedSuffix in "bwl"
-            2 -> requestedSuffix == null || requestedSuffix in "wl"
+            1, 3 -> requestedSuffix == null || requestedSuffix in if (qword) "bwlq" else "bwl"
+            2 -> requestedSuffix == null || requestedSuffix in if (qword) "wlq" else "wl"
+            0 -> qword && (requestedSuffix == null || requestedSuffix == 'q')
             else -> false
         }
     }
@@ -131,7 +139,7 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         emitExpression: (Expression, Boolean) -> Unit = { e, _ -> emit32(e.value) },
         sameSectionAddress: (String) -> Int? = { null },
     ): Boolean {
-        val instruction = selectMnemonic(mnemonic, operands) ?: return false
+        val instruction = selectMnemonic(mnemonic, operands, x64Target) ?: return false
         if (mnemonic == "int" && operands.size == 1 && operands[0].expression.symbol == null && operands[0].expression.value == 3) {
             emit(0xcc)
             return true
@@ -204,16 +212,34 @@ class I386Asm(private val emit: (Int) -> Unit, private val currentPosition: () -
         "nl", "ge", "le", "ng", "nle", "g",
     )
 
-    private fun expandOperandType(type: Int): Int = when (type and 0x1f) {
-        in 0..19 -> 1 shl (type and 0x1f)
-        20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
-        21 -> OP_REG8 or OP_REG16 or OP_REG32
-        22 -> OP_REG16 or OP_REG32
-        23 -> OP_IM16 or OP_IM32
-        24 -> OP_MMX or OP_SSE
-        25, 26 -> OP_ADDR
-        else -> type
-    } or (if (type and 0x80 != 0) OP_EA else 0)
+    private fun expandOperandType(type: Int, x64: Boolean = false): Int {
+        val index = type and 0x1f
+        val mask = if (x64) when (index) {
+            0 -> OP_REG8; 1 -> OP_REG16; 2 -> OP_REG32; 3 -> X64_REG
+            4 -> OP_MMX; 5 -> OP_SSE; 6 -> OP_CR; 7 -> OP_TR; 8 -> OP_DB
+            9 -> OP_SEG; 10 -> OP_ST; 11 -> X64_LOW8; 12 -> OP_IM8
+            13 -> OP_IM8S; 14 -> OP_IM16; 15 -> OP_IM32; 16 -> OP_IM64
+            17 -> OP_EAX; 18 -> OP_ST0; 19 -> OP_CL; 20 -> OP_DX
+            21 -> OP_ADDR; 22 -> OP_INDIR
+            23 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32 or OP_IM64
+            24 -> OP_REG8 or OP_REG16 or OP_REG32 or X64_REG
+            25 -> OP_REG16 or OP_REG32 or X64_REG
+            26 -> OP_IM16 or OP_IM32
+            27 -> OP_MMX or OP_SSE
+            28, 29 -> OP_ADDR
+            else -> type
+        } else when (index) {
+            in 0..19 -> 1 shl index
+            20 -> OP_IM8 or OP_IM8S or OP_IM16 or OP_IM32
+            21 -> OP_REG8 or OP_REG16 or OP_REG32
+            22 -> OP_REG16 or OP_REG32
+            23 -> OP_IM16 or OP_IM32
+            24 -> OP_MMX or OP_SSE
+            25, 26 -> OP_ADDR
+            else -> type
+        }
+        return mask or (if (type and 0x80 != 0) OP_EA else 0)
+    }
 
     /** Maps the legal x86 scale constants to the SIB shift field. */
     fun registerShift(scale: Int): Int = when (scale) {
