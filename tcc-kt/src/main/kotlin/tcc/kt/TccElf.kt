@@ -195,8 +195,9 @@ object TccElf {
         val entrySize: Long,
         val data: ByteArray,
     )
-    data class InputElf(val wordSize: Int, val machine: Int, val fileType: Int, val sections: List<InputSectionHeader>)
+    data class InputElf(val wordSize: Int, val machine: Int, val fileType: Int, val sections: List<InputSectionHeader>, val littleEndian: Boolean = true)
     data class InputSymbol(val name: String, val value: Long, val size: Long, val info: Int, val other: Int, val sectionIndex: Int)
+    data class InputRelocation(val offset: Long, val symbolIndex: Int, val type: Int, val addend: Long = 0)
     data class SectionMergeInfo(var section: ElfSection? = null, var offset: Int = 0, var newSection: Boolean = false, var linkOnce: Boolean = false)
     data class DynamicTableLayout(
         val dynamic: ElfSection,
@@ -492,7 +493,7 @@ object TccElf {
             InputSectionHeader(nameAt(h[0].toInt()), h[1].toInt(), h[2], h[3], h[4], h[5], h[6].toInt(), h[7].toInt(), h[8], h[9], sectionData)
         }
         val machine = readUnsigned(18, 2).toInt()
-        return InputElf(if (is64) 8 else 4, machine, readUnsigned(16, 2).toInt(), sections)
+        return InputElf(if (is64) 8 else 4, machine, readUnsigned(16, 2).toInt(), sections, littleEndian)
     }
 
     fun parseInputSymbols(input: ByteArray, elf: InputElf, symbolSectionIndex: Int): List<InputSymbol>? {
@@ -638,6 +639,88 @@ object TccElf {
             )
         }
         return oldToNew
+    }
+
+    fun parseInputRelocations(input: ByteArray, elf: InputElf, relocationSectionIndex: Int): List<InputRelocation>? {
+        val section = elf.sections.getOrNull(relocationSectionIndex) ?: return null
+        if (section.type != SHT_REL && section.type != SHT_RELA) return null
+        val rela = section.type == SHT_RELA
+        val expectedSize = when {
+            elf.wordSize == 8 && rela -> 24
+            elf.wordSize == 8 -> 16
+            rela -> 12
+            else -> 8
+        }
+        val entrySize = section.entrySize.toInt().takeIf { it >= expectedSize } ?: expectedSize
+        if (section.data.size % entrySize != 0) return null
+        val littleEndian = input.getOrNull(5)?.toInt()?.and(0xff) == 1
+        fun read(offset: Int, width: Int): Long {
+            var value = 0L
+            repeat(width) { index ->
+                val shift = if (littleEndian) index * 8 else (width - index - 1) * 8
+                value = value or ((section.data[offset + index].toLong() and 0xff) shl shift)
+            }
+            return value
+        }
+        return (0 until section.data.size / entrySize).map { index ->
+            val base = index * entrySize
+            val offsetWidth = elf.wordSize
+            val infoOffset = base + offsetWidth
+            val info = read(infoOffset, offsetWidth)
+            val symbolIndex = if (elf.wordSize == 8) (info ushr 32).toInt() else (info ushr 8).toInt()
+            val type = if (elf.wordSize == 8) info.toInt() else (info and 0xff).toInt()
+            val addend = if (rela) read(base + offsetWidth * 2, offsetWidth) else 0L
+            InputRelocation(read(base, offsetWidth), symbolIndex, type, addend)
+        }
+    }
+
+    fun mergeObjectRelocations(
+        input: InputElf,
+        mappings: List<SectionMergeInfo>,
+        oldToNewSymbols: IntArray,
+        allowedUndefinedSymbolTypes: Set<Int> = emptySet(),
+    ) {
+        input.sections.forEachIndexed { index, source ->
+            if (source.type != SHT_REL && source.type != SHT_RELA) return@forEachIndexed
+            val outputRelocations = mappings.getOrNull(index)?.section ?: return@forEachIndexed
+            val targetMapping = mappings.getOrNull(source.info) ?: return@forEachIndexed
+            val targetOffset = targetMapping.offset.toLong()
+            val relocations = parseInputRelocationsFromData(input.wordSize, source.type == SHT_RELA, source.data, input.littleEndian, source.entrySize.toInt())
+            relocations.forEach { relocation ->
+                val newSymbol = oldToNewSymbols.getOrElse(relocation.symbolIndex) { 0 }
+                if (newSymbol == 0 && !targetMapping.linkOnce && relocation.type !in allowedUndefinedSymbolTypes) {
+                    throw IllegalArgumentException("invalid relocation entry in ${source.name}")
+                }
+                outputRelocations.relocations += ElfRelocation(
+                    relocation.offset + targetOffset, newSymbol, relocation.type, relocation.addend,
+                )
+            }
+        }
+    }
+
+    private fun parseInputRelocationsFromData(wordSize: Int, rela: Boolean, data: ByteArray, littleEndian: Boolean, requestedEntrySize: Int): List<InputRelocation> {
+        val offsetWidth = wordSize
+        val minimumEntrySize = when { wordSize == 8 && rela -> 24; wordSize == 8 -> 16; rela -> 12; else -> 8 }
+        val entrySize = requestedEntrySize.takeIf { it >= minimumEntrySize } ?: minimumEntrySize
+        require(data.size % entrySize == 0)
+        fun read(offset: Int, width: Int): Long {
+            var value = 0L
+            repeat(width) { index ->
+                val shift = if (littleEndian) index * 8 else (width - index - 1) * 8
+                value = value or ((data[offset + index].toLong() and 0xff) shl shift)
+            }
+            return value
+        }
+        return (0 until data.size / entrySize).map { index ->
+            val base = index * entrySize
+            val info = read(base + offsetWidth, offsetWidth)
+            InputRelocation(
+                read(base, offsetWidth),
+                if (wordSize == 8) (info ushr 32).toInt() else (info ushr 8).toInt(),
+                if (wordSize == 8) info.toInt() else (info and 0xff).toInt(),
+                if (rela) read(base + offsetWidth * 2, offsetWidth) else 0L,
+            )
+        }
     }
 
     fun initializeElfSections(state: ElfState, peTarget: Boolean = false, boundsChecking: Boolean = false) {
