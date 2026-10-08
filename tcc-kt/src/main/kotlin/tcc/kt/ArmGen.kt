@@ -202,6 +202,7 @@ object ArmGen {
 
     data class FunctionParameter(val size: Int, val alignment: Int, val type: ParameterType, val homogeneousFloatAggregate: Boolean = false)
     data class FunctionProloguePlan(val words: List<Int>, val parameterOffsets: List<Int>, val coreSaved: Int, val vfpSaved: Int, val hiddenStructReturn: Boolean)
+    data class FunctionEpiloguePlan(val words: List<Int>, val stackAdjustment: Int, val patchInstruction: Int? = null)
 
     /** Plans ARM function entry instructions and incoming parameter addresses. */
     fun functionPrologue(parameters: List<FunctionParameter>, structReturnInMemory: Boolean, variadic: Boolean, hardFloat: Boolean, eabi: Boolean): FunctionProloguePlan {
@@ -250,6 +251,25 @@ object ArmGen {
             addresses += address + 12
         }
         return FunctionProloguePlan(words, addresses, coreCount, vfpCount, structReturnInMemory)
+    }
+
+    /** Computes ARM function epilogue instructions and the deferred stack-frame adjustment patch. */
+    fun functionEpilogue(localBytes: Int, isLeaf: Boolean, eabi: Boolean, patchPosition: Int, sequencePosition: Int,
+        softFloatReturn: Boolean = false, doubleReturn: Boolean = false): FunctionEpiloguePlan {
+        val words = mutableListOf<Int>()
+        if (softFloatReturn) {
+            if (doubleReturn) words.addAll(listOf(0xee100b10.toInt(), 0xee301b10.toInt()))
+            else words += 0xee100a10.toInt()
+        }
+        words += 0xe89ba800.toInt()
+        var difference = (-localBytes + 3) and -4
+        if (eabi && !isLeaf) difference = ((difference + 11) and -8) - 4
+        if (difference <= 0) return FunctionEpiloguePlan(words, difference)
+        val adjustment = stuffConstant(0xe24bd000.toInt(), difference)
+        if (adjustment != 0) return FunctionEpiloguePlan(words, difference, adjustment)
+        words.addAll(listOf(0xe59fc004.toInt(), 0xe04bd00c.toInt(), 0xe1a0f00e.toInt(), difference))
+        val patch = 0xe1000000.toInt() or encodeBranch(patchPosition, sequencePosition, true)
+        return FunctionEpiloguePlan(words, difference, patch)
     }
 
     /** Assigns argument values to stack, core registers, and VFP registers according to AAPCS. */
