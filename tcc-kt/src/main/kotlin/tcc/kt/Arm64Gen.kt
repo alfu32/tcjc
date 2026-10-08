@@ -11,7 +11,7 @@ class Arm64Gen(
 ) {
     data class Symbol(val name: String, val isStatic: Boolean = false, val isTls: Boolean = false)
     data class Relocation(val symbol: Symbol, val offset: Int, val type: String, val addend: Long = 0)
-    enum class Type { BYTE, SHORT, INT, LONG_LONG, POINTER, FUNCTION, STRUCT, FLOAT, DOUBLE, LONG_DOUBLE, BOOL }
+    enum class Type { VOID, BYTE, SHORT, INT, LONG_LONG, POINTER, FUNCTION, STRUCT, FLOAT, DOUBLE, LONG_DOUBLE, BOOL }
     enum class ValueLocation { CONSTANT, LOCAL, INDIRECT_LOCAL, COMPARE, JUMP, JUMP_INDIRECT, REGISTER }
     data class Value(
         val location: ValueLocation, val type: Type = Type.INT, val constant: Long = 0,
@@ -35,6 +35,7 @@ class Arm64Gen(
         val generalRegisterOffset: Int, val vectorRegisterOffset: Int, val setupSlots: Int = 6,
     )
     data class VaArgPlan(val size: Int, val alignment: Int, val homogeneousCount: Int, val indirect: Boolean, val registerClass: String)
+    data class ReturnPlan(val location: Int, val indirect: Boolean, val homogeneousCount: Int, val size: Int)
 
     companion object {
         const val NB_REGS = 28
@@ -85,7 +86,7 @@ class Arm64Gen(
         fun integerRegister(register: Int): Int { require(register in 0..TREG_R30); return if (register < TREG_R30) register else 30 }
         fun floatingRegister(register: Int): Int { require(register in TREG_F_BASE..TREG_F_BASE + 7); return register - TREG_F_BASE }
         fun typeSize(type: Type): Int = when (type) {
-            Type.BYTE, Type.BOOL -> 0; Type.SHORT -> 1; Type.INT, Type.FLOAT -> 2
+            Type.VOID, Type.BYTE, Type.BOOL -> 0; Type.SHORT -> 1; Type.INT, Type.FLOAT -> 2
             Type.LONG_LONG, Type.POINTER, Type.FUNCTION, Type.STRUCT, Type.DOUBLE -> 3
             Type.LONG_DOUBLE -> 4
         }
@@ -860,5 +861,59 @@ class Arm64Gen(
         o((if (boundsCheck) 0x91004000L else 0x91003c00L).toInt() or r or (r shl 5))
         o(0x927cec00.toInt() or r or (r shl 5))
         o(0xcb2063ff.toInt() or (r shl 16))
+    }
+
+    fun classifyReturn(type: AbiType): ReturnPlan {
+        if (type.type == Type.VOID) return ReturnPlan(-1, false, 0, 0)
+        if (type.type == Type.STRUCT) {
+            val hfa = homogeneousFloatAggregate(type)
+            if (hfa != 0) return ReturnPlan(16, false, hfa, type.size)
+            if (type.size > 16) return ReturnPlan(1, true, 0, type.size)
+        }
+        return ReturnPlan(if (isAbiFloat(type.type)) 16 else 0, false, 0, type.size)
+    }
+
+    /** Emits an integer, scalar float, or 128-bit long-double conditional branch prelude. */
+    fun conditionalJump(condition: String, type: Type, valueRegister: Int, branchTarget: Int): Int {
+        val invert = condition in setOf("!=", "u!=", "ne")
+        val r = valueRegister and 31
+        when (type) {
+            Type.LONG_DOUBLE -> {
+                val f = floatingRegister(valueRegister)
+                val a = 16; val b = 17
+                o(0x4e083c00 or a or (f shl 5))
+                o(0x4e183c00 or b or (f shl 5))
+                o(0xaa000400.toInt() or a or (a shl 5) or (b shl 16))
+                o(0xb4000040.toInt() or a or (if (invert) 1 shl 24 else 0))
+            }
+            Type.FLOAT, Type.DOUBLE -> {
+                val freg = floatingRegister(valueRegister)
+                o(0x1e202008 or (freg shl 5) or (if (type == Type.DOUBLE) 1 shl 22 else 0))
+                o(0x54000040 or if (invert) 1 else 0)
+            }
+            else -> {
+                val width64 = type == Type.POINTER || type == Type.LONG_LONG
+                o(0x34000040 or r or (if (invert) 1 shl 24 else 0) or (if (width64) Int.MIN_VALUE else 0))
+            }
+        }
+        return generateJump(branchTarget)
+    }
+
+    fun markCompareValue(value: Value, operation: String): Value =
+        if (operation in setOf("u<", "u<=", "u>", "u>=", "<", "<=", ">", ">=")) value.copy(location = ValueLocation.COMPARE) else value
+
+    fun emitReturn(type: AbiType, valueRegister: Int = 0, addressRegister: Int = 0) {
+        val plan = classifyReturn(type)
+        when (plan.location) {
+            -1 -> Unit
+            0 -> if (type.type == Type.STRUCT && type.size > 0) loadStructure(valueRegister, type.size) else Unit
+            1 -> { moveImmediate(30, addressRegister.toULong()); storeInteger(3, 30, 29, 144uL) }
+            16 -> if (type.type == Type.STRUCT) {
+                for (index in 0 until plan.homogeneousCount) {
+                    val elementSize = type.size / plan.homogeneousCount
+                    loadVector(elementSize, 0x20 + index, addressRegister, (index * elementSize).toULong())
+                }
+            }
+        }
     }
 }
