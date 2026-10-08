@@ -64,10 +64,13 @@ class Riscv64Gen(
         val arrayCount: Int = 0,
         val isUnion: Boolean = false,
         val fields: List<FieldType> = emptyList(),
+        val alignment: Int = 8,
     )
     data class RegisterPass(val classes: IntArray, val fieldOffsets: IntArray)
     data class CallArgument(val type: AbiType, val alignment: Int = 8, val named: Boolean = true)
     data class CallPlan(val encodedArguments: IntArray, val stackAdjustment: Int, val temporarySpace: Int, val stackSize: Int)
+    data class ParameterLocation(val stackOffset: Int, val byReference: Boolean, val registerClasses: IntArray, val fieldOffsets: IntArray)
+    data class ReturnConvention(val registerCount: Int, val registerClassSize: Int, val baseType: Int)
     data class FunctionFrame(
         val prologPosition: Int,
         var localOffset: Int = -16,
@@ -424,6 +427,50 @@ class Riscv64Gen(
 
     private fun integerRegistersOrFloatRegister(registerClass: Int, integerCount: Int, floatingCount: Int): Int =
         if (registerClass == RC_INT) integerCount else floatingCount
+
+    /** Computes incoming parameter homes and stack offsets from gfunc_prolog(). */
+    fun planFunctionParameters(parameters: List<AbiType>, hiddenStructureReturn: Boolean = false): List<ParameterLocation> {
+        var integerRegisters = if (hiddenStructureReturn) 1 else 0
+        var floatingRegisters = 0
+        var stackOffset = 0
+        var localOffset = if (hiddenStructureReturn) -24 else -16
+        return parameters.map { original ->
+            var type = original
+            var size = type.size
+            var alignment = original.alignment
+            val byReference = size > 16
+            if (byReference) { type = AbiType(VT_PTR, 8); size = 8; alignment = 8 }
+            val pass = registerPass(type)
+            val count = pass.classes[0]
+            val stack = (pass.classes[1] == RC_INT && integerRegisters >= 8) ||
+                (count == 2 && pass.classes[1] == RC_FLOAT && pass.classes[2] == RC_FLOAT && floatingRegisters >= 7) ||
+                (count == 2 && pass.classes[1] != pass.classes[2] && (floatingRegisters >= 8 || integerRegisters >= 8))
+            val offset: Int
+            if (stack) {
+                alignment = maxOf(alignment, 8)
+                stackOffset = (stackOffset + alignment - 1) and -alignment
+                offset = stackOffset
+                stackOffset += size
+            } else {
+                localOffset -= count * 8
+                offset = localOffset
+                repeat(count) { index ->
+                    val registerClass = pass.classes[index + 1]
+                    if (registerClass == RC_FLOAT) floatingRegisters++ else integerRegisters++
+                }
+            }
+            ParameterLocation(offset, byReference, pass.classes, pass.fieldOffsets)
+        }
+    }
+
+    fun structureReturnConvention(type: AbiType): ReturnConvention {
+        if (type.size > 16) return ReturnConvention(0, 8, type.baseType)
+        val pass = registerPass(type)
+        val count = pass.classes[0]
+        if (count == 2 && pass.classes[1] != pass.classes[2]) return ReturnConvention(-1, 8, type.baseType)
+        return ReturnConvention(count, if (pass.classes.getOrElse(1) { 0 } == RC_FLOAT) type.size / count.coerceAtLeast(1) else 8,
+            pass.fieldOffsets.getOrElse(1) { type.baseType } and 0xf)
+    }
 
     fun fillNops(byteCount: Int) {
         require(byteCount and 3 == 0) { "alignment of code section not multiple of 4" }
