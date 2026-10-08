@@ -1240,3 +1240,41 @@ object ArmGen {
         repeat(4) { bytes[at + it] = (value ushr (it * 8)).toByte() }
     }
 }
+
+/** Mutable ARM text-section output matching arm-gen.c's g/o/patch primitives. */
+class ArmCodeBuffer(private val noCodeWanted: () -> Boolean = { false },
+    private val hasCurrentTextSection: () -> Boolean = { true }) {
+    private val data = ArrayList<Byte>()
+    val position: Int get() = data.size
+    val bytes: ByteArray get() = data.toByteArray()
+
+    fun g(value: Int) {
+        if (!noCodeWanted()) data += value.toByte()
+    }
+
+    fun genLe16(value: Int) { g(value); g(value ushr 8) }
+
+    fun genLe32(value: Int) {
+        if (noCodeWanted()) return
+        repeat(4) { data += (value ushr (it * 8)).toByte() }
+    }
+
+    fun o(value: Int) {
+        if (noCodeWanted()) return
+        check(hasCurrentTextSection()) {
+            "compiler error! This happens f.ex. if the compiler\ncan't evaluate constant expressions outside of a function."
+        }
+        genLe32(value)
+    }
+
+    fun readLe32(offset: Int): Int {
+        require(offset >= 0 && offset + 4 <= data.size)
+        return (data[offset].toInt() and 255) or ((data[offset + 1].toInt() and 255) shl 8) or
+            ((data[offset + 2].toInt() and 255) shl 16) or (data[offset + 3].toInt() shl 24)
+    }
+
+    fun patchLe32(offset: Int, value: Int) {
+        require(offset >= 0 && offset + 4 <= data.size)
+        repeat(4) { data[offset + it] = (value ushr (it * 8)).toByte() }
+    }
+}
