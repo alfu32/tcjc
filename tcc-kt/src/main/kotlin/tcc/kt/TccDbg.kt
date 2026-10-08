@@ -102,6 +102,11 @@ object TccDbg {
         var suppressCode: Boolean = false,
         var functionAddress: Long? = null,
     )
+    data class DebugUnit(
+        val session: DebugSession,
+        val unit: DwarfUnitState?,
+        val ehFrame: EhFrameState?,
+    )
     data class DwarfLineState(
         val directories: MutableList<String> = mutableListOf(),
         val files: MutableList<DwarfFile> = mutableListOf(DwarfFile("", 0), DwarfFile("", 0)),
@@ -420,6 +425,41 @@ object TccDbg {
         patch32(line, unit.lineLengthOffset, line.size - unit.lineStart - 4)
         state.sections[".debug_str"]?.append(state.debugStrings.bytes())
         state.sections[".debug_line_str"]?.append(state.lineStrings.bytes())
+    }
+
+    /** Initializes the sections and translation-unit records used by tcc_debug_start. */
+    fun startDebugUnit(
+        dwarfVersion: Int,
+        pointerSize: Int,
+        backtrace: Boolean,
+        unwindTables: Boolean,
+        target: EhTarget,
+        filename: String,
+        compilationDirectory: String,
+        producer: String,
+        cVersion: Int,
+        refs: DwarfSymbolRefs,
+        textStart: Long = 0,
+        minimumInstructionLength: Int = 1,
+    ): DebugUnit {
+        val sections = createSections(dwarfVersion, backtrace)
+        val line = if (dwarfVersion > 0) createDwarfLineState(filename, compilationDirectory, dwarfVersion) else DwarfLineState()
+        val session = DebugSession(sections, line, minimumInstructionLength)
+        val unit = if (dwarfVersion > 0) beginDwarfCompilationUnit(
+            sections, dwarfVersion, pointerSize, textStart, filename, compilationDirectory,
+            producer, cVersion, refs, minimumInstructionLength,
+        ) else null
+        return DebugUnit(session, unit, startEhFrame(unwindTables, target))
+    }
+
+    /** Completes the translation unit records used by tcc_debug_end and tcc_eh_frame_end. */
+    fun finishDebugUnit(debugUnit: DebugUnit, textSize: Int): DebugSections {
+        debugUnit.unit?.let { finishDwarfCompilationUnit(debugUnit.session.sections, it, textSize) }
+        endEhFrame(debugUnit.ehFrame)
+        if (!debugUnit.session.sections.dwarfEnabled) {
+            putStabs(debugUnit.session.sections, null, N_SO, 0, 0, textSize.toLong())
+        }
+        return debugUnit.session.sections
     }
 
     private fun writeCString(section: DwarfSection, value: String) {
