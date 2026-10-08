@@ -205,7 +205,7 @@ class I386Asm(private val emit: (Int) -> Unit) {
 
     data class ConstraintOperand(
         val alternatives: String, val isConstant: Boolean = false,
-        val isMemory: Boolean = false, val isLocalPointer: Boolean = false,
+        var isMemory: Boolean = false, val isLocalPointer: Boolean = false,
         var tiedTo: Int = -1, var register: Int = -1,
         var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
     )
@@ -282,14 +282,23 @@ class I386Asm(private val emit: (Int) -> Unit) {
             var assigned = false
             for (choice in choices) {
                 val candidates = when (choice) {
+                    'A' -> if (!allocated[0] && !allocated[2]) listOf(0) else emptyList()
                     'a' -> listOf(0); 'b' -> listOf(3); 'c' -> listOf(1); 'd' -> listOf(2)
                     'S' -> listOf(6); 'D' -> listOf(7)
                     'q' -> listOf(0, 3, 1, 2)
                     'r', 'R', 'p' -> (0..7).toList()
                     'e', 'i' -> if (operand.isConstant) listOf(-1) else emptyList()
                     'I', 'N', 'M' -> if (operand.isConstant) listOf(-1) else emptyList()
-                    'm' -> if (operand.isMemory || operand.isLocalPointer) listOf(-1) else emptyList()
-                    'g' -> if (operand.isConstant || operand.isMemory) listOf(-1) else (0..7).toList()
+                    'm' -> when {
+                        operand.isMemory -> listOf(-1)
+                        operand.isLocalPointer && (isOutput || choice == 'm') -> (0..7).toList()
+                        else -> emptyList()
+                    }
+                    'g' -> when {
+                        operand.isConstant || operand.isMemory -> listOf(-1)
+                        operand.isLocalPointer && isOutput -> (0..7).toList()
+                        else -> (0..7).toList()
+                    }
                     '=', '&', '+' , '%' -> emptyList()
                     else -> emptyList()
                 }
@@ -298,6 +307,11 @@ class I386Asm(private val emit: (Int) -> Unit) {
                     if (reg >= 0) {
                         allocated[reg] = true
                         operand.register = reg
+                        if (choice == 'A') {
+                            allocated[2] = true
+                            operand.isLongLong = true
+                        }
+                        if (operand.isLocalPointer && (choice == 'm' || (choice == 'g' && isOutput))) operand.isMemory = true
                     }
                     if (choice == '+') operand.isReadWrite = true
                     assigned = true
