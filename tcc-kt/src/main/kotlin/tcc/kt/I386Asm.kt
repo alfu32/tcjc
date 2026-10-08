@@ -353,6 +353,7 @@ class I386Asm(
         var isMemory: Boolean = false, val isLocalPointer: Boolean = false,
         var tiedTo: Int = -1, var register: Int = -1,
         var isReadWrite: Boolean = false, var isLongLong: Boolean = false,
+        var earlyClobber: Boolean = false,
     )
 
     data class InlineValue(
@@ -441,7 +442,9 @@ class I386Asm(
             if (operand.tiedTo >= 0) return@forEach
             val isOutput = index < outputCount
             if (operand.alternatives.startsWith('+')) operand.isReadWrite = true
-            val registerMask = if (operand.isReadWrite || index in tiedOutputs) 3 else if (isOutput) 1 else 2
+            if (operand.alternatives.startsWith('&')) operand.earlyClobber = true
+            require(!operand.earlyClobber || isOutput) { "'&' modifier can only be applied to outputs" }
+            val registerMask = if (operand.isReadWrite || operand.earlyClobber || index in tiedOutputs) 3 else if (isOutput) 1 else 2
             val choices = skipConstraintModifiers(operand.alternatives)
             var assigned = false
             for (choice in choices) {
